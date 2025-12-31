@@ -145,6 +145,11 @@ func (p *Processor) validateSubscription(req *models.NnwdafEventsSubscription) *
 			}
 		}
 
+		// Check if event type is supported
+		if err := p.validateSupportedEvent(eventSub.Event); err != nil {
+			return err
+		}
+
 		// For ABNORMAL_BEHAVIOUR, validate specific requirements
 		if eventSub.Event == models.NwdafEvent_ABNORMAL_BEHAVIOUR {
 			if err := p.validateAbnormalBehaviour(&eventSub); err != nil {
@@ -154,6 +159,42 @@ func (p *Processor) validateSubscription(req *models.NnwdafEventsSubscription) *
 	}
 
 	return nil
+}
+
+// Supported events list
+var supportedEvents = []models.NwdafEvent{
+	models.NwdafEvent_ABNORMAL_BEHAVIOUR,
+}
+
+// validateSupportedEvent checks if the event type is supported
+func (p *Processor) validateSupportedEvent(event models.NwdafEvent) *models.ProblemDetails {
+	for _, supported := range supportedEvents {
+		if event == supported {
+			return nil
+		}
+	}
+	return &models.ProblemDetails{
+		Status: http.StatusBadRequest,
+		Cause:  "UNSUPPORTED_EVENT",
+		Detail: fmt.Sprintf("Event type %s is not supported. Supported events: %v", event, supportedEvents),
+	}
+}
+
+// Mobility-related exception IDs
+var mobilityExceptionIds = []models.ExceptionId{
+	models.ExceptionId_UNEXPECTED_UE_LOCATION,
+	models.ExceptionId_PING_PONG_ACROSS_CELLS,
+	models.ExceptionId_UNEXPECTED_WAKEUP,
+	models.ExceptionId_UNEXPECTED_RADIO_LINK_FAILURES,
+}
+
+// Communication-related exception IDs
+var communExceptionIds = []models.ExceptionId{
+	models.ExceptionId_UNEXPECTED_LONG_LIVE_FLOW,
+	models.ExceptionId_UNEXPECTED_LARGE_RATE_FLOW,
+	models.ExceptionId_SUSPICION_OF_DDOS_ATTACK,
+	models.ExceptionId_WRONG_DESTINATION_ADDRESS,
+	models.ExceptionId_TOO_FREQUENT_SERVICE_ACCESS,
 }
 
 // validateAbnormalBehaviour validates ABNORMAL_BEHAVIOUR specific requirements
@@ -182,10 +223,11 @@ func (p *Processor) validateAbnormalBehaviour(
 		}
 	}
 
-	// Must have either excepRequs or exptAnaType
+	// Check excepRequs and exptAnaType
 	hasExcepRequs := len(eventSub.ExcepRequs) > 0
 	hasExptAnaType := eventSub.ExptAnaType != ""
 
+	// Must have either excepRequs or exptAnaType (but not both)
 	if !hasExcepRequs && !hasExptAnaType {
 		return &models.ProblemDetails{
 			Status: http.StatusBadRequest,
@@ -194,5 +236,104 @@ func (p *Processor) validateAbnormalBehaviour(
 		}
 	}
 
+	// excepRequs and exptAnaType are mutually exclusive
+	if hasExcepRequs && hasExptAnaType {
+		return &models.ProblemDetails{
+			Status: http.StatusBadRequest,
+			Cause:  "INVALID_REQUEST",
+			Detail: "excepRequs and exptAnaType cannot be provided together",
+		}
+	}
+
+	// If anyUe=true, validate additional requirements
+	if eventSub.TgtUe.AnyUe {
+		if err := p.validateAnyUeRequirements(eventSub); err != nil {
+			return err
+		}
+	}
+
 	return nil
+}
+
+// validateAnyUeRequirements validates requirements when anyUe=true
+func (p *Processor) validateAnyUeRequirements(
+	eventSub *models.NwdafEventsSubscriptionEventSubscription,
+) *models.ProblemDetails {
+	isMobility := p.isMobilityRelated(eventSub)
+	isCommun := p.isCommunRelated(eventSub)
+
+	// For anyUe, cannot request both mobility and communication at the same time
+	if isMobility && isCommun {
+		return &models.ProblemDetails{
+			Status: http.StatusBadRequest,
+			Cause:  "INVALID_REQUEST",
+			Detail: "when anyUe=true, cannot request both mobility and communication related analytics",
+		}
+	}
+
+	// Check if has networkArea or snssais
+	hasNetworkArea := eventSub.NetworkArea != nil
+	hasSnssais := len(eventSub.Snssaia) > 0
+	hasAppIds := len(eventSub.AppIds) > 0
+	hasDnns := len(eventSub.Dnns) > 0
+
+	// Mobility-related: requires networkArea or snssais
+	if isMobility && !hasNetworkArea && !hasSnssais {
+		return &models.ProblemDetails{
+			Status: http.StatusBadRequest,
+			Cause:  "INVALID_REQUEST",
+			Detail: "when anyUe=true with mobility-related analytics, networkArea or snssais is required",
+		}
+	}
+
+	// Communication-related: requires networkArea, appIds, dnns, or snssais
+	if isCommun && !hasNetworkArea && !hasAppIds && !hasDnns && !hasSnssais {
+		return &models.ProblemDetails{
+			Status: http.StatusBadRequest,
+			Cause:  "INVALID_REQUEST",
+			Detail: "when anyUe=true with communication-related analytics, networkArea, appIds, dnns, or snssais is required",
+		}
+	}
+
+	return nil
+}
+
+// isMobilityRelated checks if the subscription is mobility-related
+func (p *Processor) isMobilityRelated(eventSub *models.NwdafEventsSubscriptionEventSubscription) bool {
+	// Check exptAnaType
+	if eventSub.ExptAnaType == models.ExpectedAnalyticsType_MOBILITY ||
+		eventSub.ExptAnaType == models.ExpectedAnalyticsType_MOBILITY_AND_COMMUN {
+		return true
+	}
+
+	// Check excepRequs
+	for _, excep := range eventSub.ExcepRequs {
+		for _, mobilityId := range mobilityExceptionIds {
+			if excep.ExcepId == mobilityId {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// isCommunRelated checks if the subscription is communication-related
+func (p *Processor) isCommunRelated(eventSub *models.NwdafEventsSubscriptionEventSubscription) bool {
+	// Check exptAnaType
+	if eventSub.ExptAnaType == models.ExpectedAnalyticsType_COMMUN ||
+		eventSub.ExptAnaType == models.ExpectedAnalyticsType_MOBILITY_AND_COMMUN {
+		return true
+	}
+
+	// Check excepRequs
+	for _, excep := range eventSub.ExcepRequs {
+		for _, communId := range communExceptionIds {
+			if excep.ExcepId == communId {
+				return true
+			}
+		}
+	}
+
+	return false
 }
