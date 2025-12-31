@@ -1,0 +1,19 @@
+info:
+  version: 1.0.0
+  description: NWDAF initial configuration
+
+configuration:
+  nwdafName: NWDAF
+  sbi:
+    scheme: http
+    registerIPv4: 127.0.0.1
+    bindingIPv4: 127.0.0.1
+    port: 8080
+  # nrfUri: http://127.0.0.10:8000  # Uncomment when NRF is available
+  supportedAnalytics:
+    - ABNORMAL_BEHAVIOUR
+
+logger:
+  enable: true
+  level: info
+  reportCaller: false

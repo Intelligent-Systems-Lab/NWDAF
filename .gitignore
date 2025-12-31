@@ -1,0 +1,31 @@
+# Build output
+bin/
+build/
+
+# Dependencies
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Editor tags
+GPATH
+GRTAGS
+GTAGS
+TAGS
+tags
+cscope.*
+
+# macOS
+.DS_Store
+
+# Logs and debug
+log/
+*.log
+*.pcap
+
+# OS files
+*.tmp
+*~
