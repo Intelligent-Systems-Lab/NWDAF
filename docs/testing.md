@@ -12,28 +12,13 @@ This document describes how to run tests for the NWDAF EventSubscription service
 
 Before running API tests, you must start the NWDAF server.
 
-### Build and Run
-
 ```bash
-# Build the binary
+# Build and run
 make build
-
-# Run with default config
 ./bin/nwdaf --config config/nwdafcfg.yaml
-
-# Or run directly
-make run
 ```
 
-### Expected Output
-
-```
-INFO NWDAF
-INFO NWDAF version: v0.1.0
-INFO Start SBI server (bindingAddr: 127.0.0.1:8080)
-```
-
-The server listens on `http://127.0.0.1:8080` by default.
+The server listens on `http://127.0.0.1:8080`.
 
 ---
 
@@ -41,34 +26,38 @@ The server listens on `http://127.0.0.1:8080` by default.
 
 Unit tests can be run without starting the server.
 
-### Run All Unit Tests
+### Run All Tests
 
 ```bash
 go test ./... -v
 ```
 
-### Run Specific Package Tests
+### Run Processor Tests
 
 ```bash
-# Context tests (subscription CRUD)
-go test ./internal/context/... -v
-
-# Processor tests (validation logic)
 go test ./internal/sbi/processor/... -v
 ```
 
-### Test Coverage
+### Unit Test Coverage
 
-| Package | Test File | Description |
-|---------|-----------|-------------|
-| `internal/context` | `context_test.go` | Subscription storage CRUD operations |
-| `internal/sbi/processor` | `eventssubscription_test.go` | Validation logic for ABNORMAL_BEHAVIOUR |
+| Test | Cases | Phase |
+|------|-------|-------|
+| `TestValidateSupportedEvent` | 3 | 2A |
+| `TestValidateAbnormalBehaviour` | 5 | 2A |
+| `TestIsMobilityRelated` | 3 | 2A |
+| `TestIsCommunRelated` | 3 | 2A |
+| `TestValidateEvtReq` | 5 | 2B |
+| `TestValidateSupportedExceptionIds` | 4 | 2B |
+| `TestValidateExptAnaType` | 4 | 2B |
+| `TestCheckUnsupportedExceptionIds` | 3 | **2C** |
+| `TestCheckUnsupportedExptAnaType` | 3 | **2C** |
+| `TestCollectFailEventReports` | 4 | **2C** |
+
+**Total: 10 tests, 37 cases**
 
 ---
 
 ## 3. API Integration Tests
-
-These tests require the server to be running.
 
 ### Quick Start
 
@@ -76,93 +65,85 @@ These tests require the server to be running.
 # Terminal 1: Start server
 ./bin/nwdaf --config config/nwdafcfg.yaml
 
-# Terminal 2: Run tests
+# Terminal 2: Run all tests
 ./test/scripts/test_api.sh all
 ```
 
-### Test Script Usage
-
-```bash
-./test/scripts/test_api.sh [command]
-```
+### Test Commands
 
 | Command | Description |
 |---------|-------------|
-| `all` | Run all tests (default) |
-| `create` | Test valid subscription creation |
-| `mutual` | Test excepRequs/exptAnaType mutual exclusion |
-| `anyue` | Test anyUe missing required fields |
-| `unsupported` | Test unsupported event type rejection |
-| `delete <id>` | Test subscription deletion |
+| `all` | Run all tests |
+| `create` | Valid subscription |
+| `mutual` | excepRequs/exptAnaType mutual exclusion |
+| `anyue` | anyUe missing fields |
+| `unsupported` | Unsupported event type |
+| `periodic` | PERIODIC without repPeriod (Phase 2B) |
+| `exception` | Mixed ExceptionIds (Phase 2C) |
+| `anatype` | ALL_EVENTS_UNSUPPORTED (Phase 2C) |
+| `evtreq` | Valid evtReq with PERIODIC |
+| `delete <id>` | Delete subscription |
 
 ---
 
-## 4. Test Cases
+## 4. Phase 2C Test Cases
 
-### 4.1 Create Valid Subscription
+### 4.1 Mixed Events (failEventReports)
 
-**Command:** `./test_api.sh create`
+**Command:** `./test_api.sh exception`
 
-**Description:** Creates a valid ABNORMAL_BEHAVIOUR subscription with:
-- `anyUe: true`
-- `excepRequs: SUSPICION_OF_DDOS_ATTACK`
-- `dnns: ["internet"]`
-
-**Expected Result:** `201 Created`
-
----
-
-### 4.2 Mutual Exclusion Validation
-
-**Command:** `./test_api.sh mutual`
-
-**Description:** Tests that `excepRequs` and `exptAnaType` cannot be provided together.
+**Description:** Creates a subscription with both supported and unsupported ExceptionIds.
 
 **Request:**
 ```json
 {
-  "excepRequs": [{"excepId": "SUSPICION_OF_DDOS_ATTACK"}],
-  "exptAnaType": "COMMUN"
+  "eventSubscriptions": [
+    {"excepRequs": [{"excepId": "SUSPICION_OF_DDOS_ATTACK"}]},
+    {"excepRequs": [{"excepId": "UNEXPECTED_UE_LOCATION"}]}
+  ]
 }
 ```
 
-**Expected Result:** `400 Bad Request`
+**Expected Result:** `201 Created` with `failEventReports`
+```json
+{
+  "failEventReports": [
+    {"event": "ABNORMAL_BEHAVIOUR", "failureCode": "OTHER"}
+  ]
+}
+```
 
 ---
 
-### 4.3 anyUe Missing Required Fields
+### 4.2 All Events Unsupported
 
-**Command:** `./test_api.sh anyue`
+**Command:** `./test_api.sh anatype`
 
-**Description:** Tests that when `anyUe=true` with communication-related analytics, at least one of `networkArea`, `appIds`, `dnns`, or `snssais` is required.
+**Description:** All events use unsupported exptAnaType.
 
-**Expected Result:** `400 Bad Request`
-
----
-
-### 4.4 Unsupported Event Type
-
-**Command:** `./test_api.sh unsupported`
-
-**Description:** Tests that only `ABNORMAL_BEHAVIOUR` event type is supported. Other event types (e.g., `UE_MOBILITY`) should be rejected.
-
-**Expected Result:** `400 Bad Request` with cause `UNSUPPORTED_EVENT`
+**Expected Result:** `400 Bad Request` with cause `ALL_EVENTS_UNSUPPORTED`
 
 ---
 
-### 4.5 Delete Subscription
+## 5. Phase 2B Test Cases
 
-**Command:** `./test_api.sh delete <subscriptionId>`
+### 5.1 PERIODIC without repPeriod
 
-**Description:** Deletes an existing subscription by ID.
+**Command:** `./test_api.sh periodic`
 
-**Expected Result:** `204 No Content`
+**Expected:** `400 Bad Request`
+
+### 5.2 Valid evtReq
+
+**Command:** `./test_api.sh evtreq`
+
+**Expected:** `201 Created`
 
 ---
 
-## 5. Manual Testing with curl
+## 6. Manual Testing
 
-### Create Subscription
+### Create with evtReq
 
 ```bash
 curl -X POST http://127.0.0.1:8080/nnwdaf-eventssubscription/v1/subscriptions \
@@ -174,39 +155,20 @@ curl -X POST http://127.0.0.1:8080/nnwdaf-eventssubscription/v1/subscriptions \
       "excepRequs": [{"excepId": "SUSPICION_OF_DDOS_ATTACK"}],
       "dnns": ["internet"]
     }],
+    "evtReq": {
+      "notifMethod": "PERIODIC",
+      "repPeriod": 60
+    },
     "notificationURI": "http://localhost:9090/callback"
   }'
 ```
 
-### Delete Subscription
-
-```bash
-curl -X DELETE http://127.0.0.1:8080/nnwdaf-eventssubscription/v1/subscriptions/{subscriptionId}
-```
-
 ---
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
-### HTTP 000 Response
-
-This means the server is not running or not reachable.
-
-**Solution:** Start the server first:
-```bash
-./bin/nwdaf --config config/nwdafcfg.yaml
-```
-
-### Connection Refused
-
-Check if the server is listening on the expected port:
-```bash
-netstat -tlnp | grep 8080
-```
-
-### Build Errors
-
-Ensure dependencies are installed:
-```bash
-go mod tidy
-```
+| Issue | Solution |
+|-------|----------|
+| HTTP 000 | Start the server first |
+| Connection refused | Check `netstat -tlnp \| grep 8080` |
+| Build errors | Run `go mod tidy` |

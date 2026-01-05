@@ -42,6 +42,16 @@ type Subscription struct {
 	EvtReq          *models.ReportingInformation
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+
+	// Notification control (populated from EvtReq)
+	NotifMethod  string     // PERIODIC, ONE_TIME, ON_EVENT_DETECTION
+	RepPeriod    int32      // Repetition period in seconds
+	MaxReportNbr int32      // Max number of reports (0 = unlimited)
+	ReportCount  int32      // Current report count
+	MonDur       *time.Time // Monitoring duration expiry
+
+	// Status
+	IsActive bool // Whether subscription is active
 }
 
 // NewSubscriptionId generates a new unique subscription ID
@@ -53,11 +63,11 @@ func NewSubscriptionId() string {
 func (c *NWDAFContext) AddSubscription(sub *Subscription) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	sub.CreatedAt = time.Now()
 	sub.UpdatedAt = sub.CreatedAt
 	c.subscriptions[sub.ID] = sub
-	
+
 	logger.CtxLog.Infof("Added subscription: %s", sub.ID)
 }
 
@@ -65,7 +75,7 @@ func (c *NWDAFContext) AddSubscription(sub *Subscription) {
 func (c *NWDAFContext) GetSubscription(id string) *Subscription {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	
+
 	return c.subscriptions[id]
 }
 
@@ -73,14 +83,14 @@ func (c *NWDAFContext) GetSubscription(id string) *Subscription {
 func (c *NWDAFContext) UpdateSubscription(sub *Subscription) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	if _, exists := c.subscriptions[sub.ID]; !exists {
 		return false
 	}
-	
+
 	sub.UpdatedAt = time.Now()
 	c.subscriptions[sub.ID] = sub
-	
+
 	logger.CtxLog.Infof("Updated subscription: %s", sub.ID)
 	return true
 }
@@ -89,11 +99,11 @@ func (c *NWDAFContext) UpdateSubscription(sub *Subscription) bool {
 func (c *NWDAFContext) DeleteSubscription(id string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	if _, exists := c.subscriptions[id]; !exists {
 		return false
 	}
-	
+
 	delete(c.subscriptions, id)
 	logger.CtxLog.Infof("Deleted subscription: %s", id)
 	return true
@@ -103,7 +113,7 @@ func (c *NWDAFContext) DeleteSubscription(id string) bool {
 func (c *NWDAFContext) GetAllSubscriptions() []*Subscription {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	
+
 	subs := make([]*Subscription, 0, len(c.subscriptions))
 	for _, sub := range c.subscriptions {
 		subs = append(subs, sub)
