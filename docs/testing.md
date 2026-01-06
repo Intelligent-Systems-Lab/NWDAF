@@ -49,11 +49,12 @@ go test ./internal/sbi/processor/... -v
 | `TestValidateEvtReq` | 5 | 2B |
 | `TestValidateSupportedExceptionIds` | 4 | 2B |
 | `TestValidateExptAnaType` | 4 | 2B |
-| `TestCheckUnsupportedExceptionIds` | 3 | **2C** |
-| `TestCheckUnsupportedExptAnaType` | 3 | **2C** |
-| `TestCollectFailEventReports` | 4 | **2C** |
+| `TestCheckUnsupportedExceptionIds` | 3 | 2C |
+| `TestCheckUnsupportedExptAnaType` | 3 | 2C |
+| `TestCollectFailEventReports` | 4 | 2C |
+| `TestValidateAnalyticsTargetPeriod` | 5 | **2C** |
 
-**Total: 10 tests, 37 cases**
+**Total: 11 tests, 42 cases**
 
 ---
 
@@ -78,10 +79,11 @@ go test ./internal/sbi/processor/... -v
 | `mutual` | excepRequs/exptAnaType mutual exclusion |
 | `anyue` | anyUe missing fields |
 | `unsupported` | Unsupported event type |
-| `periodic` | PERIODIC without repPeriod (Phase 2B) |
-| `exception` | Mixed ExceptionIds (Phase 2C) |
-| `anatype` | ALL_EVENTS_UNSUPPORTED (Phase 2C) |
-| `evtreq` | Valid evtReq with PERIODIC |
+| `evtreq` | PERIODIC without repPeriod |
+| `exception` | Mixed ExceptionIds (failEventReports) |
+| `anatype` | ALL_EVENTS_UNSUPPORTED |
+| `evtreq-valid` | Valid evtReq |
+| `target_period` | startTs past + endTs future (BOTH_STAT_PRED_NOT_ALLOWED) |
 | `delete <id>` | Delete subscription |
 
 ---

@@ -3,6 +3,7 @@ package processor
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/free5gc/openapi/models"
 
@@ -18,6 +19,11 @@ func (p *Processor) HandleCreateSubscription(
 
 	// Phase 1: Basic validation (hard failures)
 	if problemDetails := p.validateBasicSubscription(req); problemDetails != nil {
+		return nil, "", problemDetails
+	}
+
+	// Phase 1.5: Analytics target period validation
+	if problemDetails := p.validateAnalyticsTargetPeriod(req.EventSubscriptions); problemDetails != nil {
 		return nil, "", problemDetails
 	}
 
@@ -280,6 +286,47 @@ func (p *Processor) validateSubscription(req *models.NnwdafEventsSubscription) *
 		return err
 	}
 
+	return nil
+}
+
+// validateAnalyticsTargetPeriod validates startTs/endTs in extraReportReq
+// Returns BOTH_STAT_PRED_NOT_ALLOWED if startTs is in past and endTs is in future
+func (p *Processor) validateAnalyticsTargetPeriod(
+	eventSubs []models.NwdafEventsSubscriptionEventSubscription,
+) *models.ProblemDetails {
+	now := time.Now()
+
+	for i, eventSub := range eventSubs {
+		if eventSub.ExtraReportReq == nil {
+			continue
+		}
+
+		startTs := eventSub.ExtraReportReq.StartTs
+		endTs := eventSub.ExtraReportReq.EndTs
+
+		// Both must be present to validate
+		if startTs == nil || endTs == nil {
+			continue
+		}
+
+		// startTs in past + endTs in future → reject (not allowed for both stat and pred)
+		if startTs.Before(now) && endTs.After(now) {
+			return &models.ProblemDetails{
+				Status: http.StatusBadRequest,
+				Cause:  "BOTH_STAT_PRED_NOT_ALLOWED",
+				Detail: fmt.Sprintf("eventSubscriptions[%d]: analytics target period with startTs in past and endTs in future is not allowed", i),
+			}
+		}
+
+		// startTs > endTs → invalid request
+		if startTs.After(*endTs) {
+			return &models.ProblemDetails{
+				Status: http.StatusBadRequest,
+				Cause:  "INVALID_REQUEST",
+				Detail: fmt.Sprintf("eventSubscriptions[%d]: startTs must be before endTs", i),
+			}
+		}
+	}
 	return nil
 }
 

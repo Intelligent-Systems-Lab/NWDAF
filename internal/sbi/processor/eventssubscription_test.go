@@ -2,6 +2,7 @@ package processor
 
 import (
 	"testing"
+	"time"
 
 	"github.com/free5gc/openapi/models"
 )
@@ -518,6 +519,95 @@ func TestCollectFailEventReports(t *testing.T) {
 			failReports := p.collectFailEventReports(tt.eventSubs)
 			if len(failReports) != tt.wantCount {
 				t.Errorf("collectFailEventReports() count = %d, want %d", len(failReports), tt.wantCount)
+			}
+		})
+	}
+}
+
+func TestValidateAnalyticsTargetPeriod(t *testing.T) {
+	p := &Processor{}
+
+	now := time.Now()
+	pastTime := now.Add(-1 * time.Hour)
+	futureTime := now.Add(1 * time.Hour)
+
+	tests := []struct {
+		name      string
+		eventSubs []models.NwdafEventsSubscriptionEventSubscription
+		wantErr   bool
+		errCause  string
+	}{
+		{
+			name: "startTs in past and endTs in future - BOTH_STAT_PRED_NOT_ALLOWED",
+			eventSubs: []models.NwdafEventsSubscriptionEventSubscription{
+				{
+					Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
+					ExtraReportReq: &models.EventReportingRequirement{
+						StartTs: &pastTime,
+						EndTs:   &futureTime,
+					},
+				},
+			},
+			wantErr:  true,
+			errCause: "BOTH_STAT_PRED_NOT_ALLOWED",
+		},
+		{
+			name: "startTs after endTs - INVALID_REQUEST",
+			eventSubs: []models.NwdafEventsSubscriptionEventSubscription{
+				{
+					Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
+					ExtraReportReq: &models.EventReportingRequirement{
+						StartTs: &futureTime,
+						EndTs:   &pastTime,
+					},
+				},
+			},
+			wantErr:  true,
+			errCause: "INVALID_REQUEST",
+		},
+		{
+			name: "Only startTs (past) - valid for statistics",
+			eventSubs: []models.NwdafEventsSubscriptionEventSubscription{
+				{
+					Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
+					ExtraReportReq: &models.EventReportingRequirement{
+						StartTs: &pastTime,
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Only endTs (future) - valid for prediction",
+			eventSubs: []models.NwdafEventsSubscriptionEventSubscription{
+				{
+					Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
+					ExtraReportReq: &models.EventReportingRequirement{
+						EndTs: &futureTime,
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "No extraReportReq - valid",
+			eventSubs: []models.NwdafEventsSubscriptionEventSubscription{
+				{
+					Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := p.validateAnalyticsTargetPeriod(tt.eventSubs)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateAnalyticsTargetPeriod() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil && tt.errCause != "" && err.Cause != tt.errCause {
+				t.Errorf("validateAnalyticsTargetPeriod() cause = %v, want %v", err.Cause, tt.errCause)
 			}
 		})
 	}

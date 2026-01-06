@@ -258,23 +258,44 @@ test_evtreq_valid() {
     fi
 }
 
-# Test 9: Delete subscription
-test_delete() {
-    if [ -z "$1" ]; then
-        log_error "subscriptionId is required"
-        return
-    fi
+# Test 10: Analytics target period (startTs in past + endTs in future)
+test_target_period() {
+    log_info "Test: Analytics target period - BOTH_STAT_PRED_NOT_ALLOWED"
     
-    log_info "Test: Delete subscription $1"
+    # Create dates: past (1 hour ago) and future (1 hour from now)
+    PAST_TS=$(date -u -d "-1 hour" +"%Y-%m-%dT%H:%M:%SZ")
+    FUTURE_TS=$(date -u -d "+1 hour" +"%Y-%m-%dT%H:%M:%SZ")
     
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE "${BASE_URL}/subscriptions/$1")
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "eventSubscriptions": [{
+                "event": "ABNORMAL_BEHAVIOUR",
+                "tgtUe": {"anyUe": true},
+                "excepRequs": [{"excepId": "SUSPICION_OF_DDOS_ATTACK"}],
+                "dnns": ["internet"],
+                "extraReportReq": {
+                    "startTs": "'"$PAST_TS"'",
+                    "endTs": "'"$FUTURE_TS"'"
+                }
+            }],
+            "notificationURI": "http://localhost:9090/callback"
+        }')
+    
     HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
     
-    if [ "$HTTP_CODE" = "204" ]; then
-        log_success "Deleted successfully (204)"
+    if [ "$HTTP_CODE" = "400" ]; then
+        CAUSE=$(echo "$BODY" | jq -r '.cause // empty')
+        if [ "$CAUSE" = "BOTH_STAT_PRED_NOT_ALLOWED" ]; then
+            log_success "Correctly rejected (400) with cause BOTH_STAT_PRED_NOT_ALLOWED"
+        else
+            log_error "Wrong cause: $CAUSE (expected BOTH_STAT_PRED_NOT_ALLOWED)"
+        fi
     else
-        log_error "Delete failed (HTTP $HTTP_CODE)"
+        log_error "Expected 400, got HTTP $HTTP_CODE"
     fi
+    echo "$BODY" | jq .
 }
 
 # Run all tests
@@ -294,7 +315,7 @@ run_all() {
     test_unsupported_event
     echo ""
     
-    echo "--- Phase 2B Validation Tests ---"
+    echo "--- Phase 2B/2C Validation Tests ---"
     test_evtreq_periodic
     echo ""
     test_unsupported_exception
@@ -303,10 +324,31 @@ run_all() {
     echo ""
     test_evtreq_valid
     echo ""
+    test_target_period
+    echo ""
     
     echo "========================================"
     echo "  Tests Completed"
     echo "========================================"
+}
+
+# Test: Delete subscription
+test_delete() {
+    if [ -z "$1" ]; then
+        log_error "subscriptionId is required"
+        return
+    fi
+    
+    log_info "Test: Delete subscription $1"
+    
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE "${BASE_URL}/subscriptions/$1")
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    
+    if [ "$HTTP_CODE" = "204" ]; then
+        log_success "Deleted successfully (204)"
+    else
+        log_error "Delete failed (HTTP $HTTP_CODE)"
+    fi
 }
 
 # Main
@@ -336,6 +378,9 @@ case "$1" in
     evtreq-valid)
         test_evtreq_valid
         ;;
+    target_period)
+        test_target_period
+        ;;
     delete)
         test_delete "$2"
         ;;
@@ -343,7 +388,7 @@ case "$1" in
         run_all
         ;;
     *)
-        echo "Usage: $0 [create|mutual|anyue|unsupported|evtreq|exception|anatype|evtreq-valid|delete <id>|all]"
+        echo "Usage: $0 [create|mutual|anyue|unsupported|evtreq|exception|anatype|evtreq-valid|target_period|delete <id>|all]"
         exit 1
         ;;
 esac
