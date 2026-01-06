@@ -17,13 +17,8 @@ func (p *Processor) HandleCreateSubscription(
 ) (*models.NnwdafEventsSubscription, string, *models.ProblemDetails) {
 	logger.ProcLog.Infof("Processing CreateSubscription request")
 
-	// Phase 1: Basic validation (hard failures)
-	if problemDetails := p.validateBasicSubscription(req); problemDetails != nil {
-		return nil, "", problemDetails
-	}
-
-	// Phase 1.5: Analytics target period validation
-	if problemDetails := p.validateAnalyticsTargetPeriod(req.EventSubscriptions); problemDetails != nil {
+	// Phase 1: Hard validation (structure, event type, target period, etc.)
+	if problemDetails := p.validateSubscriptionRequest(req); problemDetails != nil {
 		return nil, "", problemDetails
 	}
 
@@ -105,9 +100,21 @@ func (p *Processor) HandleUpdateSubscription(
 		}
 	}
 
-	// Validate request
-	if problemDetails := p.validateSubscription(req); problemDetails != nil {
+	// Phase 1: Hard validation (same as Create)
+	if problemDetails := p.validateSubscriptionRequest(req); problemDetails != nil {
 		return nil, problemDetails
+	}
+
+	// Phase 2: Collect soft failures (failEventReports)
+	failEventReports := p.collectFailEventReports(req.EventSubscriptions)
+
+	// Check if all events failed
+	if len(failEventReports) == len(req.EventSubscriptions) {
+		return nil, &models.ProblemDetails{
+			Status: http.StatusBadRequest,
+			Cause:  "ALL_EVENTS_UNSUPPORTED",
+			Detail: "All requested analytics events are not supported",
+		}
 	}
 
 	// Update subscription
@@ -120,11 +127,36 @@ func (p *Processor) HandleUpdateSubscription(
 		CreatedAt:       existing.CreatedAt,
 	}
 
+	// Populate notification control fields from EvtReq
+	if req.EvtReq != nil {
+		subscription.NotifMethod = string(req.EvtReq.NotifMethod)
+		subscription.RepPeriod = req.EvtReq.RepPeriod
+		subscription.MaxReportNbr = req.EvtReq.MaxReportNbr
+		if req.EvtReq.MonDur != nil {
+			monDur := *req.EvtReq.MonDur
+			subscription.MonDur = &monDur
+		}
+	}
+
 	ctx.UpdateSubscription(subscription)
 
 	logger.ProcLog.Infof("Subscription updated: %s", subscriptionId)
 
-	return req, nil
+	// Prepare response
+	response := &models.NnwdafEventsSubscription{
+		EventSubscriptions: req.EventSubscriptions,
+		NotificationURI:    req.NotificationURI,
+		NotifCorrId:        req.NotifCorrId,
+		EvtReq:             req.EvtReq,
+	}
+
+	// Add failEventReports if any events failed
+	if len(failEventReports) > 0 {
+		response.FailEventReports = failEventReports
+		logger.ProcLog.Infof("Subscription updated with %d failed events", len(failEventReports))
+	}
+
+	return response, nil
 }
 
 // HandleDeleteSubscription processes subscription deletion requests
@@ -145,9 +177,27 @@ func (p *Processor) HandleDeleteSubscription(subscriptionId string) *models.Prob
 	return nil
 }
 
-// validateBasicSubscription validates basic subscription requirements (hard failures)
-// This does NOT check ExceptionId/exptAnaType support - those are soft failures
-func (p *Processor) validateBasicSubscription(req *models.NnwdafEventsSubscription) *models.ProblemDetails {
+// validateSubscriptionRequest is the unified validation entry point for Create/Update
+// Validates hard failures only - soft failures are handled separately by collectFailEventReports
+func (p *Processor) validateSubscriptionRequest(req *models.NnwdafEventsSubscription) *models.ProblemDetails {
+	// 1. Basic structure validation
+	if err := p.validateBasicStructure(req); err != nil {
+		return err
+	}
+
+	// 2. Validate each event subscription
+	for i, eventSub := range req.EventSubscriptions {
+		if err := p.validateEventSubscription(i, &eventSub); err != nil {
+			return err
+		}
+	}
+
+	// 3. Validate evtReq (ReportingInformation)
+	return p.validateEvtReq(req.EvtReq)
+}
+
+// validateBasicStructure validates required fields in the subscription request
+func (p *Processor) validateBasicStructure(req *models.NnwdafEventsSubscription) *models.ProblemDetails {
 	if req == nil {
 		return &models.ProblemDetails{
 			Status: http.StatusBadRequest,
@@ -172,162 +222,123 @@ func (p *Processor) validateBasicSubscription(req *models.NnwdafEventsSubscripti
 		}
 	}
 
-	// Validate each event subscription (basic checks only)
-	for i, eventSub := range req.EventSubscriptions {
-		if eventSub.Event == "" {
-			return &models.ProblemDetails{
-				Status: http.StatusBadRequest,
-				Cause:  "INVALID_REQUEST",
-				Detail: fmt.Sprintf("event is required in eventSubscriptions[%d]", i),
-			}
-		}
+	return nil
+}
 
-		// Check if event type is supported
-		if err := p.validateSupportedEvent(eventSub.Event); err != nil {
+// validateEventSubscription validates a single event subscription including target period
+func (p *Processor) validateEventSubscription(
+	index int,
+	eventSub *models.NwdafEventsSubscriptionEventSubscription,
+) *models.ProblemDetails {
+	if eventSub.Event == "" {
+		return &models.ProblemDetails{
+			Status: http.StatusBadRequest,
+			Cause:  "INVALID_REQUEST",
+			Detail: fmt.Sprintf("event is required in eventSubscriptions[%d]", index),
+		}
+	}
+
+	// Note: Event type support is checked in collectFailEventReports (soft failure)
+	// Here we only validate if it's a supported event that has additional requirements
+
+	// For ABNORMAL_BEHAVIOUR, validate all requirements including ExceptionId/exptAnaType
+	if eventSub.Event == models.NwdafEvent_ABNORMAL_BEHAVIOUR {
+		// Basic requirements (tgtUe, mutual exclusion, etc.)
+		if err := p.validateAbnormalBehaviourBasic(eventSub); err != nil {
 			return err
 		}
 
-		// For ABNORMAL_BEHAVIOUR, validate basic requirements (not ExceptionId/exptAnaType)
-		if eventSub.Event == models.NwdafEvent_ABNORMAL_BEHAVIOUR {
-			if err := p.validateAbnormalBehaviourBasic(&eventSub); err != nil {
+		// ExceptionId support check → 400 rejection
+		if len(eventSub.ExcepRequs) > 0 {
+			if err := p.validateSupportedExceptionIds(eventSub.ExcepRequs); err != nil {
+				return err
+			}
+		}
+
+		// exptAnaType support check → 400 rejection
+		if eventSub.ExptAnaType != "" {
+			if err := p.validateExptAnaType(eventSub.ExptAnaType); err != nil {
 				return err
 			}
 		}
 	}
 
-	// Validate evtReq (ReportingInformation)
-	if err := p.validateEvtReq(req.EvtReq); err != nil {
+	// Validate analytics target period
+	if err := p.validateEventTargetPeriod(index, eventSub); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-// collectFailEventReports collects FailureEventInfo for unsupported exceptions/analytics types
+// validateEventTargetPeriod validates startTs/endTs for a single event subscription
+func (p *Processor) validateEventTargetPeriod(
+	index int,
+	eventSub *models.NwdafEventsSubscriptionEventSubscription,
+) *models.ProblemDetails {
+	if eventSub.ExtraReportReq == nil {
+		return nil
+	}
+
+	startTs := eventSub.ExtraReportReq.StartTs
+	endTs := eventSub.ExtraReportReq.EndTs
+
+	// Both must be present to validate
+	if startTs == nil || endTs == nil {
+		return nil
+	}
+
+	now := time.Now()
+
+	// startTs in past + endTs in future → reject
+	if startTs.Before(now) && endTs.After(now) {
+		return &models.ProblemDetails{
+			Status: http.StatusBadRequest,
+			Cause:  "BOTH_STAT_PRED_NOT_ALLOWED",
+			Detail: fmt.Sprintf("eventSubscriptions[%d]: analytics target period with startTs in past and endTs in future is not allowed", index),
+		}
+	}
+
+	// startTs > endTs → invalid
+	if startTs.After(*endTs) {
+		return &models.ProblemDetails{
+			Status: http.StatusBadRequest,
+			Cause:  "INVALID_REQUEST",
+			Detail: fmt.Sprintf("eventSubscriptions[%d]: startTs must be before endTs", index),
+		}
+	}
+
+	return nil
+}
+
+// collectFailEventReports collects FailureEventInfo for unsupported event types
+// Note: This is event-level (NwdafEvent), NOT ExceptionId-level per TS 29.520 §5.1.6.2.2
 func (p *Processor) collectFailEventReports(
 	eventSubs []models.NwdafEventsSubscriptionEventSubscription,
 ) []models.FailureEventInfo {
 	var failReports []models.FailureEventInfo
 
 	for _, eventSub := range eventSubs {
-		if eventSub.Event == models.NwdafEvent_ABNORMAL_BEHAVIOUR {
-			// Check ExceptionId support
-			if len(eventSub.ExcepRequs) > 0 {
-				if failInfo := p.checkUnsupportedExceptionIds(eventSub.ExcepRequs); failInfo != nil {
-					failReports = append(failReports, *failInfo)
-					continue
-				}
-			}
-
-			// Check exptAnaType support
-			if eventSub.ExptAnaType != "" {
-				if failInfo := p.checkUnsupportedExptAnaType(eventSub.ExptAnaType); failInfo != nil {
-					failReports = append(failReports, *failInfo)
-					continue
-				}
-			}
+		// Check if event type is supported (soft failure)
+		if !p.isEventSupported(eventSub.Event) {
+			failReports = append(failReports, models.FailureEventInfo{
+				Event:       eventSub.Event,
+				FailureCode: models.NwdafFailureCode_OTHER,
+			})
 		}
 	}
 
 	return failReports
 }
 
-// validateSubscription validates the subscription request (kept for backward compatibility)
-func (p *Processor) validateSubscription(req *models.NnwdafEventsSubscription) *models.ProblemDetails {
-	if req == nil {
-		return &models.ProblemDetails{
-			Status: http.StatusBadRequest,
-			Cause:  "INVALID_REQUEST",
-			Detail: "Request body is empty",
+// isEventSupported checks if an event type is supported (returns bool instead of ProblemDetails)
+func (p *Processor) isEventSupported(event models.NwdafEvent) bool {
+	for _, supported := range supportedEvents {
+		if event == supported {
+			return true
 		}
 	}
-
-	if len(req.EventSubscriptions) == 0 {
-		return &models.ProblemDetails{
-			Status: http.StatusBadRequest,
-			Cause:  "INVALID_REQUEST",
-			Detail: "eventSubscriptions is required",
-		}
-	}
-
-	if req.NotificationURI == "" {
-		return &models.ProblemDetails{
-			Status: http.StatusBadRequest,
-			Cause:  "INVALID_REQUEST",
-			Detail: "notificationURI is required",
-		}
-	}
-
-	// Validate each event subscription
-	for i, eventSub := range req.EventSubscriptions {
-		if eventSub.Event == "" {
-			return &models.ProblemDetails{
-				Status: http.StatusBadRequest,
-				Cause:  "INVALID_REQUEST",
-				Detail: fmt.Sprintf("event is required in eventSubscriptions[%d]", i),
-			}
-		}
-
-		// Check if event type is supported
-		if err := p.validateSupportedEvent(eventSub.Event); err != nil {
-			return err
-		}
-
-		// For ABNORMAL_BEHAVIOUR, validate specific requirements
-		if eventSub.Event == models.NwdafEvent_ABNORMAL_BEHAVIOUR {
-			if err := p.validateAbnormalBehaviour(&eventSub); err != nil {
-				return err
-			}
-		}
-	}
-
-	// Validate evtReq (ReportingInformation)
-	if err := p.validateEvtReq(req.EvtReq); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// validateAnalyticsTargetPeriod validates startTs/endTs in extraReportReq
-// Returns BOTH_STAT_PRED_NOT_ALLOWED if startTs is in past and endTs is in future
-func (p *Processor) validateAnalyticsTargetPeriod(
-	eventSubs []models.NwdafEventsSubscriptionEventSubscription,
-) *models.ProblemDetails {
-	now := time.Now()
-
-	for i, eventSub := range eventSubs {
-		if eventSub.ExtraReportReq == nil {
-			continue
-		}
-
-		startTs := eventSub.ExtraReportReq.StartTs
-		endTs := eventSub.ExtraReportReq.EndTs
-
-		// Both must be present to validate
-		if startTs == nil || endTs == nil {
-			continue
-		}
-
-		// startTs in past + endTs in future → reject (not allowed for both stat and pred)
-		if startTs.Before(now) && endTs.After(now) {
-			return &models.ProblemDetails{
-				Status: http.StatusBadRequest,
-				Cause:  "BOTH_STAT_PRED_NOT_ALLOWED",
-				Detail: fmt.Sprintf("eventSubscriptions[%d]: analytics target period with startTs in past and endTs in future is not allowed", i),
-			}
-		}
-
-		// startTs > endTs → invalid request
-		if startTs.After(*endTs) {
-			return &models.ProblemDetails{
-				Status: http.StatusBadRequest,
-				Cause:  "INVALID_REQUEST",
-				Detail: fmt.Sprintf("eventSubscriptions[%d]: startTs must be before endTs", i),
-			}
-		}
-	}
-	return nil
+	return false
 }
 
 // Supported events list
@@ -335,12 +346,10 @@ var supportedEvents = []models.NwdafEvent{
 	models.NwdafEvent_ABNORMAL_BEHAVIOUR,
 }
 
-// validateSupportedEvent checks if the event type is supported
+// validateSupportedEvent checks if the event type is supported (kept for backward compatibility)
 func (p *Processor) validateSupportedEvent(event models.NwdafEvent) *models.ProblemDetails {
-	for _, supported := range supportedEvents {
-		if event == supported {
-			return nil
-		}
+	if p.isEventSupported(event) {
+		return nil
 	}
 	return &models.ProblemDetails{
 		Status: http.StatusBadRequest,
@@ -412,78 +421,6 @@ func (p *Processor) validateAbnormalBehaviourBasic(
 			Status: http.StatusBadRequest,
 			Cause:  "INVALID_REQUEST",
 			Detail: "excepRequs and exptAnaType cannot be provided together",
-		}
-	}
-
-	// If anyUe=true, validate additional requirements
-	if eventSub.TgtUe.AnyUe {
-		if err := p.validateAnyUeRequirements(eventSub); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// validateAbnormalBehaviour validates ABNORMAL_BEHAVIOUR specific requirements
-func (p *Processor) validateAbnormalBehaviour(
-	eventSub *models.NwdafEventsSubscriptionEventSubscription,
-) *models.ProblemDetails {
-	// Must have target UE information
-	if eventSub.TgtUe == nil {
-		return &models.ProblemDetails{
-			Status: http.StatusBadRequest,
-			Cause:  "INVALID_REQUEST",
-			Detail: "tgtUe is required for ABNORMAL_BEHAVIOUR",
-		}
-	}
-
-	// tgtUe must have supis, intGroupIds, or anyUe=true
-	hasTarget := len(eventSub.TgtUe.Supis) > 0 ||
-		len(eventSub.TgtUe.IntGroupIds) > 0 ||
-		eventSub.TgtUe.AnyUe
-
-	if !hasTarget {
-		return &models.ProblemDetails{
-			Status: http.StatusBadRequest,
-			Cause:  "INVALID_REQUEST",
-			Detail: "tgtUe must contain supis, intGroupIds, or anyUe=true",
-		}
-	}
-
-	// Check excepRequs and exptAnaType
-	hasExcepRequs := len(eventSub.ExcepRequs) > 0
-	hasExptAnaType := eventSub.ExptAnaType != ""
-
-	// Must have either excepRequs or exptAnaType (but not both)
-	if !hasExcepRequs && !hasExptAnaType {
-		return &models.ProblemDetails{
-			Status: http.StatusBadRequest,
-			Cause:  "INVALID_REQUEST",
-			Detail: "excepRequs or exptAnaType is required for ABNORMAL_BEHAVIOUR",
-		}
-	}
-
-	// excepRequs and exptAnaType are mutually exclusive
-	if hasExcepRequs && hasExptAnaType {
-		return &models.ProblemDetails{
-			Status: http.StatusBadRequest,
-			Cause:  "INVALID_REQUEST",
-			Detail: "excepRequs and exptAnaType cannot be provided together",
-		}
-	}
-
-	// Validate that ExceptionId is supported (only SUSPICION_OF_DDOS_ATTACK)
-	if hasExcepRequs {
-		if err := p.validateSupportedExceptionIds(eventSub.ExcepRequs); err != nil {
-			return err
-		}
-	}
-
-	// Validate that exptAnaType is supported (only COMMUN)
-	if hasExptAnaType {
-		if err := p.validateExptAnaType(eventSub.ExptAnaType); err != nil {
-			return err
 		}
 	}
 
@@ -602,39 +539,6 @@ func (p *Processor) validateExptAnaType(exptAnaType models.ExpectedAnalyticsType
 			Status: http.StatusBadRequest,
 			Cause:  "UNSUPPORTED_ANALYTICS_TYPE",
 			Detail: "Only COMMUN analytics type is supported for DDoS detection",
-		}
-	}
-	return nil
-}
-
-// checkUnsupportedExceptionIds checks for unsupported exception IDs and returns FailureEventInfo
-// This is used for failEventReports (soft failure) instead of hard rejection
-func (p *Processor) checkUnsupportedExceptionIds(excepRequs []models.Exception) *models.FailureEventInfo {
-	for _, excep := range excepRequs {
-		supported := false
-		for _, supportedId := range supportedExceptionIds {
-			if excep.ExcepId == supportedId {
-				supported = true
-				break
-			}
-		}
-		if !supported {
-			return &models.FailureEventInfo{
-				Event:       models.NwdafEvent_ABNORMAL_BEHAVIOUR,
-				FailureCode: models.NwdafFailureCode_OTHER,
-			}
-		}
-	}
-	return nil
-}
-
-// checkUnsupportedExptAnaType checks for unsupported analytics type and returns FailureEventInfo
-// This is used for failEventReports (soft failure) instead of hard rejection
-func (p *Processor) checkUnsupportedExptAnaType(exptAnaType models.ExpectedAnalyticsType) *models.FailureEventInfo {
-	if exptAnaType != "" && exptAnaType != models.ExpectedAnalyticsType_COMMUN {
-		return &models.FailureEventInfo{
-			Event:       models.NwdafEvent_ABNORMAL_BEHAVIOUR,
-			FailureCode: models.NwdafFailureCode_OTHER,
 		}
 	}
 	return nil

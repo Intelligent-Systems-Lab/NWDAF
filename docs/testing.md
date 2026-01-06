@@ -80,28 +80,28 @@ go test ./internal/sbi/processor/... -v
 | `anyue` | anyUe missing fields |
 | `unsupported` | Unsupported event type |
 | `evtreq` | PERIODIC without repPeriod |
-| `exception` | Mixed ExceptionIds (failEventReports) |
-| `anatype` | ALL_EVENTS_UNSUPPORTED |
+| `exception` | Mixed events (failEventReports) |
+| `anatype` | UNSUPPORTED_ANALYTICS_TYPE |
 | `evtreq-valid` | Valid evtReq |
 | `target_period` | startTs past + endTs future (BOTH_STAT_PRED_NOT_ALLOWED) |
 | `delete <id>` | Delete subscription |
 
 ---
 
-## 4. Phase 2C Test Cases
+## 4. failEventReports Behavior
 
-### 4.1 Mixed Events (failEventReports)
+### 4.1 Event-Level failEventReports
 
 **Command:** `./test_api.sh exception`
 
-**Description:** Creates a subscription with both supported and unsupported ExceptionIds.
+**Description:** Creates a subscription with supported + unsupported event types.
 
 **Request:**
 ```json
 {
   "eventSubscriptions": [
-    {"excepRequs": [{"excepId": "SUSPICION_OF_DDOS_ATTACK"}]},
-    {"excepRequs": [{"excepId": "UNEXPECTED_UE_LOCATION"}]}
+    {"event": "ABNORMAL_BEHAVIOUR", "excepRequs": [...]},
+    {"event": "UE_MOBILITY"}
   ]
 }
 ```
@@ -110,14 +110,52 @@ go test ./internal/sbi/processor/... -v
 ```json
 {
   "failEventReports": [
-    {"event": "ABNORMAL_BEHAVIOUR", "failureCode": "OTHER"}
+    {"event": "UE_MOBILITY", "failureCode": "OTHER"}
   ]
 }
 ```
 
 ---
 
-### 4.2 All Events Unsupported
+### 4.2 Unsupported ExceptionId → 400 Rejection
+
+**Description:** Unsupported ExceptionId now returns 400 directly.
+
+**Request:**
+```json
+{
+  "eventSubscriptions": [{
+    "excepRequs": [{"excepId": "UNEXPECTED_UE_LOCATION"}]
+  }]
+}
+```
+
+**Expected Result:** `400 Bad Request`
+```json
+{"cause": "UNSUPPORTED_EXCEPTION_ID"}
+```
+
+---
+
+### 4.3 Unsupported exptAnaType → 400 Rejection
+
+**Command:** `./test_api.sh anatype`
+
+**Description:** Unsupported exptAnaType now returns 400 directly.
+
+**Request:**
+```json
+{
+  "eventSubscriptions": [{
+    "exptAnaType": "MOBILITY"
+  }]
+}
+```
+
+**Expected Result:** `400 Bad Request`
+```json
+{"cause": "UNSUPPORTED_ANALYTICS_TYPE"}
+```
 
 **Command:** `./test_api.sh anatype`
 

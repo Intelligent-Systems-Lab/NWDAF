@@ -152,11 +152,11 @@ test_evtreq_periodic() {
     echo "$BODY" | jq .
 }
 
-# Test 6: Mixed events - one supported, one unsupported → 201 + failEventReports (Phase 2C)
+# Test 6: Mixed events - one supported event, one unsupported event → 201 + failEventReports
 test_unsupported_exception() {
-    log_info "Test: Mixed ExceptionIds (supported + unsupported) → 201 + failEventReports"
+    log_info "Test: Mixed events (ABNORMAL_BEHAVIOUR + UE_MOBILITY) → 201 + failEventReports"
     
-    # Send 2 events: one supported (DDOS), one unsupported (UNEXPECTED_UE_LOCATION)
+    # Send 2 events: one supported (ABNORMAL_BEHAVIOUR), one unsupported (UE_MOBILITY)
     RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
         -H "Content-Type: application/json" \
         -d '{
@@ -167,9 +167,8 @@ test_unsupported_exception() {
                     "excepRequs": [{"excepId": "SUSPICION_OF_DDOS_ATTACK"}]
                 },
                 {
-                    "event": "ABNORMAL_BEHAVIOUR",
-                    "tgtUe": {"supis": ["imsi-987654321"]},
-                    "excepRequs": [{"excepId": "UNEXPECTED_UE_LOCATION"}]
+                    "event": "UE_MOBILITY",
+                    "tgtUe": {"supis": ["imsi-987654321"]}
                 }
             ],
             "notificationURI": "http://localhost:9090/callback"
@@ -178,11 +177,11 @@ test_unsupported_exception() {
     HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
     BODY=$(echo "$RESPONSE" | sed '$d')
     
-    # Phase 2C: Returns 201 with failEventReports for the unsupported event
+    # Returns 201 with failEventReports for the unsupported event type
     if [ "$HTTP_CODE" = "201" ]; then
         HAS_FAIL=$(echo "$BODY" | jq 'has("failEventReports")')
         if [ "$HAS_FAIL" = "true" ]; then
-            log_success "Created (201) with failEventReports"
+            log_success "Created (201) with failEventReports for unsupported event"
         else
             log_error "Should have failEventReports but missing"
         fi
@@ -192,9 +191,9 @@ test_unsupported_exception() {
     echo "$BODY" | jq .
 }
 
-# Test 7: All events unsupported → 400 ALL_EVENTS_UNSUPPORTED (Phase 2C)
+# Test 7: Unsupported exptAnaType → 400 UNSUPPORTED_ANALYTICS_TYPE
 test_unsupported_anatype() {
-    log_info "Test: All events unsupported (single MOBILITY) → 400 ALL_EVENTS_UNSUPPORTED"
+    log_info "Test: Unsupported exptAnaType (MOBILITY) → 400 UNSUPPORTED_ANALYTICS_TYPE"
     
     RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
         -H "Content-Type: application/json" \
@@ -211,13 +210,13 @@ test_unsupported_anatype() {
     HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
     BODY=$(echo "$RESPONSE" | sed '$d')
     
-    # Phase 2C: All events unsupported → 400
+    # Unsupported exptAnaType → 400 rejection
     if [ "$HTTP_CODE" = "400" ]; then
         CAUSE=$(echo "$BODY" | jq -r '.cause')
-        if [ "$CAUSE" = "ALL_EVENTS_UNSUPPORTED" ]; then
-            log_success "Correctly rejected (400) - ALL_EVENTS_UNSUPPORTED"
+        if [ "$CAUSE" = "UNSUPPORTED_ANALYTICS_TYPE" ]; then
+            log_success "Correctly rejected (400) - UNSUPPORTED_ANALYTICS_TYPE"
         else
-            log_error "Expected cause ALL_EVENTS_UNSUPPORTED but got $CAUSE"
+            log_error "Expected cause UNSUPPORTED_ANALYTICS_TYPE but got $CAUSE"
         fi
     else
         log_error "Expected 400 but returned HTTP $HTTP_CODE"

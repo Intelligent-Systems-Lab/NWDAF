@@ -116,12 +116,12 @@ func TestValidateAbnormalBehaviour(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := p.validateAbnormalBehaviour(tt.eventSub)
+			err := p.validateAbnormalBehaviourBasic(tt.eventSub)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("validateAbnormalBehaviour() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("validateAbnormalBehaviourBasic() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if err != nil && tt.errCause != "" && err.Cause != tt.errCause {
-				t.Errorf("validateAbnormalBehaviour() cause = %v, want %v", err.Cause, tt.errCause)
+				t.Errorf("validateAbnormalBehaviourBasic() cause = %v, want %v", err.Cause, tt.errCause)
 			}
 		})
 	}
@@ -409,52 +409,9 @@ func TestCheckUnsupportedExceptionIds(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			failInfo := p.checkUnsupportedExceptionIds(tt.excepRequs)
-			if (failInfo != nil) != tt.wantFail {
-				t.Errorf("checkUnsupportedExceptionIds() fail = %v, wantFail %v", failInfo != nil, tt.wantFail)
-			}
-			if failInfo != nil {
-				if failInfo.Event != models.NwdafEvent_ABNORMAL_BEHAVIOUR {
-					t.Errorf("checkUnsupportedExceptionIds() event = %v, want ABNORMAL_BEHAVIOUR", failInfo.Event)
-				}
-				if failInfo.FailureCode != models.NwdafFailureCode_OTHER {
-					t.Errorf("checkUnsupportedExceptionIds() code = %v, want OTHER", failInfo.FailureCode)
-				}
-			}
-		})
-	}
-}
-
-func TestCheckUnsupportedExptAnaType(t *testing.T) {
-	p := &Processor{}
-
-	tests := []struct {
-		name        string
-		exptAnaType models.ExpectedAnalyticsType
-		wantFail    bool
-	}{
-		{
-			name:        "Supported COMMUN",
-			exptAnaType: models.ExpectedAnalyticsType_COMMUN,
-			wantFail:    false,
-		},
-		{
-			name:        "Unsupported MOBILITY",
-			exptAnaType: models.ExpectedAnalyticsType_MOBILITY,
-			wantFail:    true,
-		},
-		{
-			name:        "Empty is valid",
-			exptAnaType: "",
-			wantFail:    false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			failInfo := p.checkUnsupportedExptAnaType(tt.exptAnaType)
-			if (failInfo != nil) != tt.wantFail {
-				t.Errorf("checkUnsupportedExptAnaType() fail = %v, wantFail %v", failInfo != nil, tt.wantFail)
+			err := p.validateSupportedExceptionIds(tt.excepRequs)
+			if (err != nil) != tt.wantFail {
+				t.Errorf("validateSupportedExceptionIds() fail = %v, wantFail %v", err != nil, tt.wantFail)
 			}
 		})
 	}
@@ -469,45 +426,31 @@ func TestCollectFailEventReports(t *testing.T) {
 		wantCount int
 	}{
 		{
-			name: "No failures - supported ExceptionId",
+			name: "Supported event - no failures",
 			eventSubs: []models.NwdafEventsSubscriptionEventSubscription{
 				{
-					Event:      models.NwdafEvent_ABNORMAL_BEHAVIOUR,
-					ExcepRequs: []models.Exception{{ExcepId: models.ExceptionId_SUSPICION_OF_DDOS_ATTACK}},
+					Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
 				},
 			},
 			wantCount: 0,
 		},
 		{
-			name: "One failure - unsupported ExceptionId",
+			name: "Unsupported event - one failure",
 			eventSubs: []models.NwdafEventsSubscriptionEventSubscription{
 				{
-					Event:      models.NwdafEvent_ABNORMAL_BEHAVIOUR,
-					ExcepRequs: []models.Exception{{ExcepId: models.ExceptionId_UNEXPECTED_UE_LOCATION}},
+					Event: models.NwdafEvent_UE_MOBILITY,
 				},
 			},
 			wantCount: 1,
 		},
 		{
-			name: "One failure - unsupported exptAnaType",
+			name: "Mixed - one supported, one unsupported",
 			eventSubs: []models.NwdafEventsSubscriptionEventSubscription{
 				{
-					Event:       models.NwdafEvent_ABNORMAL_BEHAVIOUR,
-					ExptAnaType: models.ExpectedAnalyticsType_MOBILITY,
-				},
-			},
-			wantCount: 1,
-		},
-		{
-			name: "Mixed - one success, one failure",
-			eventSubs: []models.NwdafEventsSubscriptionEventSubscription{
-				{
-					Event:      models.NwdafEvent_ABNORMAL_BEHAVIOUR,
-					ExcepRequs: []models.Exception{{ExcepId: models.ExceptionId_SUSPICION_OF_DDOS_ATTACK}},
+					Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
 				},
 				{
-					Event:       models.NwdafEvent_ABNORMAL_BEHAVIOUR,
-					ExptAnaType: models.ExpectedAnalyticsType_MOBILITY,
+					Event: models.NwdafEvent_UE_MOBILITY,
 				},
 			},
 			wantCount: 1,
@@ -524,7 +467,7 @@ func TestCollectFailEventReports(t *testing.T) {
 	}
 }
 
-func TestValidateAnalyticsTargetPeriod(t *testing.T) {
+func TestValidateEventTargetPeriod(t *testing.T) {
 	p := &Processor{}
 
 	now := time.Now()
@@ -532,20 +475,18 @@ func TestValidateAnalyticsTargetPeriod(t *testing.T) {
 	futureTime := now.Add(1 * time.Hour)
 
 	tests := []struct {
-		name      string
-		eventSubs []models.NwdafEventsSubscriptionEventSubscription
-		wantErr   bool
-		errCause  string
+		name     string
+		eventSub *models.NwdafEventsSubscriptionEventSubscription
+		wantErr  bool
+		errCause string
 	}{
 		{
 			name: "startTs in past and endTs in future - BOTH_STAT_PRED_NOT_ALLOWED",
-			eventSubs: []models.NwdafEventsSubscriptionEventSubscription{
-				{
-					Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
-					ExtraReportReq: &models.EventReportingRequirement{
-						StartTs: &pastTime,
-						EndTs:   &futureTime,
-					},
+			eventSub: &models.NwdafEventsSubscriptionEventSubscription{
+				Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
+				ExtraReportReq: &models.EventReportingRequirement{
+					StartTs: &pastTime,
+					EndTs:   &futureTime,
 				},
 			},
 			wantErr:  true,
@@ -553,13 +494,11 @@ func TestValidateAnalyticsTargetPeriod(t *testing.T) {
 		},
 		{
 			name: "startTs after endTs - INVALID_REQUEST",
-			eventSubs: []models.NwdafEventsSubscriptionEventSubscription{
-				{
-					Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
-					ExtraReportReq: &models.EventReportingRequirement{
-						StartTs: &futureTime,
-						EndTs:   &pastTime,
-					},
+			eventSub: &models.NwdafEventsSubscriptionEventSubscription{
+				Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
+				ExtraReportReq: &models.EventReportingRequirement{
+					StartTs: &futureTime,
+					EndTs:   &pastTime,
 				},
 			},
 			wantErr:  true,
@@ -567,34 +506,28 @@ func TestValidateAnalyticsTargetPeriod(t *testing.T) {
 		},
 		{
 			name: "Only startTs (past) - valid for statistics",
-			eventSubs: []models.NwdafEventsSubscriptionEventSubscription{
-				{
-					Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
-					ExtraReportReq: &models.EventReportingRequirement{
-						StartTs: &pastTime,
-					},
+			eventSub: &models.NwdafEventsSubscriptionEventSubscription{
+				Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
+				ExtraReportReq: &models.EventReportingRequirement{
+					StartTs: &pastTime,
 				},
 			},
 			wantErr: false,
 		},
 		{
 			name: "Only endTs (future) - valid for prediction",
-			eventSubs: []models.NwdafEventsSubscriptionEventSubscription{
-				{
-					Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
-					ExtraReportReq: &models.EventReportingRequirement{
-						EndTs: &futureTime,
-					},
+			eventSub: &models.NwdafEventsSubscriptionEventSubscription{
+				Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
+				ExtraReportReq: &models.EventReportingRequirement{
+					EndTs: &futureTime,
 				},
 			},
 			wantErr: false,
 		},
 		{
 			name: "No extraReportReq - valid",
-			eventSubs: []models.NwdafEventsSubscriptionEventSubscription{
-				{
-					Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
-				},
+			eventSub: &models.NwdafEventsSubscriptionEventSubscription{
+				Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
 			},
 			wantErr: false,
 		},
@@ -602,12 +535,12 @@ func TestValidateAnalyticsTargetPeriod(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := p.validateAnalyticsTargetPeriod(tt.eventSubs)
+			err := p.validateEventTargetPeriod(0, tt.eventSub)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("validateAnalyticsTargetPeriod() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("validateEventTargetPeriod() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if err != nil && tt.errCause != "" && err.Cause != tt.errCause {
-				t.Errorf("validateAnalyticsTargetPeriod() cause = %v, want %v", err.Cause, tt.errCause)
+				t.Errorf("validateEventTargetPeriod() cause = %v, want %v", err.Cause, tt.errCause)
 			}
 		})
 	}
