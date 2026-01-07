@@ -1,0 +1,9 @@
+[project]
+name = "nwdaf-test-callback"
+version = "0.1.0"
+description = "NWDAF notification callback server for testing"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.uv]
+dev-dependencies = []

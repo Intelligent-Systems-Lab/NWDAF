@@ -7,15 +7,16 @@ import (
 )
 
 var (
-	Log      *logrus.Logger
-	MainLog  *logrus.Entry
-	InitLog  *logrus.Entry
-	CfgLog   *logrus.Entry
-	CtxLog   *logrus.Entry
-	SBILog   *logrus.Entry
-	ProcLog  *logrus.Entry
-	ConsLog  *logrus.Entry
-	GinLog   *logrus.Entry
+	Log         *logrus.Logger
+	MainLog     *logrus.Entry
+	InitLog     *logrus.Entry
+	CfgLog      *logrus.Entry
+	CtxLog      *logrus.Entry
+	SBILog      *logrus.Entry
+	ProcLog     *logrus.Entry
+	ConsLog     *logrus.Entry
+	GinLog      *logrus.Entry
+	NotifierLog *logrus.Entry
 )
 
 func init() {
@@ -40,4 +41,5 @@ func init() {
 	ProcLog = Log.WithField("component", "NWDAF").WithField("category", "Proc")
 	ConsLog = Log.WithField("component", "NWDAF").WithField("category", "Consumer")
 	GinLog = Log.WithField("component", "NWDAF").WithField("category", "GIN")
+	NotifierLog = Log.WithField("component", "NWDAF").WithField("category", "Notifier")
 }

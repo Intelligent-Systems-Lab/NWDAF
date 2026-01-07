@@ -52,6 +52,9 @@ type Subscription struct {
 
 	// Status
 	IsActive bool // Whether subscription is active
+
+	// Scheduler reference (managed externally to avoid import cycle)
+	Scheduler interface{ Stop() }
 }
 
 // NewSubscriptionId generates a new unique subscription ID

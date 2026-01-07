@@ -9,6 +9,7 @@ import (
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
+	"github.com/free5gc/nwdaf/internal/notifier"
 )
 
 // HandleCreateSubscription processes new subscription requests
@@ -64,6 +65,18 @@ func (p *Processor) HandleCreateSubscription(
 
 	logger.ProcLog.Infof("Subscription created: %s", subscriptionId)
 
+	// Start notification scheduler for PERIODIC notifications
+	if subscription.NotifMethod == string(models.NwdafEventsSubscriptionNotificationMethod_PERIODIC) && subscription.RepPeriod > 0 {
+		scheduler := notifier.NewNotificationScheduler(
+			subscriptionId,
+			req.NotificationURI,
+			subscription.RepPeriod,
+			req.EventSubscriptions,
+		)
+		scheduler.Start()
+		subscription.Scheduler = scheduler
+	}
+
 	// Prepare response
 	response := &models.NnwdafEventsSubscription{
 		EventSubscriptions: req.EventSubscriptions,
@@ -117,6 +130,11 @@ func (p *Processor) HandleUpdateSubscription(
 		}
 	}
 
+	// Stop existing scheduler before updating
+	if existing.Scheduler != nil {
+		existing.Scheduler.Stop()
+	}
+
 	// Update subscription
 	subscription := &nwdaf_context.Subscription{
 		ID:              subscriptionId,
@@ -125,6 +143,7 @@ func (p *Processor) HandleUpdateSubscription(
 		EventSubs:       req.EventSubscriptions,
 		EvtReq:          req.EvtReq,
 		CreatedAt:       existing.CreatedAt,
+		IsActive:        true,
 	}
 
 	// Populate notification control fields from EvtReq
@@ -139,6 +158,18 @@ func (p *Processor) HandleUpdateSubscription(
 	}
 
 	ctx.UpdateSubscription(subscription)
+
+	// Start new scheduler if PERIODIC notification requested
+	if subscription.NotifMethod == string(models.NwdafEventsSubscriptionNotificationMethod_PERIODIC) && subscription.RepPeriod > 0 {
+		scheduler := notifier.NewNotificationScheduler(
+			subscriptionId,
+			req.NotificationURI,
+			subscription.RepPeriod,
+			req.EventSubscriptions,
+		)
+		scheduler.Start()
+		subscription.Scheduler = scheduler
+	}
 
 	logger.ProcLog.Infof("Subscription updated: %s", subscriptionId)
 
@@ -165,7 +196,9 @@ func (p *Processor) HandleDeleteSubscription(subscriptionId string) *models.Prob
 
 	ctx := nwdaf_context.GetSelf()
 
-	if !ctx.DeleteSubscription(subscriptionId) {
+	// Get subscription to stop scheduler before deletion
+	subscription := ctx.GetSubscription(subscriptionId)
+	if subscription == nil {
 		return &models.ProblemDetails{
 			Status: http.StatusNotFound,
 			Cause:  "SUBSCRIPTION_NOT_FOUND",
@@ -173,6 +206,12 @@ func (p *Processor) HandleDeleteSubscription(subscriptionId string) *models.Prob
 		}
 	}
 
+	// Stop scheduler if running
+	if subscription.Scheduler != nil {
+		subscription.Scheduler.Stop()
+	}
+
+	ctx.DeleteSubscription(subscriptionId)
 	logger.ProcLog.Infof("Subscription deleted: %s", subscriptionId)
 	return nil
 }

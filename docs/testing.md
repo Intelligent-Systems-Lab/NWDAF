@@ -1,192 +1,106 @@
-# Testing Guide
+# NWDAF Testing Guide
 
-This document describes how to run tests for the NWDAF EventSubscription service.
-
-## Prerequisites
-
-- Go 1.21+
-- `jq` (for JSON parsing in shell scripts)
-- `curl`
-
-## 1. Starting the Server
-
-Before running API tests, you must start the NWDAF server.
-
-```bash
-# Build and run
-make build
-./bin/nwdaf --config config/nwdafcfg.yaml
-```
-
-The server listens on `http://127.0.0.1:8080`.
+**Last Updated**: 2026-01-07
 
 ---
 
-## 2. Go Unit Tests
+## 1. Environment Setup
 
-Unit tests can be run without starting the server.
-
-### Run All Tests
-
+### 1.1 Build Project
 ```bash
-go test ./... -v
+make build
 ```
 
-### Run Processor Tests
+### 1.2 Python Test Environment (Notification Callback)
+```bash
+cd test/callback
+uv sync  # Uses uv to manage Python environment
+```
 
+### 1.3 Required Tools
+- Go 1.21+
+- jq (JSON parsing)
+- curl
+- Python 3.10+ (managed by uv)
+
+---
+
+## 2. Unit Tests
+
+### 2.1 Run Command
 ```bash
 go test ./internal/sbi/processor/... -v
 ```
 
-### Unit Test Coverage
+### 2.2 Test Functions (11 tests)
 
-| Test | Cases | Phase |
-|------|-------|-------|
-| `TestValidateSupportedEvent` | 3 | 2A |
-| `TestValidateAbnormalBehaviour` | 5 | 2A |
-| `TestIsMobilityRelated` | 3 | 2A |
-| `TestIsCommunRelated` | 3 | 2A |
-| `TestValidateEvtReq` | 5 | 2B |
-| `TestValidateSupportedExceptionIds` | 4 | 2B |
-| `TestValidateExptAnaType` | 4 | 2B |
-| `TestCheckUnsupportedExceptionIds` | 3 | 2C |
-| `TestCheckUnsupportedExptAnaType` | 3 | 2C |
-| `TestCollectFailEventReports` | 4 | 2C |
-| `TestValidateAnalyticsTargetPeriod` | 5 | **2C** |
-
-**Total: 11 tests, 42 cases**
+| Test Function | Description | Cases |
+|---------------|-------------|-------|
+| `TestValidateSupportedEvent` | Event type validation | 3 |
+| `TestValidateAbnormalBehaviour` | ABNORMAL_BEHAVIOUR validation | 8 |
+| `TestIsMobilityRelated` | Mobility-related exception check | 4 |
+| `TestIsCommunRelated` | Communication-related exception check | 4 |
+| `TestValidateEvtReq` | evtReq validation (PERIODIC/repPeriod) | 5 |
+| `TestValidateSupportedExceptionIds` | ExceptionId support check | 4 |
+| `TestValidateExptAnaType` | exptAnaType support check | 4 |
+| `TestCheckUnsupportedExceptionIds` | ExceptionId validation → 400 | 3 |
+| `TestCollectFailEventReports` | failEventReports collection | 3 |
+| `TestValidateEventTargetPeriod` | startTs/endTs validation | 5 |
 
 ---
 
 ## 3. API Integration Tests
 
-### Quick Start
-
+### 3.1 Run Command
 ```bash
-# Terminal 1: Start server
+# Start NWDAF server first
 ./bin/nwdaf --config config/nwdafcfg.yaml
 
-# Terminal 2: Run all tests
+# Run tests in another terminal
 ./test/scripts/test_api.sh all
 ```
 
-### Test Commands
+### 3.2 Test Commands
 
-| Command | Description |
-|---------|-------------|
-| `all` | Run all tests |
-| `create` | Valid subscription |
-| `mutual` | excepRequs/exptAnaType mutual exclusion |
-| `anyue` | anyUe missing fields |
-| `unsupported` | Unsupported event type |
-| `evtreq` | PERIODIC without repPeriod |
-| `exception` | Mixed events (failEventReports) |
-| `anatype` | UNSUPPORTED_ANALYTICS_TYPE |
-| `evtreq-valid` | Valid evtReq |
-| `target_period` | startTs past + endTs future (BOTH_STAT_PRED_NOT_ALLOWED) |
-| `delete <id>` | Delete subscription |
+| Command | Test Description | Expected |
+|---------|------------------|----------|
+| `create` | Create valid subscription | 201 |
+| `mutual` | excepRequs/exptAnaType mutual exclusion | 400 |
+| `anyue` | anyUe missing required fields | 400 |
+| `unsupported` | Unsupported event type | 400 |
+| `evtreq` | PERIODIC without repPeriod | 400 |
+| `exception` | Mixed events (failEventReports) | 201 |
+| `anatype` | Unsupported exptAnaType | 400 |
+| `evtreq-valid` | Valid evtReq | 201 |
+| `target_period` | startTs in past + endTs in future | 400 |
+| `delete <id>` | Delete subscription | 204 |
 
----
-
-## 4. failEventReports Behavior
-
-### 4.1 Event-Level failEventReports
-
-**Command:** `./test_api.sh exception`
-
-**Description:** Creates a subscription with supported + unsupported event types.
-
-**Request:**
-```json
-{
-  "eventSubscriptions": [
-    {"event": "ABNORMAL_BEHAVIOUR", "excepRequs": [...]},
-    {"event": "UE_MOBILITY"}
-  ]
-}
-```
-
-**Expected Result:** `201 Created` with `failEventReports`
-```json
-{
-  "failEventReports": [
-    {"event": "UE_MOBILITY", "failureCode": "OTHER"}
-  ]
-}
-```
-
----
-
-### 4.2 Unsupported ExceptionId → 400 Rejection
-
-**Description:** Unsupported ExceptionId now returns 400 directly.
-
-**Request:**
-```json
-{
-  "eventSubscriptions": [{
-    "excepRequs": [{"excepId": "UNEXPECTED_UE_LOCATION"}]
-  }]
-}
-```
-
-**Expected Result:** `400 Bad Request`
-```json
-{"cause": "UNSUPPORTED_EXCEPTION_ID"}
-```
-
----
-
-### 4.3 Unsupported exptAnaType → 400 Rejection
-
-**Command:** `./test_api.sh anatype`
-
-**Description:** Unsupported exptAnaType now returns 400 directly.
-
-**Request:**
-```json
-{
-  "eventSubscriptions": [{
-    "exptAnaType": "MOBILITY"
-  }]
-}
-```
-
-**Expected Result:** `400 Bad Request`
-```json
-{"cause": "UNSUPPORTED_ANALYTICS_TYPE"}
-```
-
-**Command:** `./test_api.sh anatype`
-
-**Description:** All events use unsupported exptAnaType.
-
-**Expected Result:** `400 Bad Request` with cause `ALL_EVENTS_UNSUPPORTED`
-
----
-
-## 5. Phase 2B Test Cases
-
-### 5.1 PERIODIC without repPeriod
-
-**Command:** `./test_api.sh periodic`
-
-**Expected:** `400 Bad Request`
-
-### 5.2 Valid evtReq
-
-**Command:** `./test_api.sh evtreq`
-
-**Expected:** `201 Created`
-
----
-
-## 6. Manual Testing
-
-### Create with evtReq
-
+### 3.3 Run Individual Tests
 ```bash
-curl -X POST http://127.0.0.1:8080/nnwdaf-eventssubscription/v1/subscriptions \
+./test/scripts/test_api.sh create      # Single test
+./test/scripts/test_api.sh all         # All tests
+./test/scripts/test_api.sh delete abc  # Delete specific ID
+```
+
+---
+
+## 4. Notification Mechanism Testing
+
+### 4.1 Start Callback Server
+```bash
+cd test/callback
+uv run callback_server.py 9090
+```
+
+Expected output:
+```
+🚀 Callback server listening on http://localhost:9090
+Press Ctrl+C to stop
+```
+
+### 4.2 Create Periodic Subscription
+```bash
+curl -X POST http://localhost:8080/nnwdaf-eventssubscription/v1/subscriptions \
   -H "Content-Type: application/json" \
   -d '{
     "eventSubscriptions": [{
@@ -195,20 +109,96 @@ curl -X POST http://127.0.0.1:8080/nnwdaf-eventssubscription/v1/subscriptions \
       "excepRequs": [{"excepId": "SUSPICION_OF_DDOS_ATTACK"}],
       "dnns": ["internet"]
     }],
-    "evtReq": {
-      "notifMethod": "PERIODIC",
-      "repPeriod": 60
-    },
-    "notificationURI": "http://localhost:9090/callback"
+    "notificationURI": "http://localhost:9090/callback",
+    "evtReq": {"notifMethod": "PERIODIC", "repPeriod": 10}
   }'
+```
+
+### 4.3 Expected Notification Output
+```
+============================================================
+[15:30:00] 📩 Notification Received
+============================================================
+Subscription ID: abc123-def456
+
+--- Event 1 ---
+Event Type: ABNORMAL_BEHAVIOUR
+
+  Abnormal Behaviour 1:
+    ExceptionId: SUSPICION_OF_DDOS_ATTACK
+    ExceptionLevel: 3
+    ExceptionTrend: UP
+    Ratio: 15%
+    Confidence: 85%
+    DDoS Attack IPs: ['192.168.1.100', '192.168.1.101']
+============================================================
+```
+
+### 4.4 Test Subscription Update
+```bash
+# Update period to 5 seconds
+curl -X PUT http://localhost:8080/nnwdaf-eventssubscription/v1/subscriptions/{id} \
+  -H "Content-Type: application/json" \
+  -d '{...evtReq.repPeriod: 5...}'
 ```
 
 ---
 
-## 7. Troubleshooting
+## 5. Test Directory Structure
 
-| Issue | Solution |
-|-------|----------|
-| HTTP 000 | Start the server first |
-| Connection refused | Check `netstat -tlnp \| grep 8080` |
-| Build errors | Run `go mod tidy` |
+```
+test/
+├── callback/                # Python notification callback testing
+│   ├── callback_server.py   # HTTP callback server
+│   ├── pyproject.toml       # uv project configuration
+│   └── README.md            # Usage instructions
+└── scripts/
+    └── test_api.sh          # API integration test script
+```
+
+---
+
+## 6. Complete Test Workflow
+
+### Step 1: Unit Tests
+```bash
+make build
+go test ./internal/sbi/processor/... -v
+# Expected: 11 tests PASS
+```
+
+### Step 2: API Tests
+```bash
+# Terminal 1
+./bin/nwdaf --config config/nwdafcfg.yaml
+
+# Terminal 2
+./test/scripts/test_api.sh all
+# Expected: 9 tests PASS
+```
+
+### Step 3: Notification Tests
+```bash
+# Terminal 1: Callback server
+cd test/callback && uv run callback_server.py 9090
+
+# Terminal 2: NWDAF server
+./bin/nwdaf --config config/nwdafcfg.yaml
+
+# Terminal 3: Create PERIODIC subscription
+curl -X POST ... (see section 4.2)
+# Expected: Receive notifications every 10 seconds
+```
+
+---
+
+## 7. Error Code Reference
+
+| HTTP | Cause | Description |
+|------|-------|-------------|
+| 400 | `INVALID_REQUEST` | Request format error |
+| 400 | `ALL_EVENTS_UNSUPPORTED` | All events unsupported |
+| 400 | `UNSUPPORTED_EXCEPTION_ID` | ExceptionId not supported |
+| 400 | `UNSUPPORTED_ANALYTICS_TYPE` | exptAnaType not supported |
+| 400 | `BOTH_STAT_PRED_NOT_ALLOWED` | Statistics + prediction not allowed |
+| 404 | `SUBSCRIPTION_NOT_FOUND` | Subscription does not exist |
