@@ -67,11 +67,23 @@ func (p *Processor) HandleCreateSubscription(
 
 	// Start notification scheduler for PERIODIC notifications
 	if subscription.NotifMethod == string(models.NwdafEventsSubscriptionNotificationMethod_PERIODIC) && subscription.RepPeriod > 0 {
+		// Create completion callback to handle scheduler termination
+		onComplete := func(subId string, reason string) {
+			logger.ProcLog.Infof("Subscription %s notification completed: %s", subId, reason)
+			if sub := nwdaf_context.GetSelf().GetSubscription(subId); sub != nil {
+				sub.IsActive = false
+			}
+		}
+
 		scheduler := notifier.NewNotificationScheduler(
 			subscriptionId,
 			req.NotificationURI,
 			subscription.RepPeriod,
 			req.EventSubscriptions,
+			subscription.NotifCorrId,
+			subscription.MaxReportNbr,
+			subscription.MonDur,
+			onComplete,
 		)
 		scheduler.Start()
 		subscription.Scheduler = scheduler
@@ -161,11 +173,23 @@ func (p *Processor) HandleUpdateSubscription(
 
 	// Start new scheduler if PERIODIC notification requested
 	if subscription.NotifMethod == string(models.NwdafEventsSubscriptionNotificationMethod_PERIODIC) && subscription.RepPeriod > 0 {
+		// Create completion callback to handle scheduler termination
+		onComplete := func(subId string, reason string) {
+			logger.ProcLog.Infof("Subscription %s notification completed: %s", subId, reason)
+			if sub := nwdaf_context.GetSelf().GetSubscription(subId); sub != nil {
+				sub.IsActive = false
+			}
+		}
+
 		scheduler := notifier.NewNotificationScheduler(
 			subscriptionId,
 			req.NotificationURI,
 			subscription.RepPeriod,
 			req.EventSubscriptions,
+			subscription.NotifCorrId,
+			subscription.MaxReportNbr,
+			subscription.MonDur,
+			onComplete,
 		)
 		scheduler.Start()
 		subscription.Scheduler = scheduler

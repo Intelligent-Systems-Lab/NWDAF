@@ -1,6 +1,6 @@
 # NWDAF Testing Guide
 
-**Last Updated**: 2026-01-07
+**Last Updated**: 2026-01-07 19:04
 
 ---
 
@@ -27,25 +27,48 @@ uv sync  # Uses uv to manage Python environment
 
 ## 2. Unit Tests
 
-### 2.1 Run Command
+### 2.1 Run All Unit Tests
 ```bash
+# Run all unit tests
+go test ./internal/... -v
+
+# Run processor tests only
 go test ./internal/sbi/processor/... -v
+
+# Run notifier tests only
+go test ./internal/notifier/... -v
 ```
 
-### 2.2 Test Functions (11 tests)
+### 2.2 Processor Tests (12 tests)
+
+Location: `internal/sbi/processor/eventssubscription_test.go`
 
 | Test Function | Description | Cases |
 |---------------|-------------|-------|
 | `TestValidateSupportedEvent` | Event type validation | 3 |
-| `TestValidateAbnormalBehaviour` | ABNORMAL_BEHAVIOUR validation | 8 |
-| `TestIsMobilityRelated` | Mobility-related exception check | 4 |
-| `TestIsCommunRelated` | Communication-related exception check | 4 |
-| `TestValidateEvtReq` | evtReq validation (PERIODIC/repPeriod) | 5 |
+| `TestValidateAbnormalBehaviour` | ABNORMAL_BEHAVIOUR validation (tgtUe, excepRequs/exptAnaType) | 5 |
+| `TestIsMobilityRelated` | Mobility-related exception check | 3 |
+| `TestIsCommunRelated` | Communication-related exception check | 3 |
+| `TestValidateEvtReq` | evtReq validation (PERIODIC/repPeriod/maxReportNbr) | 5 |
 | `TestValidateSupportedExceptionIds` | ExceptionId support check | 4 |
 | `TestValidateExptAnaType` | exptAnaType support check | 4 |
 | `TestCheckUnsupportedExceptionIds` | ExceptionId validation → 400 | 3 |
 | `TestCollectFailEventReports` | failEventReports collection | 3 |
-| `TestValidateEventTargetPeriod` | startTs/endTs validation | 5 |
+| `TestValidateEventTargetPeriod` | startTs/endTs validation (BOTH_STAT_PRED_NOT_ALLOWED) | 5 |
+
+### 2.3 Notifier Tests (7 tests)
+
+Location: `internal/notifier/notifier_test.go`
+
+| Test Function | Description | Cases |
+|---------------|-------------|-------|
+| `TestShouldContinue_MaxReportNbrLimit` | Verify scheduler stops at maxReportNbr | 4 |
+| `TestShouldContinue_MonDurExpiry` | Verify scheduler stops when monDur expires | 3 |
+| `TestShouldContinue_CombinedLimits` | Test combined maxReportNbr + monDur | 4 |
+| `TestBuildNotification_NotifCorrId` | Verify notifCorrId in notification | 2 |
+| `TestBuildNotification_SubscriptionId` | Verify subscriptionId always included | 1 |
+| `TestHandleCompletion_Callback` | Verify onComplete callback invocation | 1 |
+| `TestNewNotificationScheduler` | Verify scheduler initialization | 1 |
 
 ---
 
@@ -136,11 +159,113 @@ Event Type: ABNORMAL_BEHAVIOUR
 
 ### 4.4 Test Subscription Update
 ```bash
-# Update period to 5 seconds
+# Update period to 5 seconds (replace {id} with actual subscription ID)
 curl -X PUT http://localhost:8080/nnwdaf-eventssubscription/v1/subscriptions/{id} \
   -H "Content-Type: application/json" \
-  -d '{...evtReq.repPeriod: 5...}'
+  -d '{
+    "eventSubscriptions": [{
+      "event": "ABNORMAL_BEHAVIOUR",
+      "tgtUe": {"anyUe": true},
+      "excepRequs": [{"excepId": "SUSPICION_OF_DDOS_ATTACK"}],
+      "dnns": ["internet"]
+    }],
+    "notificationURI": "http://localhost:9090/callback",
+    "evtReq": {"notifMethod": "PERIODIC", "repPeriod": 5}
+  }'
 ```
+
+**Expected**: 
+- Response 200 OK with updated subscription
+- Notifications now sent every 5 seconds instead of original period
+
+### 4.5 Test maxReportNbr Limit
+
+Verify scheduler stops after max reports:
+
+```bash
+# Create subscription with maxReportNbr=3, repPeriod=2
+curl -X POST http://localhost:8080/nnwdaf-eventssubscription/v1/subscriptions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "eventSubscriptions": [{
+      "event": "ABNORMAL_BEHAVIOUR",
+      "tgtUe": {"anyUe": true},
+      "exptAnaType": "COMMUN",
+      "appIds": ["app1"]
+    }],
+    "notificationURI": "http://localhost:9090/callback",
+    "evtReq": {
+      "notifMethod": "PERIODIC",
+      "repPeriod": 2,
+      "maxReportNbr": 3
+    }
+  }'
+```
+
+**Expected**:
+- Callback server receives exactly 3 notifications
+- NWDAF logs: `Subscription xxx notification completed: LIMIT_REACHED (sent 3 reports)`
+
+### 4.6 Test monDur Expiry
+
+Verify scheduler stops when monitoring duration expires:
+
+**Step 1**: Generate a future time (30 seconds from now)
+```bash
+MONDUR=$(date -u -d "+30 seconds" +"%Y-%m-%dT%H:%M:%SZ")
+echo "MonDur will be: $MONDUR"
+```
+
+**Step 2**: Create subscription (copy the JSON and replace the monDur value manually)
+```bash
+curl -X POST http://localhost:8080/nnwdaf-eventssubscription/v1/subscriptions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "eventSubscriptions": [{
+      "event": "ABNORMAL_BEHAVIOUR",
+      "tgtUe": {"anyUe": true},
+      "exptAnaType": "COMMUN",
+      "appIds": ["app1"]
+    }],
+    "notificationURI": "http://localhost:9090/callback",
+    "evtReq": {
+      "notifMethod": "PERIODIC",
+      "repPeriod": 5,
+      "monDur": "PASTE_YOUR_MONDUR_HERE"
+    }
+  }'
+```
+
+> **💡 Tip**: Replace `PASTE_YOUR_MONDUR_HERE` with the value from Step 1 (e.g., `2026-01-07T11:05:00Z`)
+
+**Expected**:
+- NWDAF logs show: `monDur: 2026-01-07T11:05:00Z` (your generated time)
+- Notifications sent every 5 seconds until monDur passes
+- After ~30 seconds, logs show: `notification completed: LIMIT_REACHED`
+
+### 4.7 Test notifCorrId Passthrough
+
+Verify notification contains notifCorrId:
+
+```bash
+curl -X POST http://localhost:8080/nnwdaf-eventssubscription/v1/subscriptions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "eventSubscriptions": [{
+      "event": "ABNORMAL_BEHAVIOUR",
+      "tgtUe": {"anyUe": true},
+      "exptAnaType": "COMMUN",
+      "appIds": ["app1"]
+    }],
+    "notificationURI": "http://localhost:9090/callback",
+    "notifCorrId": "my-correlation-id-12345",
+    "evtReq": {"notifMethod": "PERIODIC", "repPeriod": 10}
+  }'
+```
+
+**Expected**:
+- Notification JSON contains: `"notifCorrId": "my-correlation-id-12345"`
+- Callback server logs show the correlation ID
 
 ---
 
@@ -158,37 +283,64 @@ test/
 
 ---
 
-## 6. Complete Test Workflow
+## 6. Complete Test Workflow (Step-by-Step)
 
-### Step 1: Unit Tests
+Follow these steps in order. You need **3 terminal windows**.
+
+### Step 1: Build & Run Unit Tests
 ```bash
+# In any terminal
+cd /path/to/NWDAF
 make build
-go test ./internal/sbi/processor/... -v
-# Expected: 11 tests PASS
+go test ./internal/... -v
 ```
+**Expected**: 19 tests PASS (12 processor + 7 notifier)
 
-### Step 2: API Tests
+---
+
+### Step 2: API Integration Tests
+
+**Terminal 1** - Start NWDAF:
 ```bash
-# Terminal 1
 ./bin/nwdaf --config config/nwdafcfg.yaml
-
-# Terminal 2
-./test/scripts/test_api.sh all
-# Expected: 9 tests PASS
 ```
+
+**Terminal 2** - Run API tests:
+```bash
+./test/scripts/test_api.sh all
+```
+**Expected**: 9 tests PASS
+
+---
 
 ### Step 3: Notification Tests
+
+**Terminal 1** - Start callback server:
 ```bash
-# Terminal 1: Callback server
 cd test/callback && uv run callback_server.py 9090
-
-# Terminal 2: NWDAF server
-./bin/nwdaf --config config/nwdafcfg.yaml
-
-# Terminal 3: Create PERIODIC subscription
-curl -X POST ... (see section 4.2)
-# Expected: Receive notifications every 10 seconds
 ```
+
+**Terminal 2** - Start NWDAF (if not running):
+```bash
+./bin/nwdaf --config config/nwdafcfg.yaml
+```
+
+**Terminal 3** - Create PERIODIC subscription:
+```bash
+curl -X POST http://localhost:8080/nnwdaf-eventssubscription/v1/subscriptions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "eventSubscriptions": [{
+      "event": "ABNORMAL_BEHAVIOUR",
+      "tgtUe": {"anyUe": true},
+      "excepRequs": [{"excepId": "SUSPICION_OF_DDOS_ATTACK"}],
+      "dnns": ["internet"]
+    }],
+    "notificationURI": "http://localhost:9090/callback",
+    "evtReq": {"notifMethod": "PERIODIC", "repPeriod": 10}
+  }'
+```
+**Expected**: Terminal 1 shows notifications every 10 seconds
 
 ---
 

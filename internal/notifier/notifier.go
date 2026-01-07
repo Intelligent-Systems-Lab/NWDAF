@@ -20,6 +20,15 @@ type NotificationScheduler struct {
 	repPeriod       int32 // seconds
 	eventSubs       []models.NwdafEventsSubscriptionEventSubscription
 
+	// Notification control fields
+	notifCorrId  string     // Notification correlation ID
+	maxReportNbr int32      // Maximum number of reports (0 = unlimited)
+	monDur       *time.Time // Monitoring duration expiry time
+	reportCount  int32      // Current report count
+
+	// Completion callback (called when scheduler stops due to limits)
+	onComplete func(subscriptionId string, reason string)
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 	mu     sync.Mutex
@@ -31,12 +40,20 @@ func NewNotificationScheduler(
 	notificationURI string,
 	repPeriod int32,
 	eventSubs []models.NwdafEventsSubscriptionEventSubscription,
+	notifCorrId string,
+	maxReportNbr int32,
+	monDur *time.Time,
+	onComplete func(subscriptionId string, reason string),
 ) *NotificationScheduler {
 	return &NotificationScheduler{
 		subscriptionId:  subscriptionId,
 		notificationURI: notificationURI,
 		repPeriod:       repPeriod,
 		eventSubs:       eventSubs,
+		notifCorrId:     notifCorrId,
+		maxReportNbr:    maxReportNbr,
+		monDur:          monDur,
+		onComplete:      onComplete,
 	}
 }
 
@@ -55,8 +72,13 @@ func (s *NotificationScheduler) Start() {
 	s.wg.Add(1)
 	go s.run(ctx)
 
-	logger.NotifierLog.Infof("Notification scheduler started for subscription %s (period: %ds)",
-		s.subscriptionId, s.repPeriod)
+	// Log scheduler start with control parameters
+	monDurStr := "nil"
+	if s.monDur != nil {
+		monDurStr = s.monDur.Format(time.RFC3339)
+	}
+	logger.NotifierLog.Infof("Notification scheduler started for subscription %s (period: %ds, maxReports: %d, monDur: %s)",
+		s.subscriptionId, s.repPeriod, s.maxReportNbr, monDurStr)
 }
 
 // Stop stops the periodic notification loop
@@ -70,7 +92,8 @@ func (s *NotificationScheduler) Stop() {
 	}
 
 	s.wg.Wait()
-	logger.NotifierLog.Infof("Notification scheduler stopped for subscription %s", s.subscriptionId)
+	logger.NotifierLog.Infof("Notification scheduler stopped for subscription %s (sent %d reports)",
+		s.subscriptionId, s.reportCount)
 }
 
 // run is the main notification loop
@@ -80,21 +103,69 @@ func (s *NotificationScheduler) run(ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(s.repPeriod) * time.Second)
 	defer ticker.Stop()
 
-	// Send first notification immediately
-	s.sendNotification()
+	// Send first notification immediately (if allowed)
+	if s.shouldContinue() {
+		s.sendNotification()
+	} else {
+		s.handleCompletion("LIMIT_REACHED_BEFORE_START")
+		return
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if !s.shouldContinue() {
+				s.handleCompletion("LIMIT_REACHED")
+				return
+			}
 			s.sendNotification()
 		}
 	}
 }
 
+// shouldContinue checks if notification should continue based on maxReportNbr and monDur
+func (s *NotificationScheduler) shouldContinue() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Check maxReportNbr limit (0 means unlimited)
+	if s.maxReportNbr > 0 && s.reportCount >= s.maxReportNbr {
+		logger.NotifierLog.Debugf("Subscription %s: reached maxReportNbr limit (%d/%d)",
+			s.subscriptionId, s.reportCount, s.maxReportNbr)
+		return false
+	}
+
+	// Check monDur expiry
+	if s.monDur != nil && time.Now().After(*s.monDur) {
+		logger.NotifierLog.Debugf("Subscription %s: monitoring duration expired at %s",
+			s.subscriptionId, s.monDur.Format(time.RFC3339))
+		return false
+	}
+
+	return true
+}
+
+// handleCompletion handles scheduler completion and invokes callback
+func (s *NotificationScheduler) handleCompletion(reason string) {
+	logger.NotifierLog.Infof("Subscription %s notification completed: %s (sent %d reports)",
+		s.subscriptionId, reason, s.reportCount)
+
+	if s.onComplete != nil {
+		// Call callback asynchronously to avoid blocking
+		go s.onComplete(s.subscriptionId, reason)
+	}
+}
+
 // sendNotification sends a notification to the consumer
 func (s *NotificationScheduler) sendNotification() {
+	// Increment report count
+	s.mu.Lock()
+	s.reportCount++
+	currentCount := s.reportCount
+	s.mu.Unlock()
+
 	notification := s.buildNotification()
 
 	jsonData, err := json.Marshal(notification)
@@ -111,9 +182,11 @@ func (s *NotificationScheduler) sendNotification() {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNoContent {
-		logger.NotifierLog.Infof("Notification sent successfully to %s", s.notificationURI)
+		logger.NotifierLog.Infof("Notification #%d sent successfully to %s for subscription %s",
+			currentCount, s.notificationURI, s.subscriptionId)
 	} else {
-		logger.NotifierLog.Warnf("Notification response: %d from %s", resp.StatusCode, s.notificationURI)
+		logger.NotifierLog.Warnf("Notification #%d response: %d from %s",
+			currentCount, resp.StatusCode, s.notificationURI)
 	}
 }
 
@@ -131,8 +204,15 @@ func (s *NotificationScheduler) buildNotification() models.NnwdafEventsSubscript
 		}
 	}
 
-	return models.NnwdafEventsSubscriptionNotification{
+	notification := models.NnwdafEventsSubscriptionNotification{
 		SubscriptionId:     s.subscriptionId,
 		EventNotifications: eventNotifications,
 	}
+
+	// Include notifCorrId if provided
+	if s.notifCorrId != "" {
+		notification.NotifCorrId = s.notifCorrId
+	}
+
+	return notification
 }
