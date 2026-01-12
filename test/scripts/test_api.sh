@@ -297,6 +297,121 @@ test_target_period() {
     echo "$BODY" | jq .
 }
 
+# Test 10: UE_COMMUNICATION valid subscription
+test_ue_comm_valid() {
+    log_info "Test: UE_COMMUNICATION valid subscription (with supis)"
+    
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "eventSubscriptions": [{
+                "event": "UE_COMMUNICATION",
+                "tgtUe": {"supis": ["imsi-208930000000003"]}
+            }],
+            "notificationURI": "http://localhost:9090/callback",
+            "evtReq": {"notifMethod": "PERIODIC", "repPeriod": 10}
+        }')
+    
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+    
+    if [ "$HTTP_CODE" = "201" ]; then
+        log_success "Created successfully (201)"
+        echo "$BODY" | jq .
+    else
+        log_error "Creation failed (HTTP $HTTP_CODE)"
+        echo "$BODY" | jq .
+    fi
+}
+
+# Test 11: UE_COMMUNICATION missing tgtUe
+test_ue_comm_missing_tgtue() {
+    log_info "Test: UE_COMMUNICATION missing tgtUe (should reject)"
+    
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "eventSubscriptions": [{
+                "event": "UE_COMMUNICATION"
+            }],
+            "notificationURI": "http://localhost:9090/callback"
+        }')
+    
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+    
+    if [ "$HTTP_CODE" = "400" ]; then
+        CAUSE=$(echo "$BODY" | jq -r '.cause')
+        if [ "$CAUSE" = "INVALID_REQUEST" ]; then
+            log_success "Correctly rejected (400) - INVALID_REQUEST"
+        else
+            log_error "Wrong cause: $CAUSE (expected INVALID_REQUEST)"
+        fi
+    else
+        log_error "Expected 400, got HTTP $HTTP_CODE"
+    fi
+    echo "$BODY" | jq .
+}
+
+# Test 12: UE_COMMUNICATION with valid N4_SESS_INACT_TIMER subset
+test_ue_comm_with_subset() {
+    log_info "Test: UE_COMMUNICATION with N4_SESS_INACT_TIMER_FOR_UE_COMM subset"
+    
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "eventSubscriptions": [{
+                "event": "UE_COMMUNICATION",
+                "tgtUe": {"supis": ["imsi-208930000000003"]},
+                "listOfAnaSubsets": ["N4_SESS_INACT_TIMER_FOR_UE_COMM"]
+            }],
+            "notificationURI": "http://localhost:9090/callback",
+            "evtReq": {"notifMethod": "PERIODIC", "repPeriod": 10}
+        }')
+    
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+    
+    if [ "$HTTP_CODE" = "201" ]; then
+        log_success "Created successfully (201) with subset"
+        echo "$BODY" | jq .
+    else
+        log_error "Creation failed (HTTP $HTTP_CODE)"
+        echo "$BODY" | jq .
+    fi
+}
+
+# Test 13: UE_COMMUNICATION with unsupported subset
+test_ue_comm_unsupported_subset() {
+    log_info "Test: UE_COMMUNICATION unsupported subset (APP_LIST_FOR_UE_COMM)"
+    
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "eventSubscriptions": [{
+                "event": "UE_COMMUNICATION",
+                "tgtUe": {"supis": ["imsi-208930000000003"]},
+                "listOfAnaSubsets": ["APP_LIST_FOR_UE_COMM"]
+            }],
+            "notificationURI": "http://localhost:9090/callback"
+        }')
+    
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+    
+    if [ "$HTTP_CODE" = "400" ]; then
+        CAUSE=$(echo "$BODY" | jq -r '.cause')
+        if [ "$CAUSE" = "UNSUPPORTED_ANALYTICS_SUBSET" ]; then
+            log_success "Correctly rejected (400) - UNSUPPORTED_ANALYTICS_SUBSET"
+        else
+            log_error "Wrong cause: $CAUSE (expected UNSUPPORTED_ANALYTICS_SUBSET)"
+        fi
+    else
+        log_error "Expected 400, got HTTP $HTTP_CODE"
+    fi
+    echo "$BODY" | jq .
+}
+
 # Run all tests
 run_all() {
     echo "========================================"
@@ -324,6 +439,16 @@ run_all() {
     test_evtreq_valid
     echo ""
     test_target_period
+    echo ""
+    
+    echo "--- Phase 4: UE_COMMUNICATION Tests ---"
+    test_ue_comm_valid
+    echo ""
+    test_ue_comm_missing_tgtue
+    echo ""
+    test_ue_comm_with_subset
+    echo ""
+    test_ue_comm_unsupported_subset
     echo ""
     
     echo "========================================"
@@ -380,6 +505,18 @@ case "$1" in
     target_period)
         test_target_period
         ;;
+    uecomm)
+        test_ue_comm_valid
+        ;;
+    uecomm-invalid)
+        test_ue_comm_missing_tgtue
+        ;;
+    uecomm-subset)
+        test_ue_comm_with_subset
+        ;;
+    uecomm-unsupported)
+        test_ue_comm_unsupported_subset
+        ;;
     delete)
         test_delete "$2"
         ;;
@@ -387,7 +524,7 @@ case "$1" in
         run_all
         ;;
     *)
-        echo "Usage: $0 [create|mutual|anyue|unsupported|evtreq|exception|anatype|evtreq-valid|target_period|delete <id>|all]"
+        echo "Usage: $0 [create|mutual|anyue|unsupported|evtreq|exception|anatype|evtreq-valid|target_period|uecomm|uecomm-invalid|uecomm-subset|uecomm-unsupported|delete <id>|all]"
         exit 1
         ;;
 esac

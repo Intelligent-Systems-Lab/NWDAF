@@ -201,6 +201,12 @@ func (s *NotificationScheduler) buildNotification() models.NnwdafEventsSubscript
 				AbnorBehavrs: generateMockAbnormalBehaviours(),
 			}
 			eventNotifications = append(eventNotifications, eventNotification)
+		} else if eventSub.Event == models.NwdafEvent_UE_COMMUNICATION {
+			eventNotification := models.NwdafEventsSubscriptionEventNotification{
+				Event:   eventSub.Event,
+				UeComms: []models.UeCommunication{generateMockUeCommunication(&eventSub)},
+			}
+			eventNotifications = append(eventNotifications, eventNotification)
 		}
 	}
 

@@ -1,7 +1,5 @@
 # NWDAF Testing Guide
 
-**Last Updated**: 2026-01-07 19:04
-
 ---
 
 ## 1. Environment Setup
@@ -39,13 +37,14 @@ go test ./internal/sbi/processor/... -v
 go test ./internal/notifier/... -v
 ```
 
-### 2.2 Processor Tests (12 tests)
+### 2.2 Processor Tests (20 tests)
 
 Location: `internal/sbi/processor/eventssubscription_test.go`
 
 | Test Function | Description | Cases |
 |---------------|-------------|-------|
-| `TestValidateSupportedEvent` | Event type validation | 3 |
+| `TestValidateSupportedEvent` | Event type validation | 4 |
+| `TestValidateUeCommunication` | UE_COMMUNICATION validation (tgtUe, supis/intGroupIds, subsets) | 8 |
 | `TestValidateAbnormalBehaviour` | ABNORMAL_BEHAVIOUR validation (tgtUe, excepRequs/exptAnaType) | 5 |
 | `TestIsMobilityRelated` | Mobility-related exception check | 3 |
 | `TestIsCommunRelated` | Communication-related exception check | 3 |
@@ -96,6 +95,10 @@ Location: `internal/notifier/notifier_test.go`
 | `anatype` | Unsupported exptAnaType | 400 |
 | `evtreq-valid` | Valid evtReq | 201 |
 | `target_period` | startTs in past + endTs in future | 400 |
+| `uecomm` | UE_COMMUNICATION valid subscription | 201 |
+| `uecomm-invalid` | UE_COMMUNICATION missing tgtUe | 400 |
+| `uecomm-subset` | UE_COMMUNICATION with N4_SESS_INACT_TIMER subset | 201 |
+| `uecomm-unsupported` | UE_COMMUNICATION unsupported subset | 400 |
 | `delete <id>` | Delete subscription | 204 |
 
 ### 3.3 Run Individual Tests
@@ -267,6 +270,44 @@ curl -X POST http://localhost:8080/nnwdaf-eventssubscription/v1/subscriptions \
 - Notification JSON contains: `"notifCorrId": "my-correlation-id-12345"`
 - Callback server logs show the correlation ID
 
+### 4.8 Test UE_COMMUNICATION Subscription
+
+Create UE Communication subscription for N4 Session Inactivity Timer:
+
+```bash
+curl -X POST http://localhost:8080/nnwdaf-eventssubscription/v1/subscriptions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "eventSubscriptions": [{
+      "event": "UE_COMMUNICATION",
+      "tgtUe": {"supis": ["imsi-208930000000003"]},
+      "listOfAnaSubsets": ["N4_SESS_INACT_TIMER_FOR_UE_COMM"]
+    }],
+    "notificationURI": "http://localhost:9090/callback",
+    "evtReq": {"notifMethod": "PERIODIC", "repPeriod": 10}
+  }'
+```
+
+> **NOTE**: `sessInactTimer` is only included when `N4_SESS_INACT_TIMER_FOR_UE_COMM` is in `listOfAnaSubsets`.
+
+**Expected Notification (with subset)**:
+```json
+{
+  "subscriptionId": "xxx",
+  "eventNotifications": [{
+    "event": "UE_COMMUNICATION",
+    "ueComms": [{
+      "commDur": 300,
+      "ts": "2026-01-12T16:00:00Z",
+      "trafChar": {"dnn": "internet", "ulVol": 1024000, "dlVol": 5120000},
+      "sessInactTimer": {"n4SessId": 1, "sessInactiveTimer": 120}
+    }]
+  }]
+}
+```
+
+**Without subset** (omit `listOfAnaSubsets`): `sessInactTimer` will NOT be included.
+
 ---
 
 ## 5. Test Directory Structure
@@ -294,7 +335,7 @@ cd /path/to/NWDAF
 make build
 go test ./internal/... -v
 ```
-**Expected**: 19 tests PASS (12 processor + 7 notifier)
+**Expected**: 24 tests PASS (17 processor + 7 notifier)
 
 ---
 

@@ -21,6 +21,11 @@ func TestValidateSupportedEvent(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "Supported event UE_COMMUNICATION",
+			event:   models.NwdafEvent_UE_COMMUNICATION,
+			wantErr: false,
+		},
+		{
 			name:    "Unsupported event UE_MOBILITY",
 			event:   models.NwdafEvent_UE_MOBILITY,
 			wantErr: true,
@@ -37,6 +42,119 @@ func TestValidateSupportedEvent(t *testing.T) {
 			err := p.validateSupportedEvent(tt.event)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("validateSupportedEvent() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateUeCommunication(t *testing.T) {
+	p := &Processor{}
+
+	tests := []struct {
+		name     string
+		eventSub *models.NwdafEventsSubscriptionEventSubscription
+		wantErr  bool
+		errCause string
+	}{
+		{
+			name: "Valid with supis",
+			eventSub: &models.NwdafEventsSubscriptionEventSubscription{
+				Event: models.NwdafEvent_UE_COMMUNICATION,
+				TgtUe: &models.TargetUeInformation{
+					Supis: []string{"imsi-208930000000003"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Valid with intGroupIds",
+			eventSub: &models.NwdafEventsSubscriptionEventSubscription{
+				Event: models.NwdafEvent_UE_COMMUNICATION,
+				TgtUe: &models.TargetUeInformation{
+					IntGroupIds: []string{"group-123"},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Missing tgtUe",
+			eventSub: &models.NwdafEventsSubscriptionEventSubscription{
+				Event: models.NwdafEvent_UE_COMMUNICATION,
+			},
+			wantErr:  true,
+			errCause: "INVALID_REQUEST",
+		},
+		{
+			name: "Empty tgtUe (no supis or intGroupIds)",
+			eventSub: &models.NwdafEventsSubscriptionEventSubscription{
+				Event: models.NwdafEvent_UE_COMMUNICATION,
+				TgtUe: &models.TargetUeInformation{},
+			},
+			wantErr:  true,
+			errCause: "INVALID_REQUEST",
+		},
+		{
+			name: "tgtUe with only anyUe (not valid for UE_COMMUNICATION)",
+			eventSub: &models.NwdafEventsSubscriptionEventSubscription{
+				Event: models.NwdafEvent_UE_COMMUNICATION,
+				TgtUe: &models.TargetUeInformation{
+					AnyUe: true,
+				},
+			},
+			wantErr:  true,
+			errCause: "INVALID_REQUEST",
+		},
+		{
+			name: "Valid with N4_SESS_INACT_TIMER subset",
+			eventSub: &models.NwdafEventsSubscriptionEventSubscription{
+				Event: models.NwdafEvent_UE_COMMUNICATION,
+				TgtUe: &models.TargetUeInformation{
+					Supis: []string{"imsi-208930000000003"},
+				},
+				ListOfAnaSubsets: []models.AnalyticsSubset{
+					models.AnalyticsSubset_N4_SESS_INACT_TIMER_FOR_UE_COMM,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Unsupported subset APP_LIST_FOR_UE_COMM",
+			eventSub: &models.NwdafEventsSubscriptionEventSubscription{
+				Event: models.NwdafEvent_UE_COMMUNICATION,
+				TgtUe: &models.TargetUeInformation{
+					Supis: []string{"imsi-208930000000003"},
+				},
+				ListOfAnaSubsets: []models.AnalyticsSubset{
+					models.AnalyticsSubset_APP_LIST_FOR_UE_COMM,
+				},
+			},
+			wantErr:  true,
+			errCause: "UNSUPPORTED_ANALYTICS_SUBSET",
+		},
+		{
+			name: "Mixed subsets - at least one supported",
+			eventSub: &models.NwdafEventsSubscriptionEventSubscription{
+				Event: models.NwdafEvent_UE_COMMUNICATION,
+				TgtUe: &models.TargetUeInformation{
+					Supis: []string{"imsi-208930000000003"},
+				},
+				ListOfAnaSubsets: []models.AnalyticsSubset{
+					models.AnalyticsSubset_APP_LIST_FOR_UE_COMM,
+					models.AnalyticsSubset_N4_SESS_INACT_TIMER_FOR_UE_COMM,
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := p.validateUeCommunication(tt.eventSub)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateUeCommunication() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil && tt.errCause != "" && err.Cause != tt.errCause {
+				t.Errorf("validateUeCommunication() cause = %v, want %v", err.Cause, tt.errCause)
 			}
 		})
 	}

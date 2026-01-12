@@ -326,6 +326,13 @@ func (p *Processor) validateEventSubscription(
 		}
 	}
 
+	// For UE_COMMUNICATION, validate tgtUe requirements
+	if eventSub.Event == models.NwdafEvent_UE_COMMUNICATION {
+		if err := p.validateUeCommunication(eventSub); err != nil {
+			return err
+		}
+	}
+
 	// Validate analytics target period
 	if err := p.validateEventTargetPeriod(index, eventSub); err != nil {
 		return err
@@ -404,9 +411,9 @@ func (p *Processor) isEventSupported(event models.NwdafEvent) bool {
 	return false
 }
 
-// Supported events list
 var supportedEvents = []models.NwdafEvent{
 	models.NwdafEvent_ABNORMAL_BEHAVIOUR,
+	models.NwdafEvent_UE_COMMUNICATION,
 }
 
 // validateSupportedEvent checks if the event type is supported (kept for backward compatibility)
@@ -491,6 +498,50 @@ func (p *Processor) validateAbnormalBehaviourBasic(
 	if eventSub.TgtUe.AnyUe {
 		if err := p.validateAnyUeRequirements(eventSub); err != nil {
 			return err
+		}
+	}
+
+	return nil
+}
+
+// validateUeCommunication validates UE_COMMUNICATION specific requirements
+// Per TS 29.520 §4.2: tgtUe with supis or intGroupIds is REQUIRED
+func (p *Processor) validateUeCommunication(
+	eventSub *models.NwdafEventsSubscriptionEventSubscription,
+) *models.ProblemDetails {
+	// Rule: tgtUe is required
+	if eventSub.TgtUe == nil {
+		return &models.ProblemDetails{
+			Status: http.StatusBadRequest,
+			Cause:  "INVALID_REQUEST",
+			Detail: "tgtUe is required for UE_COMMUNICATION",
+		}
+	}
+	// Rule: supis or intGroupIds must be present
+	if len(eventSub.TgtUe.Supis) == 0 && len(eventSub.TgtUe.IntGroupIds) == 0 {
+		return &models.ProblemDetails{
+			Status: http.StatusBadRequest,
+			Cause:  "INVALID_REQUEST",
+			Detail: "tgtUe must contain supis or intGroupIds for UE_COMMUNICATION",
+		}
+	}
+
+	// Rule: Validate listOfAnaSubsets (Shortcut for N4 Session Inactivity Timer)
+	// If provided, must contain N4_SESS_INACT_TIMER_FOR_UE_COMM (only supported subset)
+	if len(eventSub.ListOfAnaSubsets) > 0 {
+		hasSupported := false
+		for _, subset := range eventSub.ListOfAnaSubsets {
+			if subset == models.AnalyticsSubset_N4_SESS_INACT_TIMER_FOR_UE_COMM {
+				hasSupported = true
+				break
+			}
+		}
+		if !hasSupported {
+			return &models.ProblemDetails{
+				Status: http.StatusBadRequest,
+				Cause:  "UNSUPPORTED_ANALYTICS_SUBSET",
+				Detail: "Only N4_SESS_INACT_TIMER_FOR_UE_COMM is supported for UE_COMMUNICATION",
+			}
 		}
 	}
 

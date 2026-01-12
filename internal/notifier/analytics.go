@@ -43,7 +43,40 @@ func GenerateAnalytics(eventSub *models.NwdafEventsSubscriptionEventSubscription
 	switch eventSub.Event {
 	case models.NwdafEvent_ABNORMAL_BEHAVIOUR:
 		return generateMockAbnormalBehaviours()
+	case models.NwdafEvent_UE_COMMUNICATION:
+		return generateMockUeCommunication(eventSub)
 	default:
 		return nil
 	}
+}
+
+// generateMockUeCommunication generates mock data for UE Communication analytics
+// Per YAML spec: commDur, trafChar, ts are REQUIRED. sessInactTimer is OPTIONAL.
+// sessInactTimer is included ONLY when N4_SESS_INACT_TIMER_FOR_UE_COMM is in listOfAnaSubsets.
+func generateMockUeCommunication(eventSub *models.NwdafEventsSubscriptionEventSubscription) models.UeCommunication {
+	now := time.Now()
+
+	ueComm := models.UeCommunication{
+		CommDur: int32(300), // 5 minutes communication duration
+		Ts:      &now,
+		TrafChar: &models.TrafficCharacterization{
+			Dnn:   "internet",
+			UlVol: 1024000, // 1MB uplink
+			DlVol: 5120000, // 5MB downlink
+		},
+		Confidence: 90,
+	}
+
+	// Conditionally include sessInactTimer based on requested subsets
+	for _, subset := range eventSub.ListOfAnaSubsets {
+		if subset == models.AnalyticsSubset_N4_SESS_INACT_TIMER_FOR_UE_COMM {
+			ueComm.SessInactTimer = &models.SessInactTimerForUeComm{
+				N4SessId:          1,
+				SessInactiveTimer: 120, // 2 minutes inactivity timer
+			}
+			break
+		}
+	}
+
+	return ueComm
 }
