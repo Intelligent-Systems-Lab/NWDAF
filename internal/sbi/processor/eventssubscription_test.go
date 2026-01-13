@@ -104,47 +104,6 @@ func TestValidateUeCommunication(t *testing.T) {
 			wantErr:  true,
 			errCause: "INVALID_REQUEST",
 		},
-		{
-			name: "Valid with N4_SESS_INACT_TIMER subset",
-			eventSub: &models.NwdafEventsSubscriptionEventSubscription{
-				Event: models.NwdafEvent_UE_COMMUNICATION,
-				TgtUe: &models.TargetUeInformation{
-					Supis: []string{"imsi-208930000000003"},
-				},
-				ListOfAnaSubsets: []models.AnalyticsSubset{
-					models.AnalyticsSubset_N4_SESS_INACT_TIMER_FOR_UE_COMM,
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "Unsupported subset APP_LIST_FOR_UE_COMM",
-			eventSub: &models.NwdafEventsSubscriptionEventSubscription{
-				Event: models.NwdafEvent_UE_COMMUNICATION,
-				TgtUe: &models.TargetUeInformation{
-					Supis: []string{"imsi-208930000000003"},
-				},
-				ListOfAnaSubsets: []models.AnalyticsSubset{
-					models.AnalyticsSubset_APP_LIST_FOR_UE_COMM,
-				},
-			},
-			wantErr:  true,
-			errCause: "UNSUPPORTED_ANALYTICS_SUBSET",
-		},
-		{
-			name: "Mixed subsets - at least one supported",
-			eventSub: &models.NwdafEventsSubscriptionEventSubscription{
-				Event: models.NwdafEvent_UE_COMMUNICATION,
-				TgtUe: &models.TargetUeInformation{
-					Supis: []string{"imsi-208930000000003"},
-				},
-				ListOfAnaSubsets: []models.AnalyticsSubset{
-					models.AnalyticsSubset_APP_LIST_FOR_UE_COMM,
-					models.AnalyticsSubset_N4_SESS_INACT_TIMER_FOR_UE_COMM,
-				},
-			},
-			wantErr: false,
-		},
 	}
 
 	for _, tt := range tests {

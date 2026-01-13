@@ -75,6 +75,11 @@ func NewServer(nwdaf nwdafApp) (*Server, error) {
 	eventsSubGroup := s.router.Group(factory.NwdafEventsSubResUriPrefix)
 	applyRoutes(eventsSubGroup, eventsSubRoutes)
 
+	// Collector routes (for SMF callbacks)
+	collectorRoutes := s.getCollectorRoutes()
+	collectorGroup := s.router.Group("/collector")
+	applyRoutes(collectorGroup, collectorRoutes)
+
 	cfg := nwdaf.Config()
 	bindAddr := fmt.Sprintf("%s:%d",
 		cfg.Configuration.Sbi.BindingIPv4,

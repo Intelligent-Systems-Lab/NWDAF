@@ -9,20 +9,20 @@ import (
 )
 
 const (
-	NwdafDefaultConfigPath   = "./config/nwdafcfg.yaml"
-	NwdafSbiDefaultScheme    = "http"
-	NwdafSbiDefaultIPv4      = "127.0.0.1"
-	NwdafSbiDefaultPort      = 8080
-	NwdafDefaultNwdafName    = "NWDAF"
+	NwdafDefaultConfigPath     = "./config/nwdafcfg.yaml"
+	NwdafSbiDefaultScheme      = "http"
+	NwdafSbiDefaultIPv4        = "127.0.0.1"
+	NwdafSbiDefaultPort        = 8080
+	NwdafDefaultNwdafName      = "NWDAF"
 	NwdafEventsSubResUriPrefix = "/nnwdaf-eventssubscription/v1"
 )
 
 var NwdafConfig *Config
 
 type Config struct {
-	Info              *Info    `yaml:"info"`
-	Configuration     *Configuration `yaml:"configuration"`
-	Logger            *Logger  `yaml:"logger,omitempty"`
+	Info          *Info          `yaml:"info"`
+	Configuration *Configuration `yaml:"configuration"`
+	Logger        *Logger        `yaml:"logger,omitempty"`
 }
 
 type Info struct {
@@ -31,10 +31,23 @@ type Info struct {
 }
 
 type Configuration struct {
-	NwdafName         string   `yaml:"nwdafName,omitempty"`
-	Sbi               *Sbi     `yaml:"sbi,omitempty"`
-	NrfUri            string   `yaml:"nrfUri,omitempty"`
-	SupportedAnalytics []string `yaml:"supportedAnalytics,omitempty"`
+	NwdafName          string          `yaml:"nwdafName,omitempty"`
+	Sbi                *Sbi            `yaml:"sbi,omitempty"`
+	NrfUri             string          `yaml:"nrfUri,omitempty"`
+	SupportedAnalytics []string        `yaml:"supportedAnalytics,omitempty"`
+	DataCollection     *DataCollection `yaml:"dataCollection,omitempty"`
+}
+
+// DataCollection configuration for data collection from other NFs
+type DataCollection struct {
+	Smf *SmfDataCollection `yaml:"smf,omitempty"`
+}
+
+// SmfDataCollection configuration for SMF data collection
+type SmfDataCollection struct {
+	Enabled              bool     `yaml:"enabled"`
+	Endpoints            []string `yaml:"endpoints,omitempty"`
+	SubscriptionDuration int      `yaml:"subscriptionDuration,omitempty"` // seconds
 }
 
 type Sbi struct {
@@ -93,8 +106,8 @@ func (c *Config) GetSbiBindingAddr() string {
 	if c.Configuration.Sbi == nil {
 		return "127.0.0.1:8080"
 	}
-	return c.Configuration.Sbi.BindingIPv4 + ":" + 
-		   string(rune(c.Configuration.Sbi.Port+'0'))
+	return c.Configuration.Sbi.BindingIPv4 + ":" +
+		string(rune(c.Configuration.Sbi.Port+'0'))
 }
 
 func (c *Config) GetSbiScheme() string {

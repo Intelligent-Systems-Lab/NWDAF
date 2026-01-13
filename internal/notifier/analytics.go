@@ -4,8 +4,12 @@ package notifier
 import (
 	"time"
 
+	"github.com/free5gc/nwdaf/internal/collector"
+	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/openapi/models"
 )
+
+var notifierLog = logger.NotifierLog
 
 // generateMockAbnormalBehaviours generates mock DDoS detection analytics data
 // TODO: Replace with real analytics from ML model and data collection
@@ -50,33 +54,41 @@ func GenerateAnalytics(eventSub *models.NwdafEventsSubscriptionEventSubscription
 	}
 }
 
-// generateMockUeCommunication generates mock data for UE Communication analytics
-// Per YAML spec: commDur, trafChar, ts are REQUIRED. sessInactTimer is OPTIONAL.
-// sessInactTimer is included ONLY when N4_SESS_INACT_TIMER_FOR_UE_COMM is in listOfAnaSubsets.
+// generateMockUeCommunication generates data for UE Communication analytics
+// Per YAML spec: commDur, trafChar, ts are REQUIRED.
+// Uses collected data from collector when available, otherwise returns mock data.
 func generateMockUeCommunication(eventSub *models.NwdafEventsSubscriptionEventSubscription) models.UeCommunication {
 	now := time.Now()
 
-	ueComm := models.UeCommunication{
-		CommDur: int32(300), // 5 minutes communication duration
-		Ts:      &now,
-		TrafChar: &models.TrafficCharacterization{
-			Dnn:   "internet",
-			UlVol: 1024000, // 1MB uplink
-			DlVol: 5120000, // 5MB downlink
-		},
-		Confidence: 90,
-	}
+	// Try to get collected data from collector
+	var ulVol, dlVol int64 = 1024000, 5120000 // Default mock values
+	var commDur int32 = 300                   // Default 5 minutes
 
-	// Conditionally include sessInactTimer based on requested subsets
-	for _, subset := range eventSub.ListOfAnaSubsets {
-		if subset == models.AnalyticsSubset_N4_SESS_INACT_TIMER_FOR_UE_COMM {
-			ueComm.SessInactTimer = &models.SessInactTimerForUeComm{
-				N4SessId:          1,
-				SessInactiveTimer: 120, // 2 minutes inactivity timer
+	// Check if we have collected data for target UEs
+	if eventSub.TgtUe != nil && len(eventSub.TgtUe.Supis) > 0 {
+		collectorCtx := collector.GetSelf()
+		for _, supi := range eventSub.TgtUe.Supis {
+			if ueData, ok := collectorCtx.GetUeData(supi); ok {
+				// Use real collected data
+				ulVol = ueData.TotalUlVolume
+				dlVol = ueData.TotalDlVolume
+				if !ueData.StartTime.IsZero() && !ueData.LastUpdate.IsZero() {
+					commDur = int32(ueData.LastUpdate.Sub(ueData.StartTime).Seconds())
+				}
+				notifierLog.Debugf("Using collected data for UE: %s", supi)
+				break
 			}
-			break
 		}
 	}
 
-	return ueComm
+	return models.UeCommunication{
+		CommDur: commDur,
+		Ts:      &now,
+		TrafChar: &models.TrafficCharacterization{
+			Dnn:   "internet",
+			UlVol: ulVol,
+			DlVol: dlVol,
+		},
+		Confidence: 90,
+	}
 }

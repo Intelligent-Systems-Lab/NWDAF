@@ -7,6 +7,7 @@ import (
 
 	"github.com/free5gc/openapi/models"
 
+	"github.com/free5gc/nwdaf/internal/collector"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/notifier"
@@ -87,6 +88,12 @@ func (p *Processor) HandleCreateSubscription(
 		)
 		scheduler.Start()
 		subscription.Scheduler = scheduler
+	}
+
+	// Trigger data collection from source NFs (SMF, etc.) based on subscribed events
+	// Per 3GPP TS 23.288 §6.2: NWDAF invokes Nnf_EventExposure_Subscribe to collect data
+	if dcManager := collector.NewDataCollectionManager(); dcManager != nil {
+		dcManager.TriggerForSubscription(req.EventSubscriptions, subscriptionId)
 	}
 
 	// Prepare response
@@ -523,25 +530,6 @@ func (p *Processor) validateUeCommunication(
 			Status: http.StatusBadRequest,
 			Cause:  "INVALID_REQUEST",
 			Detail: "tgtUe must contain supis or intGroupIds for UE_COMMUNICATION",
-		}
-	}
-
-	// Rule: Validate listOfAnaSubsets (Shortcut for N4 Session Inactivity Timer)
-	// If provided, must contain N4_SESS_INACT_TIMER_FOR_UE_COMM (only supported subset)
-	if len(eventSub.ListOfAnaSubsets) > 0 {
-		hasSupported := false
-		for _, subset := range eventSub.ListOfAnaSubsets {
-			if subset == models.AnalyticsSubset_N4_SESS_INACT_TIMER_FOR_UE_COMM {
-				hasSupported = true
-				break
-			}
-		}
-		if !hasSupported {
-			return &models.ProblemDetails{
-				Status: http.StatusBadRequest,
-				Cause:  "UNSUPPORTED_ANALYTICS_SUBSET",
-				Detail: "Only N4_SESS_INACT_TIMER_FOR_UE_COMM is supported for UE_COMMUNICATION",
-			}
 		}
 	}
 
