@@ -14,7 +14,8 @@ import (
 type DataCollectionManager struct {
 	collectorCtx *CollectorContext
 	config       *factory.DataCollection
-	nwdafUri     string
+	smfNotifUri  string // URI for SMF notifications
+	upfNotifUri  string // URI for UPF direct notifications
 }
 
 // NewDataCollectionManager creates a new DataCollectionManager
@@ -24,18 +25,21 @@ func NewDataCollectionManager() *DataCollectionManager {
 		return nil
 	}
 
-	var nwdafUri string
+	var smfNotifUri, upfNotifUri string
 	if cfg.Configuration.Sbi != nil {
-		nwdafUri = fmt.Sprintf("%s://%s:%d/collector/notify",
+		baseUri := fmt.Sprintf("%s://%s:%d",
 			cfg.Configuration.Sbi.Scheme,
 			cfg.Configuration.Sbi.BindingIPv4,
 			cfg.Configuration.Sbi.Port)
+		smfNotifUri = baseUri + "/collector/notify"
+		upfNotifUri = baseUri + "/collector/upf-notify"
 	}
 
 	return &DataCollectionManager{
 		collectorCtx: GetSelf(),
 		config:       cfg.Configuration.DataCollection,
-		nwdafUri:     nwdafUri,
+		smfNotifUri:  smfNotifUri,
+		upfNotifUri:  upfNotifUri,
 	}
 }
 
@@ -103,7 +107,7 @@ func (m *DataCollectionManager) triggerUeCommunication(
 
 // subscribeToSmf performs the actual SMF subscription
 func (m *DataCollectionManager) subscribeToSmf(smfEndpoint, supi string) {
-	subId, err := m.collectorCtx.SubscribeForUeCommunication(smfEndpoint, supi, m.nwdafUri)
+	subId, err := m.collectorCtx.SubscribeForUeCommunication(smfEndpoint, supi, m.smfNotifUri, m.upfNotifUri)
 	if err != nil {
 		logger.CollectorLog.Errorf("Failed to subscribe to SMF for %s: %v", supi, err)
 		return

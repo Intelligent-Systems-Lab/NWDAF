@@ -19,6 +19,12 @@ func (s *Server) getCollectorRoutes() []Route {
 			Pattern: "/notify",
 			APIFunc: s.HandleCollectorNotify,
 		},
+		{
+			Name:    "UpfEventExposureNotify",
+			Method:  "POST",
+			Pattern: "/upf-notify",
+			APIFunc: s.HandleUpfNotify,
+		},
 	}
 }
 

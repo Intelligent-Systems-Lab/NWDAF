@@ -69,7 +69,22 @@ Location: `internal/notifier/notifier_test.go`
 | `TestHandleCompletion_Callback` | Verify onComplete callback invocation | 1 |
 | `TestNewNotificationScheduler` | Verify scheduler initialization | 1 |
 
+### 2.4 Collector Tests (7 tests)
+
+Location: `internal/collector/collector_test.go`
+
+| Test Function | Description | Cases |
+|---------------|-------------|-------|
+| `TestCollectorContext_StoreAndRetrieveSubscription` | SMF subscription CRUD | 1 |
+| `TestCollectorContext_StoreAndRetrieveUeData` | UE data CRUD | 1 |
+| `TestCollectorContext_GetOrCreateUeData` | GetOrCreate pattern | 1 |
+| `TestCollectorContext_AppendEvent` | Event appending | 1 |
+| `TestHandleNotification` | SMF notification handling | 1 |
+| `TestHandleUpfNotification` | UPF notification (volume + throughput) | 1 |
+| `TestHandleUpfNotification_VolumeAggregation` | Volume aggregation + throughput latest | 1 |
+
 ---
+
 
 ## 3. API Integration Tests
 

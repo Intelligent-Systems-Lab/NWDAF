@@ -20,7 +20,8 @@ const (
 	SmfEventExposurePath = "/nsmf-event-exposure/v1/subscriptions"
 )
 
-// SubscribeToSmf creates an event exposure subscription to SMF
+// SubscribeToSmf creates a basic event exposure subscription to SMF
+// Use this for simple event subscriptions without UPF_EVENT
 func (c *CollectorContext) SubscribeToSmf(
 	smfEndpoint string,
 	supi string,
@@ -130,22 +131,113 @@ func (c *CollectorContext) UnsubscribeFromSmf(
 	return nil
 }
 
-// SubscribeForUeCommunication subscribes to SMF for UE communication data
-// Based on 3GPP TS 23.288 and TS 29.508 analysis:
-// - PDU_SES_EST: For DNN, S-NSSAI, session lifecycle start
-// - PDU_SES_REL: For session lifecycle end, duration calculation
-// - UP_STATUS_INFO: For commDur calculation (ACTIVATED/DEACTIVATED transitions)
+// SubscribeForUeCommunication subscribes to SMF for all UE communication data
+// Combines SMF events (PDU_SES_EST, PDU_SES_REL, UP_STATUS_INFO) and UPF_EVENT (traffic volume)
+// Based on 3GPP TS 23.288 and TS 29.508
 func (c *CollectorContext) SubscribeForUeCommunication(
 	smfEndpoint string,
 	supi string,
-	notifUri string,
+	smfNotifUri string,
+	upfNotifUri string,
 ) (string, error) {
-	// Subscribe to core events for UE Communication analytics
-	events := []models.SmfEvent{
-		models.SmfEvent_PDU_SES_EST,    // Session metadata (DNN, S-NSSAI)
-		models.SmfEvent_PDU_SES_REL,    // Session lifecycle end
-		models.SmfEvent_UP_STATUS_INFO, // User Plane status (ACTIVATED/DEACTIVATED)
+	logger.CollectorLog.Infof("Subscribing for UE Communication: endpoint=%s, supi=%s", smfEndpoint, supi)
+
+	notifId := uuid.New().String()
+
+	// Build subscription with UPF_EVENT for traffic volume data
+	// Note: Basic SMF events commented out - UPF_EVENT provides sufficient data for model analysis
+	eventSubs := []ExtendedEventSubscription{
+		// Session lifecycle events (SMF notifies NWDAF) - commented out for now
+		// {Event: models.SmfEvent_PDU_SES_EST},    // DNN, S-NSSAI, session start
+		// {Event: models.SmfEvent_PDU_SES_REL},    // Session end
+		// {Event: models.SmfEvent_UP_STATUS_INFO}, // ACTIVATED/DEACTIVATED
+		// UPF event (UPF notifies NWDAF directly)
+		{
+			Event: SmfEvent_UPF_EVENT,
+			UpfEvents: []UpfEvent{
+				{
+					Type: UpfEventType_USER_DATA_USAGE_MEASURES,
+					MeasurementTypes: []MeasurementType{
+						MeasurementType_VOLUME_MEASUREMENT,
+						MeasurementType_THROUGHPUT_MEASUREMENT,
+					},
+					GranularityOfMeasurement: Granularity_PER_SESSION,
+				},
+			},
+			BundlingAllowed:       true,
+			BundledEventNotifyUri: upfNotifUri,
+		},
 	}
 
-	return c.SubscribeToSmf(smfEndpoint, supi, events, notifUri)
+	request := ExtendedNsmfEventExposure{
+		Supi:      supi,
+		NotifUri:  smfNotifUri,
+		NotifId:   notifId,
+		EventSubs: eventSubs,
+	}
+
+	return c.sendExtendedSubscription(smfEndpoint, supi, notifId, &request)
+}
+
+// sendExtendedSubscription sends an extended subscription request to SMF
+// Reusable for any subscription using ExtendedNsmfEventExposure
+func (c *CollectorContext) sendExtendedSubscription(
+	smfEndpoint string,
+	supi string,
+	notifId string,
+	request *ExtendedNsmfEventExposure,
+) (string, error) {
+	url := smfEndpoint + SmfEventExposurePath
+	jsonData, err := json.Marshal(request)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	logger.CollectorLog.Debugf("SMF extended subscription request: %s", string(jsonData))
+
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", fmt.Errorf("failed to send request to SMF: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check response status
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("SMF subscription failed: status=%d, body=%s", resp.StatusCode, string(body))
+	}
+
+	// Parse response to get subscriptionId
+	subscriptionId := resp.Header.Get("Location")
+	if subscriptionId == "" {
+		var response ExtendedNsmfEventExposure
+		if err := json.NewDecoder(resp.Body).Decode(&response); err == nil {
+			subscriptionId = response.SubId
+		}
+	}
+
+	if subscriptionId == "" {
+		subscriptionId = notifId
+	}
+
+	// Store subscription events
+	allEvents := []models.SmfEvent{
+		// models.SmfEvent_PDU_SES_EST,
+		// models.SmfEvent_PDU_SES_REL,
+		// models.SmfEvent_UP_STATUS_INFO,
+		SmfEvent_UPF_EVENT,
+	}
+
+	sub := &SmfSubscription{
+		SubscriptionId: subscriptionId,
+		SmfEndpoint:    smfEndpoint,
+		TargetSupi:     supi,
+		NotifId:        notifId,
+		Events:         allEvents,
+		CreatedAt:      time.Now(),
+	}
+	c.StoreSubscription(sub)
+
+	logger.CollectorLog.Infof("SMF UE Communication subscription created: id=%s", subscriptionId)
+	return subscriptionId, nil
 }

@@ -51,10 +51,14 @@ type UeCommunicationData struct {
 	// UP Status tracking (for commDur calculation via ACTIVATED/DEACTIVATED)
 	LastActivationTime time.Time // Last UP ACTIVATED timestamp
 
-	// Aggregated metrics (to be populated by UPF_EVENT in Phase 2)
-	TotalUlVolume int64
-	TotalDlVolume int64
+	// Aggregated metrics from UPF_EVENT
+	TotalUlVolume int64 // Total uplink volume (bytes)
+	TotalDlVolume int64 // Total downlink volume (bytes)
 	SessionCount  int32
+
+	// Throughput measurements from UPF_EVENT
+	LastUlThroughput string // Latest uplink throughput (e.g., "10 Mbps")
+	LastDlThroughput string // Latest downlink throughput
 }
 
 // GetSelf returns the singleton CollectorContext
