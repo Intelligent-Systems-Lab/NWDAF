@@ -10,8 +10,14 @@ configuration:
     bindingIPv4: 127.0.0.1
     port: 8080
   # nrfUri: http://127.0.0.10:8000  # Uncomment when NRF is available
-  supportedAnalytics:
-    - ABNORMAL_BEHAVIOUR
+
+  # Data collection from other NFs
+  dataCollection:
+    smf:
+      enabled: false
+      endpoints:
+        # - http://127.0.0.2:29502
+      subscriptionDuration: 3600  # seconds
 
 logger:
   enable: true
