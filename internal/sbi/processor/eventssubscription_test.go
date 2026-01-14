@@ -16,9 +16,9 @@ func TestValidateSupportedEvent(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "Supported event ABNORMAL_BEHAVIOUR",
+			name:    "Unsupported event ABNORMAL_BEHAVIOUR",
 			event:   models.NwdafEvent_ABNORMAL_BEHAVIOUR,
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name:    "Supported event UE_COMMUNICATION",
@@ -506,7 +506,7 @@ func TestCollectFailEventReports(t *testing.T) {
 			name: "Supported event - no failures",
 			eventSubs: []models.NwdafEventsSubscriptionEventSubscription{
 				{
-					Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
+					Event: models.NwdafEvent_UE_COMMUNICATION,
 				},
 			},
 			wantCount: 0,
@@ -524,7 +524,7 @@ func TestCollectFailEventReports(t *testing.T) {
 			name: "Mixed - one supported, one unsupported",
 			eventSubs: []models.NwdafEventsSubscriptionEventSubscription{
 				{
-					Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR,
+					Event: models.NwdafEvent_UE_COMMUNICATION,
 				},
 				{
 					Event: models.NwdafEvent_UE_MOBILITY,

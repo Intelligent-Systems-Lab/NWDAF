@@ -48,14 +48,6 @@ class NotificationHandler(BaseHTTPRequestHandler):
             print(f"Correlation ID: {corr_id}")
         if term_cause := notification.get("termCause"):
             print(f"Termination Cause: {term_cause}")
-        
-        # Show any other unknown top-level fields
-        known_keys = {"subscriptionId", "notifCorrId", "termCause", "eventNotifications"}
-        extra_keys = set(notification.keys()) - known_keys
-        if extra_keys:
-            print(f"\n📋 Additional Fields:")
-            for key in extra_keys:
-                print(f"  {key}: {notification[key]}")
 
         event_notifications = notification.get("eventNotifications", [])
         for i, event in enumerate(event_notifications, 1):
@@ -70,29 +62,18 @@ class NotificationHandler(BaseHTTPRequestHandler):
             if fail_code := event.get("failNotifyCode"):
                 print(f"⚠️ Failure Code: {fail_code}")
 
+            # UE Communication (primary event type)
+            ue_comms = event.get("ueComms", [])
+            if ue_comms:
+                self._print_ue_communications(ue_comms)
+            
+            # Abnormal Behaviours (legacy/fallback)
             abnor_behavrs = event.get("abnorBehavrs", [])
-            for j, ab in enumerate(abnor_behavrs, 1):
-                print(f"\n  Abnormal Behaviour {j}:")
-                excep = ab.get("excep", {})
-                print(f"    ExceptionId: {excep.get('excepId', 'N/A')}")
-                print(f"    ExceptionLevel: {excep.get('excepLevel', 'N/A')}")
-                print(f"    ExceptionTrend: {excep.get('excepTrend', 'N/A')}")
-                
-                if ratio := ab.get("ratio"):
-                    print(f"    Ratio: {ratio}%")
-                if confidence := ab.get("confidence"):
-                    print(f"    Confidence: {confidence}%")
-                if supis := ab.get("supis"):
-                    print(f"    SUPIs: {supis}")
-                if dnn := ab.get("dnn"):
-                    print(f"    DNN: {dnn}")
-
-                addtl = ab.get("addtMeasInfo", {})
-                if ddos := addtl.get("ddosAttack"):
-                    print(f"    DDoS Attack IPs: {ddos.get('ipv4Addrs', [])}")
+            if abnor_behavrs:
+                self._print_abnormal_behaviours(abnor_behavrs)
             
             # Show any other event fields not explicitly handled
-            known_event_keys = {"event", "abnorBehavrs", "start", "expiry", "failNotifyCode"}
+            known_event_keys = {"event", "ueComms", "abnorBehavrs", "start", "expiry", "failNotifyCode"}
             extra_event_keys = set(event.keys()) - known_event_keys
             if extra_event_keys:
                 print(f"\n  📋 Other Event Fields:")
@@ -104,6 +85,67 @@ class NotificationHandler(BaseHTTPRequestHandler):
                         print(f"    {key}: {val}")
 
         print(f"\n{'=' * 60}\n")
+
+    def _print_ue_communications(self, ue_comms: list):
+        """Print UE Communication analytics."""
+        for j, ue_comm in enumerate(ue_comms, 1):
+            print(f"\n  📱 UE Communication {j}:")
+            
+            # Required fields
+            if comm_dur := ue_comm.get("commDur"):
+                print(f"    Communication Duration: {comm_dur}s")
+            if ts := ue_comm.get("ts"):
+                print(f"    Timestamp: {ts}")
+            
+            # Traffic Characterization
+            if traf_char := ue_comm.get("trafChar"):
+                print(f"    Traffic Info:")
+                if dnn := traf_char.get("dnn"):
+                    print(f"      DNN: {dnn}")
+                if ul_vol := traf_char.get("ulVol"):
+                    print(f"      Uplink Volume: {self._format_bytes(ul_vol)}")
+                if dl_vol := traf_char.get("dlVol"):
+                    print(f"      Downlink Volume: {self._format_bytes(dl_vol)}")
+                if ul_rate := traf_char.get("ulRate"):
+                    print(f"      Uplink Rate: {ul_rate}")
+                if dl_rate := traf_char.get("dlRate"):
+                    print(f"      Downlink Rate: {dl_rate}")
+            
+            # Optional fields
+            if confidence := ue_comm.get("confidence"):
+                print(f"    Confidence: {confidence}%")
+            if ratio := ue_comm.get("ratio"):
+                print(f"    Ratio: {ratio}%")
+
+    def _print_abnormal_behaviours(self, abnor_behavrs: list):
+        """Print Abnormal Behaviour analytics (legacy)."""
+        for j, ab in enumerate(abnor_behavrs, 1):
+            print(f"\n  ⚠️ Abnormal Behaviour {j}:")
+            excep = ab.get("excep", {})
+            print(f"    ExceptionId: {excep.get('excepId', 'N/A')}")
+            print(f"    ExceptionLevel: {excep.get('excepLevel', 'N/A')}")
+            print(f"    ExceptionTrend: {excep.get('excepTrend', 'N/A')}")
+            
+            if ratio := ab.get("ratio"):
+                print(f"    Ratio: {ratio}%")
+            if confidence := ab.get("confidence"):
+                print(f"    Confidence: {confidence}%")
+            if supis := ab.get("supis"):
+                print(f"    SUPIs: {supis}")
+            if dnn := ab.get("dnn"):
+                print(f"    DNN: {dnn}")
+
+            addtl = ab.get("addtMeasInfo", {})
+            if ddos := addtl.get("ddosAttack"):
+                print(f"    DDoS Attack IPs: {ddos.get('ipv4Addrs', [])}")
+
+    def _format_bytes(self, bytes_val: int) -> str:
+        """Format bytes to human readable string."""
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if abs(bytes_val) < 1024.0:
+                return f"{bytes_val:.1f} {unit}"
+            bytes_val /= 1024.0
+        return f"{bytes_val:.1f} TB"
 
     def _timestamp(self) -> str:
         return datetime.now().strftime("%H:%M:%S")
@@ -117,6 +159,7 @@ def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 9090
     server = HTTPServer(("", port), NotificationHandler)
     print(f"🚀 Callback server listening on http://localhost:{port}")
+    print("Supported events: UE_COMMUNICATION")
     print("Press Ctrl+C to stop\n")
 
     try:

@@ -419,7 +419,6 @@ func (p *Processor) isEventSupported(event models.NwdafEvent) bool {
 }
 
 var supportedEvents = []models.NwdafEvent{
-	models.NwdafEvent_ABNORMAL_BEHAVIOUR,
 	models.NwdafEvent_UE_COMMUNICATION,
 }
 

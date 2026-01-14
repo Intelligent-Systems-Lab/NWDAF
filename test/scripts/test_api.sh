@@ -1,6 +1,6 @@
 #!/bin/bash
 # NWDAF API Test Script
-# Usage: ./test_api.sh [start|create|update|delete|all]
+# Usage: ./test_api.sh [create|delete|all]
 
 BASE_URL="http://127.0.0.1:8080/nnwdaf-eventssubscription/v1"
 SUBSCRIPTION_ID=""
@@ -15,18 +15,16 @@ log_success() { echo -e "${GREEN}✅ $1${NC}"; }
 log_error() { echo -e "${RED}❌ $1${NC}"; }
 log_info() { echo -e "${YELLOW}ℹ️  $1${NC}"; }
 
-# Test 1: Create valid subscription
+# Test 1: Create valid UE_COMMUNICATION subscription with supis
 test_create_valid() {
-    log_info "Test: Create valid subscription (ABNORMAL_BEHAVIOUR + DDOS)"
+    log_info "Test: Create valid UE_COMMUNICATION subscription (with supis)"
     
     RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
         -H "Content-Type: application/json" \
         -d '{
             "eventSubscriptions": [{
-                "event": "ABNORMAL_BEHAVIOUR",
-                "tgtUe": {"anyUe": true},
-                "excepRequs": [{"excepId": "SUSPICION_OF_DDOS_ATTACK"}],
-                "dnns": ["internet"]
+                "event": "UE_COMMUNICATION",
+                "tgtUe": {"supis": ["imsi-208930000000003"]}
             }],
             "notificationURI": "http://localhost:9090/callback"
         }')
@@ -44,272 +42,18 @@ test_create_valid() {
     fi
 }
 
-# Test 2: Mutual exclusion validation (excepRequs + exptAnaType)
-test_mutual_exclusion() {
-    log_info "Test: excepRequs and exptAnaType mutual exclusion"
-    
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
-        -H "Content-Type: application/json" \
-        -d '{
-            "eventSubscriptions": [{
-                "event": "ABNORMAL_BEHAVIOUR",
-                "tgtUe": {"anyUe": true},
-                "excepRequs": [{"excepId": "SUSPICION_OF_DDOS_ATTACK"}],
-                "exptAnaType": "COMMUN"
-            }],
-            "notificationURI": "http://localhost:9090/callback"
-        }')
-    
-    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-    BODY=$(echo "$RESPONSE" | sed '$d')
-    
-    if [ "$HTTP_CODE" = "400" ]; then
-        log_success "Correctly rejected (400)"
-    else
-        log_error "Should reject but returned HTTP $HTTP_CODE"
-    fi
-    echo "$BODY" | jq .
-}
-
-# Test 3: anyUe missing required fields
-test_anyue_missing_fields() {
-    log_info "Test: anyUe=true missing dnns/networkArea"
-    
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
-        -H "Content-Type: application/json" \
-        -d '{
-            "eventSubscriptions": [{
-                "event": "ABNORMAL_BEHAVIOUR",
-                "tgtUe": {"anyUe": true},
-                "excepRequs": [{"excepId": "SUSPICION_OF_DDOS_ATTACK"}]
-            }],
-            "notificationURI": "http://localhost:9090/callback"
-        }')
-    
-    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-    BODY=$(echo "$RESPONSE" | sed '$d')
-    
-    if [ "$HTTP_CODE" = "400" ]; then
-        log_success "Correctly rejected (400)"
-    else
-        log_error "Should reject but returned HTTP $HTTP_CODE"
-    fi
-    echo "$BODY" | jq .
-}
-
-# Test 4: Unsupported event type
-test_unsupported_event() {
-    log_info "Test: Unsupported event type (UE_MOBILITY)"
-    
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
-        -H "Content-Type: application/json" \
-        -d '{
-            "eventSubscriptions": [{
-                "event": "UE_MOBILITY",
-                "tgtUe": {"supis": ["imsi-123456789"]}
-            }],
-            "notificationURI": "http://localhost:9090/callback"
-        }')
-    
-    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-    BODY=$(echo "$RESPONSE" | sed '$d')
-    
-    if [ "$HTTP_CODE" = "400" ]; then
-        log_success "Correctly rejected (400)"
-    else
-        log_error "Should reject but returned HTTP $HTTP_CODE"
-    fi
-    echo "$BODY" | jq .
-}
-
-# Test 5: evtReq PERIODIC without repPeriod (Phase 2B)
-test_evtreq_periodic() {
-    log_info "Test: evtReq PERIODIC without repPeriod (should reject)"
-    
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
-        -H "Content-Type: application/json" \
-        -d '{
-            "eventSubscriptions": [{
-                "event": "ABNORMAL_BEHAVIOUR",
-                "tgtUe": {"anyUe": true},
-                "excepRequs": [{"excepId": "SUSPICION_OF_DDOS_ATTACK"}],
-                "dnns": ["internet"]
-            }],
-            "notificationURI": "http://localhost:9090/callback",
-            "evtReq": {
-                "notifMethod": "PERIODIC"
-            }
-        }')
-    
-    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-    BODY=$(echo "$RESPONSE" | sed '$d')
-    
-    if [ "$HTTP_CODE" = "400" ]; then
-        log_success "Correctly rejected (400) - PERIODIC needs repPeriod"
-    else
-        log_error "Should reject but returned HTTP $HTTP_CODE"
-    fi
-    echo "$BODY" | jq .
-}
-
-# Test 6: Mixed events - one supported event, one unsupported event → 201 + failEventReports
-test_unsupported_exception() {
-    log_info "Test: Mixed events (ABNORMAL_BEHAVIOUR + UE_MOBILITY) → 201 + failEventReports"
-    
-    # Send 2 events: one supported (ABNORMAL_BEHAVIOUR), one unsupported (UE_MOBILITY)
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
-        -H "Content-Type: application/json" \
-        -d '{
-            "eventSubscriptions": [
-                {
-                    "event": "ABNORMAL_BEHAVIOUR",
-                    "tgtUe": {"supis": ["imsi-123456789"]},
-                    "excepRequs": [{"excepId": "SUSPICION_OF_DDOS_ATTACK"}]
-                },
-                {
-                    "event": "UE_MOBILITY",
-                    "tgtUe": {"supis": ["imsi-987654321"]}
-                }
-            ],
-            "notificationURI": "http://localhost:9090/callback"
-        }')
-    
-    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-    BODY=$(echo "$RESPONSE" | sed '$d')
-    
-    # Returns 201 with failEventReports for the unsupported event type
-    if [ "$HTTP_CODE" = "201" ]; then
-        HAS_FAIL=$(echo "$BODY" | jq 'has("failEventReports")')
-        if [ "$HAS_FAIL" = "true" ]; then
-            log_success "Created (201) with failEventReports for unsupported event"
-        else
-            log_error "Should have failEventReports but missing"
-        fi
-    else
-        log_error "Expected 201 but returned HTTP $HTTP_CODE"
-    fi
-    echo "$BODY" | jq .
-}
-
-# Test 7: Unsupported exptAnaType → 400 UNSUPPORTED_ANALYTICS_TYPE
-test_unsupported_anatype() {
-    log_info "Test: Unsupported exptAnaType (MOBILITY) → 400 UNSUPPORTED_ANALYTICS_TYPE"
-    
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
-        -H "Content-Type: application/json" \
-        -d '{
-            "eventSubscriptions": [{
-                "event": "ABNORMAL_BEHAVIOUR",
-                "tgtUe": {"supis": ["imsi-123456789"]},
-                "exptAnaType": "MOBILITY",
-                "networkArea": {"tais": [{"plmnId": {"mcc": "466", "mnc": "01"}, "tac": "1234"}]}
-            }],
-            "notificationURI": "http://localhost:9090/callback"
-        }')
-    
-    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-    BODY=$(echo "$RESPONSE" | sed '$d')
-    
-    # Unsupported exptAnaType → 400 rejection
-    if [ "$HTTP_CODE" = "400" ]; then
-        CAUSE=$(echo "$BODY" | jq -r '.cause')
-        if [ "$CAUSE" = "UNSUPPORTED_ANALYTICS_TYPE" ]; then
-            log_success "Correctly rejected (400) - UNSUPPORTED_ANALYTICS_TYPE"
-        else
-            log_error "Expected cause UNSUPPORTED_ANALYTICS_TYPE but got $CAUSE"
-        fi
-    else
-        log_error "Expected 400 but returned HTTP $HTTP_CODE"
-    fi
-    echo "$BODY" | jq .
-}
-
-# Test 8: Valid evtReq with PERIODIC and repPeriod (Phase 2B)
-test_evtreq_valid() {
-    log_info "Test: Valid evtReq with PERIODIC + repPeriod"
-    
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
-        -H "Content-Type: application/json" \
-        -d '{
-            "eventSubscriptions": [{
-                "event": "ABNORMAL_BEHAVIOUR",
-                "tgtUe": {"anyUe": true},
-                "excepRequs": [{"excepId": "SUSPICION_OF_DDOS_ATTACK"}],
-                "dnns": ["internet"]
-            }],
-            "notificationURI": "http://localhost:9090/callback",
-            "evtReq": {
-                "notifMethod": "PERIODIC",
-                "repPeriod": 60,
-                "maxReportNbr": 10
-            }
-        }')
-    
-    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-    BODY=$(echo "$RESPONSE" | sed '$d')
-    
-    if [ "$HTTP_CODE" = "201" ]; then
-        log_success "Created successfully (201) with evtReq"
-        echo "$BODY" | jq .
-    else
-        log_error "Creation failed (HTTP $HTTP_CODE)"
-        echo "$BODY" | jq .
-    fi
-}
-
-# Test 10: Analytics target period (startTs in past + endTs in future)
-test_target_period() {
-    log_info "Test: Analytics target period - BOTH_STAT_PRED_NOT_ALLOWED"
-    
-    # Create dates: past (1 hour ago) and future (1 hour from now)
-    PAST_TS=$(date -u -d "-1 hour" +"%Y-%m-%dT%H:%M:%SZ")
-    FUTURE_TS=$(date -u -d "+1 hour" +"%Y-%m-%dT%H:%M:%SZ")
-    
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
-        -H "Content-Type: application/json" \
-        -d '{
-            "eventSubscriptions": [{
-                "event": "ABNORMAL_BEHAVIOUR",
-                "tgtUe": {"anyUe": true},
-                "excepRequs": [{"excepId": "SUSPICION_OF_DDOS_ATTACK"}],
-                "dnns": ["internet"],
-                "extraReportReq": {
-                    "startTs": "'"$PAST_TS"'",
-                    "endTs": "'"$FUTURE_TS"'"
-                }
-            }],
-            "notificationURI": "http://localhost:9090/callback"
-        }')
-    
-    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-    BODY=$(echo "$RESPONSE" | sed '$d')
-    
-    if [ "$HTTP_CODE" = "400" ]; then
-        CAUSE=$(echo "$BODY" | jq -r '.cause // empty')
-        if [ "$CAUSE" = "BOTH_STAT_PRED_NOT_ALLOWED" ]; then
-            log_success "Correctly rejected (400) with cause BOTH_STAT_PRED_NOT_ALLOWED"
-        else
-            log_error "Wrong cause: $CAUSE (expected BOTH_STAT_PRED_NOT_ALLOWED)"
-        fi
-    else
-        log_error "Expected 400, got HTTP $HTTP_CODE"
-    fi
-    echo "$BODY" | jq .
-}
-
-# Test 10: UE_COMMUNICATION valid subscription
-test_ue_comm_valid() {
-    log_info "Test: UE_COMMUNICATION valid subscription (with supis)"
+# Test 2: UE_COMMUNICATION with intGroupIds
+test_ue_comm_intgroupids() {
+    log_info "Test: UE_COMMUNICATION with intGroupIds"
     
     RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
         -H "Content-Type: application/json" \
         -d '{
             "eventSubscriptions": [{
                 "event": "UE_COMMUNICATION",
-                "tgtUe": {"supis": ["imsi-208930000000003"]}
+                "tgtUe": {"intGroupIds": ["group-001"]}
             }],
-            "notificationURI": "http://localhost:9090/callback",
-            "evtReq": {"notifMethod": "PERIODIC", "repPeriod": 10}
+            "notificationURI": "http://localhost:9090/callback"
         }')
     
     HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
@@ -324,7 +68,7 @@ test_ue_comm_valid() {
     fi
 }
 
-# Test 11: UE_COMMUNICATION missing tgtUe
+# Test 3: UE_COMMUNICATION missing tgtUe (should reject)
 test_ue_comm_missing_tgtue() {
     log_info "Test: UE_COMMUNICATION missing tgtUe (should reject)"
     
@@ -353,44 +97,189 @@ test_ue_comm_missing_tgtue() {
     echo "$BODY" | jq .
 }
 
-# Run all tests
-run_all() {
-    echo "========================================"
-    echo "  NWDAF EventSubscription API Tests"
-    echo "========================================"
-    echo ""
+# Test 4: UE_COMMUNICATION missing supis/intGroupIds (should reject)
+test_ue_comm_missing_identifiers() {
+    log_info "Test: UE_COMMUNICATION with empty tgtUe (should reject)"
     
-    echo "--- Basic Validation Tests ---"
-    test_create_valid
-    echo ""
-    test_mutual_exclusion
-    echo ""
-    test_anyue_missing_fields
-    echo ""
-    test_unsupported_event
-    echo ""
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "eventSubscriptions": [{
+                "event": "UE_COMMUNICATION",
+                "tgtUe": {}
+            }],
+            "notificationURI": "http://localhost:9090/callback"
+        }')
     
-    echo "--- Phase 2B/2C Validation Tests ---"
-    test_evtreq_periodic
-    echo ""
-    test_unsupported_exception
-    echo ""
-    test_unsupported_anatype
-    echo ""
-    test_evtreq_valid
-    echo ""
-    test_target_period
-    echo ""
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
     
-    echo "--- Phase 4: UE_COMMUNICATION Tests ---"
-    test_ue_comm_valid
-    echo ""
-    test_ue_comm_missing_tgtue
-    echo ""
+    if [ "$HTTP_CODE" = "400" ]; then
+        log_success "Correctly rejected (400)"
+    else
+        log_error "Expected 400, got HTTP $HTTP_CODE"
+    fi
+    echo "$BODY" | jq .
+}
+
+# Test 5: Unsupported event type (UE_MOBILITY)
+test_unsupported_event() {
+    log_info "Test: Unsupported event type (UE_MOBILITY)"
     
-    echo "========================================"
-    echo "  Tests Completed"
-    echo "========================================"
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "eventSubscriptions": [{
+                "event": "UE_MOBILITY",
+                "tgtUe": {"supis": ["imsi-123456789"]}
+            }],
+            "notificationURI": "http://localhost:9090/callback"
+        }')
+    
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+    
+    if [ "$HTTP_CODE" = "400" ]; then
+        log_success "Correctly rejected (400)"
+    else
+        log_error "Should reject but returned HTTP $HTTP_CODE"
+    fi
+    echo "$BODY" | jq .
+}
+
+# Test 6: ABNORMAL_BEHAVIOUR now returns failEventReports
+test_abnormal_now_unsupported() {
+    log_info "Test: ABNORMAL_BEHAVIOUR now unsupported → failEventReports"
+    
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "eventSubscriptions": [
+                {
+                    "event": "UE_COMMUNICATION",
+                    "tgtUe": {"supis": ["imsi-208930000000003"]}
+                },
+                {
+                    "event": "ABNORMAL_BEHAVIOUR",
+                    "tgtUe": {"supis": ["imsi-123456789"]},
+                    "excepRequs": [{"excepId": "SUSPICION_OF_DDOS_ATTACK"}]
+                }
+            ],
+            "notificationURI": "http://localhost:9090/callback"
+        }')
+    
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+    
+    if [ "$HTTP_CODE" = "201" ]; then
+        HAS_FAIL=$(echo "$BODY" | jq 'has("failEventReports")')
+        FAIL_EVENT=$(echo "$BODY" | jq -r '.failEventReports[0].event // empty')
+        if [ "$HAS_FAIL" = "true" ] && [ "$FAIL_EVENT" = "ABNORMAL_BEHAVIOUR" ]; then
+            log_success "Created (201) with ABNORMAL_BEHAVIOUR in failEventReports"
+        else
+            log_error "Should have ABNORMAL_BEHAVIOUR in failEventReports"
+        fi
+    else
+        log_error "Expected 201 but returned HTTP $HTTP_CODE"
+    fi
+    echo "$BODY" | jq .
+}
+
+# Test 7: evtReq PERIODIC without repPeriod (should reject)
+test_evtreq_periodic_invalid() {
+    log_info "Test: evtReq PERIODIC without repPeriod (should reject)"
+    
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "eventSubscriptions": [{
+                "event": "UE_COMMUNICATION",
+                "tgtUe": {"supis": ["imsi-208930000000003"]}
+            }],
+            "notificationURI": "http://localhost:9090/callback",
+            "evtReq": {
+                "notifMethod": "PERIODIC"
+            }
+        }')
+    
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+    
+    if [ "$HTTP_CODE" = "400" ]; then
+        log_success "Correctly rejected (400) - PERIODIC needs repPeriod"
+    else
+        log_error "Should reject but returned HTTP $HTTP_CODE"
+    fi
+    echo "$BODY" | jq .
+}
+
+# Test 8: Valid evtReq with PERIODIC + repPeriod
+test_evtreq_valid() {
+    log_info "Test: Valid evtReq with PERIODIC + repPeriod"
+    
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "eventSubscriptions": [{
+                "event": "UE_COMMUNICATION",
+                "tgtUe": {"supis": ["imsi-208930000000003"]}
+            }],
+            "notificationURI": "http://localhost:9090/callback",
+            "evtReq": {
+                "notifMethod": "PERIODIC",
+                "repPeriod": 60,
+                "maxReportNbr": 10
+            }
+        }')
+    
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+    
+    if [ "$HTTP_CODE" = "201" ]; then
+        log_success "Created successfully (201) with evtReq"
+        echo "$BODY" | jq .
+    else
+        log_error "Creation failed (HTTP $HTTP_CODE)"
+        echo "$BODY" | jq .
+    fi
+}
+
+# Test 9: Analytics target period (startTs in past + endTs in future)
+test_target_period() {
+    log_info "Test: Analytics target period - BOTH_STAT_PRED_NOT_ALLOWED"
+    
+    # Create dates: past (1 hour ago) and future (1 hour from now)
+    PAST_TS=$(date -u -d "-1 hour" +"%Y-%m-%dT%H:%M:%SZ")
+    FUTURE_TS=$(date -u -d "+1 hour" +"%Y-%m-%dT%H:%M:%SZ")
+    
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/subscriptions" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "eventSubscriptions": [{
+                "event": "UE_COMMUNICATION",
+                "tgtUe": {"supis": ["imsi-208930000000003"]},
+                "extraReportReq": {
+                    "startTs": "'"$PAST_TS"'",
+                    "endTs": "'"$FUTURE_TS"'"
+                }
+            }],
+            "notificationURI": "http://localhost:9090/callback"
+        }')
+    
+    HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+    BODY=$(echo "$RESPONSE" | sed '$d')
+    
+    if [ "$HTTP_CODE" = "400" ]; then
+        CAUSE=$(echo "$BODY" | jq -r '.cause // empty')
+        if [ "$CAUSE" = "BOTH_STAT_PRED_NOT_ALLOWED" ]; then
+            log_success "Correctly rejected (400) with cause BOTH_STAT_PRED_NOT_ALLOWED"
+        else
+            log_error "Wrong cause: $CAUSE (expected BOTH_STAT_PRED_NOT_ALLOWED)"
+        fi
+    else
+        log_error "Expected 400, got HTTP $HTTP_CODE"
+    fi
+    echo "$BODY" | jq .
 }
 
 # Test: Delete subscription
@@ -412,41 +301,71 @@ test_delete() {
     fi
 }
 
+# Run all tests
+run_all() {
+    echo "========================================"
+    echo "  NWDAF EventSubscription API Tests"
+    echo "  Supported Event: UE_COMMUNICATION"
+    echo "========================================"
+    echo ""
+    
+    echo "--- UE_COMMUNICATION Validation Tests ---"
+    test_create_valid
+    echo ""
+    test_ue_comm_intgroupids
+    echo ""
+    test_ue_comm_missing_tgtue
+    echo ""
+    test_ue_comm_missing_identifiers
+    echo ""
+    
+    echo "--- Event Type Tests ---"
+    test_unsupported_event
+    echo ""
+    test_abnormal_now_unsupported
+    echo ""
+    
+    echo "--- evtReq & Target Period Tests ---"
+    test_evtreq_periodic_invalid
+    echo ""
+    test_evtreq_valid
+    echo ""
+    test_target_period
+    echo ""
+    
+    echo "========================================"
+    echo "  Tests Completed"
+    echo "========================================"
+}
+
 # Main
 case "$1" in
     create)
         test_create_valid
         ;;
-    mutual)
-        test_mutual_exclusion
+    intgroup)
+        test_ue_comm_intgroupids
         ;;
-    anyue)
-        test_anyue_missing_fields
+    missing-tgtue)
+        test_ue_comm_missing_tgtue
+        ;;
+    missing-id)
+        test_ue_comm_missing_identifiers
         ;;
     unsupported)
         test_unsupported_event
         ;;
-    # Phase 2B tests
+    abnormal)
+        test_abnormal_now_unsupported
+        ;;
     evtreq)
-        test_evtreq_periodic
-        ;;
-    exception)
-        test_unsupported_exception
-        ;;
-    anatype)
-        test_unsupported_anatype
+        test_evtreq_periodic_invalid
         ;;
     evtreq-valid)
         test_evtreq_valid
         ;;
     target_period)
         test_target_period
-        ;;
-    uecomm)
-        test_ue_comm_valid
-        ;;
-    uecomm-invalid)
-        test_ue_comm_missing_tgtue
         ;;
     delete)
         test_delete "$2"
@@ -455,8 +374,7 @@ case "$1" in
         run_all
         ;;
     *)
-        echo "Usage: $0 [create|mutual|anyue|unsupported|evtreq|exception|anatype|evtreq-valid|target_period|uecomm|uecomm-invalid|delete <id>|all]"
+        echo "Usage: $0 [create|intgroup|missing-tgtue|missing-id|unsupported|abnormal|evtreq|evtreq-valid|target_period|delete <id>|all]"
         exit 1
         ;;
 esac
-
