@@ -1,6 +1,4 @@
-// Package collector provides data collection functionality for NWDAF
-// Collects UE communication data from SMF via Nsmf_EventExposure service
-package collector
+package context
 
 import (
 	"sync"
@@ -9,29 +7,20 @@ import (
 	"github.com/free5gc/openapi/models"
 )
 
-var collectorContext CollectorContext
-
-// CollectorContext stores SMF subscriptions and collected UE data
-type CollectorContext struct {
-	// Subscriptions to SMF (keyed by subscriptionId)
-	SmfSubscriptions sync.Map // map[string]*SmfSubscription
-
-	// Collected UE data (keyed by SUPI)
-	UeDataStore sync.Map // map[string]*UeCommunicationData
-}
-
 // SmfSubscription represents a subscription to SMF event exposure
 type SmfSubscription struct {
 	SubscriptionId string
 	SmfEndpoint    string
 	TargetSupi     string
 	NotifId        string
-	Events         []models.SmfEvent
+	Events         []string
 	CreatedAt      time.Time
 }
 
 // UeCommunicationData stores collected communication data for a UE
 type UeCommunicationData struct {
+	mu sync.Mutex // Protects concurrent access to this struct
+
 	Supi       string
 	Dnn        string
 	Snssai     *models.Snssai
@@ -61,44 +50,49 @@ type UeCommunicationData struct {
 	LastDlThroughput string // Latest downlink throughput
 }
 
-// GetSelf returns the singleton CollectorContext
-func GetSelf() *CollectorContext {
-	return &collectorContext
+// Lock acquires the mutex for this UE data
+func (d *UeCommunicationData) Lock() { d.mu.Lock() }
+
+// Unlock releases the mutex
+func (d *UeCommunicationData) Unlock() { d.mu.Unlock() }
+
+// --- SMF Subscription Management ---
+
+// StoreSmfSubscription stores an SMF subscription
+func (c *NWDAFContext) StoreSmfSubscription(sub *SmfSubscription) {
+	c.smfSubscriptions.Store(sub.SubscriptionId, sub)
 }
 
-// StoreSubscription stores an SMF subscription
-func (c *CollectorContext) StoreSubscription(sub *SmfSubscription) {
-	c.SmfSubscriptions.Store(sub.SubscriptionId, sub)
-}
-
-// GetSubscription retrieves an SMF subscription by ID
-func (c *CollectorContext) GetSubscription(subscriptionId string) (*SmfSubscription, bool) {
-	if value, ok := c.SmfSubscriptions.Load(subscriptionId); ok {
+// GetSmfSubscription retrieves an SMF subscription by ID
+func (c *NWDAFContext) GetSmfSubscription(subscriptionId string) (*SmfSubscription, bool) {
+	if value, ok := c.smfSubscriptions.Load(subscriptionId); ok {
 		return value.(*SmfSubscription), true
 	}
 	return nil, false
 }
 
-// DeleteSubscription removes an SMF subscription
-func (c *CollectorContext) DeleteSubscription(subscriptionId string) {
-	c.SmfSubscriptions.Delete(subscriptionId)
+// DeleteSmfSubscription removes an SMF subscription
+func (c *NWDAFContext) DeleteSmfSubscription(subscriptionId string) {
+	c.smfSubscriptions.Delete(subscriptionId)
 }
 
+// --- UE Data Management ---
+
 // StoreUeData stores or updates UE communication data
-func (c *CollectorContext) StoreUeData(data *UeCommunicationData) {
-	c.UeDataStore.Store(data.Supi, data)
+func (c *NWDAFContext) StoreUeData(data *UeCommunicationData) {
+	c.ueDataStore.Store(data.Supi, data)
 }
 
 // GetUeData retrieves UE communication data by SUPI
-func (c *CollectorContext) GetUeData(supi string) (*UeCommunicationData, bool) {
-	if value, ok := c.UeDataStore.Load(supi); ok {
+func (c *NWDAFContext) GetUeData(supi string) (*UeCommunicationData, bool) {
+	if value, ok := c.ueDataStore.Load(supi); ok {
 		return value.(*UeCommunicationData), true
 	}
 	return nil, false
 }
 
 // GetOrCreateUeData retrieves existing data or creates new entry
-func (c *CollectorContext) GetOrCreateUeData(supi string) *UeCommunicationData {
+func (c *NWDAFContext) GetOrCreateUeData(supi string) *UeCommunicationData {
 	if data, ok := c.GetUeData(supi); ok {
 		return data
 	}
@@ -112,8 +106,11 @@ func (c *CollectorContext) GetOrCreateUeData(supi string) *UeCommunicationData {
 }
 
 // AppendEvent adds an SMF event to UE data
-func (c *CollectorContext) AppendEvent(supi string, event models.SmfEventExposureEventNotification) {
+func (c *NWDAFContext) AppendEvent(supi string, event models.SmfEventExposureEventNotification) {
 	data := c.GetOrCreateUeData(supi)
+	data.Lock()
+	defer data.Unlock()
+
 	data.Events = append(data.Events, event)
 	data.LastUpdate = time.Now()
 
@@ -127,22 +124,20 @@ func (c *CollectorContext) AppendEvent(supi string, event models.SmfEventExposur
 	if event.PduSeId != 0 {
 		data.PduSessId = event.PduSeId
 	}
-
-	c.StoreUeData(data)
 }
 
 // ClearUeData removes all UE data (for testing or reset)
-func (c *CollectorContext) ClearUeData() {
-	c.UeDataStore.Range(func(key, value interface{}) bool {
-		c.UeDataStore.Delete(key)
+func (c *NWDAFContext) ClearUeData() {
+	c.ueDataStore.Range(func(key, value interface{}) bool {
+		c.ueDataStore.Delete(key)
 		return true
 	})
 }
 
-// ClearSubscriptions removes all subscriptions (for testing or reset)
-func (c *CollectorContext) ClearSubscriptions() {
-	c.SmfSubscriptions.Range(func(key, value interface{}) bool {
-		c.SmfSubscriptions.Delete(key)
+// ClearSmfSubscriptions removes all SMF subscriptions (for testing or reset)
+func (c *NWDAFContext) ClearSmfSubscriptions() {
+	c.smfSubscriptions.Range(func(key, value interface{}) bool {
+		c.smfSubscriptions.Delete(key)
 		return true
 	})
 }

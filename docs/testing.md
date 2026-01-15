@@ -36,21 +36,48 @@ go test ./internal/sbi/processor/... -v
 # Run notifier tests only
 go test ./internal/notifier/... -v
 
-# Run collector tests only
-go test ./internal/collector/... -v
+# Run context tests only
+go test ./internal/context/... -v
+
+# Run consumer tests only
+go test ./internal/sbi/consumer/... -v
 ```
 
 ### 2.2 Processor Tests
 
-Location: `internal/sbi/processor/eventssubscription_test.go`
+#### Subscription Validation (`eventssubscription_test.go`)
 
 | Test Function | Description |
 |---------------|-------------|
-| `TestValidateSupportedEvent` | Event type validation |
+| `TestValidateSupportedEvent` | Event type validation (UE_COMMUNICATION supported) |
 | `TestValidateUeCommunication` | UE_COMMUNICATION validation (tgtUe, supis/intGroupIds) |
 | `TestValidateEvtReq` | evtReq validation (PERIODIC/repPeriod/maxReportNbr) |
 | `TestCollectFailEventReports` | failEventReports collection |
 | `TestValidateEventTargetPeriod` | startTs/endTs validation |
+
+#### SMF Notification Handling (`smf_notify_test.go`)
+
+| Test Function | Description |
+|---------------|-------------|
+| `TestHandleSmfNotification` | Basic SMF notification processing |
+| `TestHandlePduSessionLifecycle` | PDU session establishment/release |
+| `TestHandleSmfNotification_MissingSupi` | Missing SUPI handling |
+| `TestHandleMultipleEvents` | Multiple events in one notification |
+
+#### UPF Notification Handling (`upf_notify_test.go`)
+
+| Test Function | Description |
+|---------------|-------------|
+| `TestHandleUpfNotification` | Basic UPF notification processing |
+| `TestHandleUpfNotification_VolumeAggregation` | Volume accumulation across notifications |
+| `TestHandleUpfNotification_ThroughputUpdate` | Throughput value updates |
+| `TestHandleUpfNotification_MissingSupi` | Missing SUPI handling |
+| `TestHandleUpfNotification_MultipleUEs` | Multiple UEs in one notification |
+| `TestHandleUpfNotification_MultipleMeasurements` | Multiple measurements aggregation |
+| `TestHandleUpfNotification_SessionMetadata` | Dnn/Snssai/RatType updates |
+| `TestHandleUpfNotification_VolumeOnlyMeasurement` | Volume-only measurement |
+| `TestHandleUpfNotification_ThroughputOnlyMeasurement` | Throughput-only measurement |
+| `TestHandleUpfNotification_EmptyNotification` | Empty notification handling |
 
 ### 2.3 Notifier Tests
 
@@ -58,19 +85,36 @@ Location: `internal/notifier/notifier_test.go`
 
 | Test Function | Description |
 |---------------|-------------|
-| `TestShouldContinue_MaxReportNbrLimit` | Verify scheduler stops at maxReportNbr |
-| `TestShouldContinue_MonDurExpiry` | Verify scheduler stops when monDur expires |
-| `TestBuildNotification_NotifCorrId` | Verify notifCorrId in notification |
+| `TestShouldContinue_MaxReportNbrLimit` | Scheduler stops at maxReportNbr |
+| `TestShouldContinue_MonDurExpiry` | Scheduler stops when monDur expires |
+| `TestBuildNotification_NotifCorrId` | notifCorrId in notification |
 
-### 2.4 Collector Tests
+### 2.4 Context Tests
 
-Location: `internal/collector/collector_test.go`
+Location: `internal/context/`
+
+| Test File | Tests |
+|-----------|-------|
+| `context_test.go` | Subscription CRUD operations |
+| `ue_data_test.go` | UE data storage, SMF subscription, AppendEvent, **concurrent update** |
+
+#### Thread Safety Testing
+
+Run tests with race detector to verify concurrent access:
+```bash
+go test ./internal/... -race -v
+```
+
+### 2.5 Consumer Tests
+
+Location: `internal/sbi/consumer/consumer_test.go`
 
 | Test Function | Description |
 |---------------|-------------|
-| `TestCollectorContext_StoreAndRetrieveUeData` | UE data CRUD |
-| `TestHandleNotification` | SMF notification handling |
-| `TestHandleUpfNotification` | UPF notification (volume + throughput) |
+| `TestNewConsumer` | Consumer initialization |
+| `TestConsumerContext` | Context accessor |
+| `TestSmfServiceHTTPClient` | HTTP client caching |
+| `TestExtendedEventSubscription` | UPF event subscription model |
 
 ---
 

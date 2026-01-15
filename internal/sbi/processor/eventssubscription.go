@@ -7,7 +7,6 @@ import (
 
 	"github.com/free5gc/openapi/models"
 
-	"github.com/free5gc/nwdaf/internal/collector"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/notifier"
@@ -90,11 +89,9 @@ func (p *Processor) HandleCreateSubscription(
 		subscription.Scheduler = scheduler
 	}
 
-	// Trigger data collection from source NFs (SMF, etc.) based on subscribed events
+	// Trigger data collection from source NFs using consumer
 	// Per 3GPP TS 23.288 §6.2: NWDAF invokes Nnf_EventExposure_Subscribe to collect data
-	if dcManager := collector.NewDataCollectionManager(); dcManager != nil {
-		dcManager.TriggerForSubscription(req.EventSubscriptions, subscriptionId)
-	}
+	p.TriggerDataCollection(req.EventSubscriptions, subscriptionId)
 
 	// Prepare response
 	response := &models.NnwdafEventsSubscription{

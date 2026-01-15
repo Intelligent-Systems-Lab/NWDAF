@@ -4,7 +4,7 @@ package notifier
 import (
 	"time"
 
-	"github.com/free5gc/nwdaf/internal/collector"
+	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/openapi/models"
 )
@@ -56,19 +56,19 @@ func GenerateAnalytics(eventSub *models.NwdafEventsSubscriptionEventSubscription
 
 // generateMockUeCommunication generates data for UE Communication analytics
 // Per YAML spec: commDur, trafChar, ts are REQUIRED.
-// Uses collected data from collector when available, otherwise returns mock data.
+// Uses collected data from context when available, otherwise returns mock data.
 func generateMockUeCommunication(eventSub *models.NwdafEventsSubscriptionEventSubscription) models.UeCommunication {
 	now := time.Now()
 
-	// Try to get collected data from collector
+	// Try to get collected data from context
 	var ulVol, dlVol int64 = 1024000, 5120000 // Default mock values
 	var commDur int32 = 300                   // Default 5 minutes
 
 	// Check if we have collected data for target UEs
 	if eventSub.TgtUe != nil && len(eventSub.TgtUe.Supis) > 0 {
-		collectorCtx := collector.GetSelf()
+		ctx := nwdaf_context.GetSelf()
 		for _, supi := range eventSub.TgtUe.Supis {
-			if ueData, ok := collectorCtx.GetUeData(supi); ok {
+			if ueData, ok := ctx.GetUeData(supi); ok {
 				// Use real collected data
 				ulVol = ueData.TotalUlVolume
 				dlVol = ueData.TotalDlVolume

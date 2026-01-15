@@ -28,9 +28,15 @@ type NWDAFContext struct {
 	NfId      string
 	NwdafName string
 
-	// Subscriptions storage
+	// Subscriptions storage (NWDAF consumer subscriptions)
 	mu            sync.RWMutex
 	subscriptions map[string]*Subscription
+
+	// SMF subscriptions (NWDAF as consumer of SMF events)
+	smfSubscriptions sync.Map // map[string]*SmfSubscription
+
+	// UE Communication data collected from SMF/UPF
+	ueDataStore sync.Map // map[string]*UeCommunicationData
 }
 
 // Subscription represents an individual event subscription

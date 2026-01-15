@@ -12,6 +12,7 @@ import (
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/sbi"
+	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/internal/sbi/processor"
 	"github.com/free5gc/nwdaf/pkg/app"
 	"github.com/free5gc/nwdaf/pkg/factory"
@@ -24,6 +25,7 @@ type NwdafApp struct {
 	nwdafCtx  *nwdaf_context.NWDAFContext
 	ctx       context.Context
 	cancel    context.CancelFunc
+	consumer  *consumer.Consumer
 	processor *processor.Processor
 	sbiServer *sbi.Server
 	wg        sync.WaitGroup
@@ -48,6 +50,9 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 	nwdaf_context.Init()
 	nwdaf.nwdafCtx = nwdaf_context.GetSelf()
 	nwdaf.nwdafCtx.NwdafName = cfg.GetNwdafName()
+
+	// Initialize consumer
+	nwdaf.consumer, _ = consumer.NewConsumer()
 
 	// Initialize processor
 	nwdaf.processor = processor.NewProcessor(nwdaf)
@@ -76,6 +81,10 @@ func (a *NwdafApp) CancelContext() context.Context {
 
 func (a *NwdafApp) Processor() *processor.Processor {
 	return a.processor
+}
+
+func (a *NwdafApp) Consumer() *consumer.Consumer {
+	return a.consumer
 }
 
 func (a *NwdafApp) SetLogEnable(enable bool) {
