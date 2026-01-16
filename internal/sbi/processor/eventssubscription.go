@@ -91,7 +91,7 @@ func (p *Processor) HandleCreateSubscription(
 
 	// Trigger data collection from source NFs using consumer
 	// Per 3GPP TS 23.288 §6.2: NWDAF invokes Nnf_EventExposure_Subscribe to collect data
-	p.TriggerDataCollection(req.EventSubscriptions, subscriptionId)
+	p.TriggerDataCollection(req.EventSubscriptions, req.EvtReq, subscriptionId)
 
 	// Prepare response
 	response := &models.NnwdafEventsSubscription{

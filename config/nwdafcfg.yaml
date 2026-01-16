@@ -14,10 +14,13 @@ configuration:
   # Data collection from other NFs
   dataCollection:
     smf:
-      enabled: false
+      enabled: true
       endpoints:
-        # - http://127.0.0.2:29502
+        - http://127.0.0.1:8081  # Fake SMF+UPF server for testing
       subscriptionDuration: 3600  # seconds
+      notifUris:
+        smf: http://127.0.0.1:8080/collector/notify
+        upf: http://127.0.0.1:8080/collector/upf-notify
 
 logger:
   enable: true

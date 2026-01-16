@@ -1,0 +1,6 @@
+[project]
+name = "fake-smf-upf"
+version = "1.0.0"
+description = "Fake SMF+UPF server for NWDAF testing"
+requires-python = ">=3.10"
+dependencies = []

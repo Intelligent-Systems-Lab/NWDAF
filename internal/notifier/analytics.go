@@ -41,54 +41,115 @@ func generateMockAbnormalBehaviours() []models.AbnormalBehaviour {
 	}
 }
 
-// GenerateAnalytics is a placeholder for future ML model integration
-// Currently returns mock data
+// GenerateAnalytics generates analytics based on collected data
+// Uses rule-based logic for UE_COMMUNICATION analytics
 func GenerateAnalytics(eventSub *models.NwdafEventsSubscriptionEventSubscription) interface{} {
 	switch eventSub.Event {
 	case models.NwdafEvent_ABNORMAL_BEHAVIOUR:
 		return generateMockAbnormalBehaviours()
 	case models.NwdafEvent_UE_COMMUNICATION:
-		return generateMockUeCommunication(eventSub)
+		return generateUeCommunicationAnalytics(eventSub)
 	default:
 		return nil
 	}
 }
 
-// generateMockUeCommunication generates data for UE Communication analytics
-// Per YAML spec: commDur, trafChar, ts are REQUIRED.
-// Uses collected data from context when available, otherwise returns mock data.
-func generateMockUeCommunication(eventSub *models.NwdafEventsSubscriptionEventSubscription) models.UeCommunication {
+// generateUeCommunicationAnalytics generates UE Communication analytics using rule-based logic
+// Per TS 23.288 §6.7.3: Analytics based on collected UPF traffic data
+func generateUeCommunicationAnalytics(eventSub *models.NwdafEventsSubscriptionEventSubscription) models.UeCommunication {
 	now := time.Now()
+	ctx := nwdaf_context.GetSelf()
 
-	// Try to get collected data from context
-	var ulVol, dlVol int64 = 1024000, 5120000 // Default mock values
-	var commDur int32 = 300                   // Default 5 minutes
+	// Default values
+	var ulVol, dlVol int64 = 0, 0
+	var commDur int32 = 60 // Default 1 minute
+	var confidence int32 = 50
+	dnn := "internet"
 
-	// Check if we have collected data for target UEs
+	// Try to get collected data for target UEs
+	dataPointCount := 0
 	if eventSub.TgtUe != nil && len(eventSub.TgtUe.Supis) > 0 {
-		ctx := nwdaf_context.GetSelf()
 		for _, supi := range eventSub.TgtUe.Supis {
 			if ueData, ok := ctx.GetUeData(supi); ok {
-				// Use real collected data
-				ulVol = ueData.TotalUlVolume
-				dlVol = ueData.TotalDlVolume
+				// Use collected data from UPF notifications
+				ueData.Lock()
+
+				ulVol += ueData.TotalUlVolume
+				dlVol += ueData.TotalDlVolume
+
+				// Calculate communication duration from timestamps
 				if !ueData.StartTime.IsZero() && !ueData.LastUpdate.IsZero() {
-					commDur = int32(ueData.LastUpdate.Sub(ueData.StartTime).Seconds())
+					duration := int32(ueData.LastUpdate.Sub(ueData.StartTime).Seconds())
+					if duration > commDur {
+						commDur = duration
+					}
 				}
-				notifierLog.Debugf("Using collected data for UE: %s", supi)
-				break
+
+				// Use DNN from UPF data if available
+				if ueData.Dnn != "" {
+					dnn = ueData.Dnn
+				}
+
+				dataPointCount++
+				ueData.Unlock()
+				notifierLog.Debugf("Using collected data for UE %s: ulVol=%d, dlVol=%d", supi, ulVol, dlVol)
 			}
 		}
+	}
+
+	// Rule-based confidence calculation
+	// If no data collected, confidence should be 0
+	if ulVol == 0 && dlVol == 0 {
+		confidence = 0
+		notifierLog.Debugf("No collected data, confidence set to 0")
+	} else {
+		confidence = calculateConfidence(dataPointCount, ulVol, dlVol)
 	}
 
 	return models.UeCommunication{
 		CommDur: commDur,
 		Ts:      &now,
 		TrafChar: &models.TrafficCharacterization{
-			Dnn:   "internet",
+			Dnn:   dnn,
 			UlVol: ulVol,
 			DlVol: dlVol,
 		},
-		Confidence: 90,
+		Confidence: confidence,
 	}
+}
+
+// calculateConfidence computes confidence score based on data quality
+// Per TS 23.288 §6.7.3.3: Confidence indicates prediction reliability
+func calculateConfidence(dataPointCount int, ulVol, dlVol int64) int32 {
+	// Base confidence starts at 50
+	confidence := int32(50)
+
+	// More data points = higher confidence
+	if dataPointCount >= 5 {
+		confidence += 20
+	} else if dataPointCount >= 2 {
+		confidence += 10
+	} else if dataPointCount >= 1 {
+		confidence += 5
+	}
+
+	// Having actual traffic data increases confidence
+	if ulVol > 0 || dlVol > 0 {
+		confidence += 10
+	}
+
+	// Significant traffic volume indicates active usage
+	totalVol := ulVol + dlVol
+	if totalVol > 10*1024*1024 { // > 10MB
+		confidence += 10
+	} else if totalVol > 1*1024*1024 { // > 1MB
+		confidence += 5
+	}
+
+	// Cap at 100
+	if confidence > 100 {
+		confidence = 100
+	}
+
+	return confidence
 }

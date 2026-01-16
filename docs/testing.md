@@ -277,58 +277,159 @@ test/
     └── test_api.sh          # API integration test script
 ```
 
----
+## 6. E2E Integration Test (Rule-Based Analytics)
 
-## 6. Complete Test Workflow
+This test validates the complete NWDAF data collection and analytics flow:
+- NWDAF subscribes to SMF for UPF_EVENT
+- Fake SMF+UPF Server sends periodic UPF notifications
+- NWDAF generates rule-based analytics reports from collected data
+- Consumer receives notifications with real traffic data
 
-### Step 1: Build & Run Unit Tests
+### 6.1 Test Architecture
+
+```
+┌──────────────────┐                     ┌──────────────────────┐
+│    Consumer      │◄────Notification────│       NWDAF          │
+│  Callback Server │    (UeCommunication)│     :8080            │
+│     :9090        │                     │                      │
+└──────────────────┘                     └──────────┬───────────┘
+                                                    │
+                                         ┌──────────▼───────────┐
+                                         │   Fake SMF+UPF       │
+                                         │      Server          │
+                                         │      :8081           │
+                                         │                      │
+                                         │ - SMF subscription   │
+                                         │ - UPF notifications  │
+                                         │   (every 10s)        │
+                                         └──────────────────────┘
+```
+
+### 6.2 Environment Preparation
+
 ```bash
 cd /path/to/NWDAF
+
+# Verify config has SMF data collection enabled
+cat config/nwdafcfg.yaml | grep -A5 "smf:"
+# enabled: true
+# endpoints:
+#   - http://127.0.0.1:8081
+
+# Build NWDAF
 make build
-go test ./internal/... -v
 ```
 
-### Step 2: API Integration Tests
+### 6.3 Start Test (4 Terminals)
 
-**Terminal 1** - Start NWDAF:
+#### Terminal 1: Fake SMF+UPF Server
+```bash
+cd test/fake_smf_upf
+uv run fake_smf_upf_server.py 8081
+```
+
+Expected output:
+```
+╔══════════════════════════════════════════════════════════════╗
+║           Fake SMF+UPF Server for NWDAF Testing              ║
+╠══════════════════════════════════════════════════════════════╣
+║ Listening on: http://127.0.0.1:8081                         ║
+╚══════════════════════════════════════════════════════════════╝
+```
+
+#### Terminal 2: Consumer Callback Server
+```bash
+cd test/callback
+uv run callback_server.py 9090
+```
+
+#### Terminal 3: NWDAF
 ```bash
 ./bin/nwdaf --config config/nwdafcfg.yaml
 ```
 
-**Terminal 2** - Run API tests:
+#### Terminal 4: Send Subscription Request
 ```bash
-./test/scripts/test_api.sh all
-```
-
-### Step 3: Notification Tests
-
-**Terminal 1** - Start callback server:
-```bash
-cd test/callback && uv run callback_server.py 9090
-```
-
-**Terminal 2** - Start NWDAF (if not running):
-```bash
-./bin/nwdaf --config config/nwdafcfg.yaml
-```
-
-**Terminal 3** - Create PERIODIC subscription:
-```bash
-curl -X POST http://localhost:8080/nnwdaf-eventssubscription/v1/subscriptions \
+curl -X POST http://127.0.0.1:8080/nnwdaf-eventssubscription/v1/subscriptions \
   -H "Content-Type: application/json" \
   -d '{
     "eventSubscriptions": [{
       "event": "UE_COMMUNICATION",
-      "tgtUe": {"supis": ["imsi-208930000000003"]}
+      "tgtUe": {"supis": ["imsi-208930000000001"]}
     }],
-    "notificationURI": "http://localhost:9090/callback",
-    "evtReq": {"notifMethod": "PERIODIC", "repPeriod": 10}
+    "notificationURI": "http://127.0.0.1:9090/notify",
+    "evtReq": {"notifMethod": "PERIODIC", "repPeriod": 15}
   }'
+```
+
+### 6.4 Verify Rule-Based Analytics
+
+Observe **Terminal 2 (Callback Server)** output. Confidence should increase as data accumulates:
+
+| Notification | UL Volume | DL Volume | Confidence | Description |
+|--------------|-----------|-----------|------------|-------------|
+| #1 | 1000 KB (mock) | 4.9 MB (mock) | **50%** | No UPF data yet |
+| #2 | ~120 KB | ~670 KB | **65%** | After 1 UPF notification |
+| #3 | ~240 KB | ~1.2 MB | **70%** | After 2 UPF notifications |
+
+### 6.5 Verify NWDAF Logs
+
+In **Terminal 3** you should see:
+
+```
+INFO SMF subscription created: supi=imsi-208930000000001, subId=fake-smf-sub-xxx
+INFO Received UPF notification, items: 1
+INFO UPF VOLUME: supi=imsi-208930000000001, ulVol=125502, dlVol=690915
+INFO Notification #2 sent successfully to http://127.0.0.1:9090/notify
+```
+
+### 6.6 Verify Fake Server Logs
+
+In **Terminal 1** you should see:
+
+```
+[HH:MM:SS] 📝 Subscription created: fake-smf-sub-xxx
+[HH:MM:SS]    SUPI: imsi-208930000000001
+[HH:MM:SS]    UPF notify URI: http://127.0.0.1:8080/collector/upf-notify
+[HH:MM:SS] 📤 UPF notification #1 sent ... (status: 204)
+```
+
+### 6.7 Cleanup
+
+Press `Ctrl+C` to stop all services.
+
+---
+
+## 7. Test Directory Structure
+
+```
+test/
+├── callback/                 # Consumer notification callback
+│   ├── callback_server.py    # HTTP callback server
+│   ├── pyproject.toml        # uv project configuration
+│   └── README.md
+├── fake_smf_upf/            # Fake SMF+UPF for E2E testing
+│   ├── fake_smf_upf_server.py
+│   ├── pyproject.toml
+│   └── README.md
+└── scripts/
+    └── test_api.sh          # API integration test script
 ```
 
 ---
 
-## 7. Error Code Reference
+## 8. Quick Test Commands
+
+| Test Type | Command |
+|-----------|---------|
+| Unit Tests | `go test ./internal/... -v` |
+| Race Detection | `go test ./internal/... -race -v` |
+| API Tests | `./test/scripts/test_api.sh all` |
+| E2E (4 terminals) | See Section 6.3 |
+
+---
+
+## 9. Error Code Reference
 
 | HTTP | Cause | Description |
 |------|-------|-------------|

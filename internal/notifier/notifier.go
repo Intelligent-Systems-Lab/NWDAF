@@ -168,7 +168,10 @@ func (s *NotificationScheduler) sendNotification() {
 
 	notification := s.buildNotification()
 
-	jsonData, err := json.Marshal(notification)
+	// Convert to output format (without omitempty for 0 values)
+	output := s.convertToOutput(notification)
+
+	jsonData, err := json.Marshal(output)
 	if err != nil {
 		logger.NotifierLog.Errorf("Failed to marshal notification: %v", err)
 		return
@@ -190,6 +193,43 @@ func (s *NotificationScheduler) sendNotification() {
 	}
 }
 
+// convertToOutput converts the notification to output format with proper 0-value serialization
+// Uses struct embedding: copies original struct and overrides specific fields
+func (s *NotificationScheduler) convertToOutput(n models.NnwdafEventsSubscriptionNotification) NotificationOutput {
+	output := NotificationOutput{
+		NnwdafEventsSubscriptionNotification: n, // Embed original
+	}
+
+	for _, eventNotif := range n.EventNotifications {
+		eventOutput := EventNotificationOutput{
+			NwdafEventsSubscriptionEventNotification: eventNotif, // Embed original
+			Event:                                    string(eventNotif.Event),
+		}
+
+		// Convert UeCommunication to output format
+		for _, ueComm := range eventNotif.UeComms {
+			ueOutput := UeCommunicationOutput{
+				UeCommunication: ueComm,            // Embed original
+				Confidence:      ueComm.Confidence, // Override (no omitempty)
+			}
+
+			if ueComm.TrafChar != nil {
+				ueOutput.TrafChar = &TrafficCharacterizationOutput{
+					TrafficCharacterization: *ueComm.TrafChar,      // Embed original
+					UlVol:                   ueComm.TrafChar.UlVol, // Override (no omitempty)
+					DlVol:                   ueComm.TrafChar.DlVol, // Override (no omitempty)
+				}
+			}
+
+			eventOutput.UeComms = append(eventOutput.UeComms, ueOutput)
+		}
+
+		output.EventNotifications = append(output.EventNotifications, eventOutput)
+	}
+
+	return output
+}
+
 // buildNotification builds the notification message
 func (s *NotificationScheduler) buildNotification() models.NnwdafEventsSubscriptionNotification {
 	var eventNotifications []models.NwdafEventsSubscriptionEventNotification
@@ -204,7 +244,7 @@ func (s *NotificationScheduler) buildNotification() models.NnwdafEventsSubscript
 		} else if eventSub.Event == models.NwdafEvent_UE_COMMUNICATION {
 			eventNotification := models.NwdafEventsSubscriptionEventNotification{
 				Event:   eventSub.Event,
-				UeComms: []models.UeCommunication{generateMockUeCommunication(&eventSub)},
+				UeComms: []models.UeCommunication{generateUeCommunicationAnalytics(&eventSub)},
 			}
 			eventNotifications = append(eventNotifications, eventNotification)
 		}

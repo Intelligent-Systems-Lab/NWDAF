@@ -102,18 +102,18 @@ class NotificationHandler(BaseHTTPRequestHandler):
                 print(f"    Traffic Info:")
                 if dnn := traf_char.get("dnn"):
                     print(f"      DNN: {dnn}")
-                if ul_vol := traf_char.get("ulVol"):
-                    print(f"      Uplink Volume: {self._format_bytes(ul_vol)}")
-                if dl_vol := traf_char.get("dlVol"):
-                    print(f"      Downlink Volume: {self._format_bytes(dl_vol)}")
+                if "ulVol" in traf_char:
+                    print(f"      Uplink Volume: {self._format_bytes(traf_char['ulVol'])}")
+                if "dlVol" in traf_char:
+                    print(f"      Downlink Volume: {self._format_bytes(traf_char['dlVol'])}")
                 if ul_rate := traf_char.get("ulRate"):
                     print(f"      Uplink Rate: {ul_rate}")
                 if dl_rate := traf_char.get("dlRate"):
                     print(f"      Downlink Rate: {dl_rate}")
             
-            # Optional fields
-            if confidence := ue_comm.get("confidence"):
-                print(f"    Confidence: {confidence}%")
+            # Optional fields (always show if present, even if 0)
+            if "confidence" in ue_comm:
+                print(f"    Confidence: {ue_comm['confidence']}%")
             if ratio := ue_comm.get("ratio"):
                 print(f"    Ratio: {ratio}%")
 

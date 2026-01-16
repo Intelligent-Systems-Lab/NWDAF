@@ -9,11 +9,14 @@ const (
 
 // Extended NsmfEventExposure with UPF_EVENT support
 type ExtendedNsmfEventExposure struct {
-	Supi      string                      `json:"supi,omitempty"`
-	NotifUri  string                      `json:"notifUri"`
-	NotifId   string                      `json:"notifId"`
-	SubId     string                      `json:"subId,omitempty"`
-	EventSubs []ExtendedEventSubscription `json:"eventSubs"`
+	Supi         string                      `json:"supi,omitempty"`
+	NotifUri     string                      `json:"notifUri"`
+	NotifId      string                      `json:"notifId"`
+	SubId        string                      `json:"subId,omitempty"`
+	EventSubs    []ExtendedEventSubscription `json:"eventSubs"`
+	NotifMethod  string                      `json:"notifMethod,omitempty"`  // PERIODIC, ONE_TIME, etc.
+	RepPeriod    int32                       `json:"repPeriod,omitempty"`    // Report period in seconds
+	MaxReportNbr int32                       `json:"maxReportNbr,omitempty"` // Maximum reports
 }
 
 // ExtendedEventSubscription supports both standard SMF events and UPF_EVENT

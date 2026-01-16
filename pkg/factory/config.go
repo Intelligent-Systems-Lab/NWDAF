@@ -45,9 +45,16 @@ type DataCollection struct {
 
 // SmfDataCollection configuration for SMF data collection
 type SmfDataCollection struct {
-	Enabled              bool     `yaml:"enabled"`
-	Endpoints            []string `yaml:"endpoints,omitempty"`
-	SubscriptionDuration int      `yaml:"subscriptionDuration,omitempty"` // seconds
+	Enabled              bool       `yaml:"enabled"`
+	Endpoints            []string   `yaml:"endpoints,omitempty"`
+	SubscriptionDuration int        `yaml:"subscriptionDuration,omitempty"` // seconds
+	NotifUris            *NotifUris `yaml:"notifUris,omitempty"`
+}
+
+// NotifUris contains notification URIs for data collection callbacks
+type NotifUris struct {
+	Smf string `yaml:"smf,omitempty"` // Callback URI for SMF notifications
+	Upf string `yaml:"upf,omitempty"` // Callback URI for UPF notifications
 }
 
 type Sbi struct {
