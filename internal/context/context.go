@@ -37,6 +37,10 @@ type NWDAFContext struct {
 
 	// UE Communication data collected from SMF/UPF
 	ueDataStore sync.Map // map[string]*UeCommunicationData
+
+	// CorrelationId mappings for UPF notifications (TS 29.564)
+	// Maps notifyCorrelationId -> *CorrelationIdMapping
+	correlationIdMap sync.Map
 }
 
 // Subscription represents an individual event subscription

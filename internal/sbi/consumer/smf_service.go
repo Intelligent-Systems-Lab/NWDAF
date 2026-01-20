@@ -123,14 +123,17 @@ func (s *NsmfService) UnsubscribeFromSmf(
 // SubscribeForUeCommunication subscribes to SMF for all UE communication data
 // Combines UPF_EVENT for traffic volume measurements
 // repPeriod: reporting period in seconds (for SMF to send UPF notifications)
+// correlationId: unique ID to map UPF notifications back to the target SUPI (TS 29.564)
 func (s *NsmfService) SubscribeForUeCommunication(
 	smfEndpoint string,
 	supi string,
 	smfNotifUri string,
 	upfNotifUri string,
 	repPeriod int32,
+	correlationId string,
 ) (string, error) {
-	consumerLog.Infof("Subscribing for UE Communication: endpoint=%s, supi=%s, repPeriod=%ds", smfEndpoint, supi, repPeriod)
+	consumerLog.Infof("Subscribing for UE Communication: endpoint=%s, supi=%s, repPeriod=%ds, corrId=%s",
+		smfEndpoint, supi, repPeriod, correlationId)
 
 	notifId := uuid.New().String()
 
@@ -154,12 +157,13 @@ func (s *NsmfService) SubscribeForUeCommunication(
 	}
 
 	request := ExtendedNsmfEventExposure{
-		Supi:        supi,
-		NotifUri:    smfNotifUri,
-		NotifId:     notifId,
-		EventSubs:   eventSubs,
-		NotifMethod: "PERIODIC",
-		RepPeriod:   repPeriod,
+		Supi:                supi,
+		NotifUri:            smfNotifUri,
+		NotifId:             notifId,
+		NotifyCorrelationId: correlationId, // Required per TS 29.564
+		EventSubs:           eventSubs,
+		NotifMethod:         "PERIODIC",
+		RepPeriod:           repPeriod,
 	}
 
 	subscriptionId, err := s.sendRequest(smfEndpoint, &request)
@@ -174,7 +178,7 @@ func (s *NsmfService) SubscribeForUeCommunication(
 	// Store subscription
 	s.storeSmfSubscription(subscriptionId, smfEndpoint, supi, notifId, []string{string(SmfEvent_UPF_EVENT)})
 
-	consumerLog.Infof("SMF UE Communication subscription created: id=%s", subscriptionId)
+	consumerLog.Infof("SMF UE Communication subscription created: id=%s, corrId=%s", subscriptionId, correlationId)
 	return subscriptionId, nil
 }
 

@@ -1,6 +1,11 @@
 package processor
 
 import (
+	"time"
+
+	"github.com/google/uuid"
+
+	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
@@ -94,17 +99,35 @@ func (p *Processor) triggerUeCommunicationCollection(
 		}
 	}
 
+	ctx := nwdaf_context.GetSelf()
+
 	// Subscribe to each SMF endpoint for each target SUPI
 	for _, smfEndpoint := range smfConfig.Endpoints {
 		for _, supi := range supis {
+			// Generate unique correlationId for this SUPI (TS 29.564)
+			correlationId := uuid.New().String()
+
 			subId, err := consumer.SubscribeForUeCommunication(
-				smfEndpoint, supi, smfNotifUri, upfNotifUri, smfRepPeriod,
+				smfEndpoint, supi, smfNotifUri, upfNotifUri, smfRepPeriod, correlationId,
 			)
 			if err != nil {
 				logger.ProcLog.Errorf("Failed to subscribe SMF for SUPI %s: %v", supi, err)
 				continue
 			}
-			logger.ProcLog.Infof("SMF subscription created: supi=%s, subId=%s, endpoint=%s", supi, subId, smfEndpoint)
+
+			// Store correlationId -> SUPI mapping for UPF notification resolution
+			mapping := &nwdaf_context.CorrelationIdMapping{
+				CorrelationId: correlationId,
+				Supi:          supi,
+				NwdafSubId:    subscriptionId,
+				SmfSubId:      subId,
+				SmfEndpoint:   smfEndpoint,
+				CreatedAt:     time.Now(),
+			}
+			ctx.StoreCorrelationMapping(mapping)
+
+			logger.ProcLog.Infof("SMF subscription created: supi=%s, subId=%s, corrId=%s",
+				supi, subId, correlationId)
 		}
 	}
 }

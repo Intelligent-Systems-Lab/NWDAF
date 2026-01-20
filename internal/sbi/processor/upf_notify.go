@@ -56,14 +56,31 @@ type ThroughputMeasurement struct {
 }
 
 // HandleUpfNotification processes UPF event exposure notifications
+// Per TS 29.564: UPF notifications may not include SUPI, use correlationId to resolve
 func (p *Processor) HandleUpfNotification(notif *UpfNotificationData) error {
 	logger.ProcLog.Infof("Processing UPF notification, items: %d, correlationId: %s",
 		len(notif.NotificationItems), notif.CorrelationId)
 
 	ctx := nwdaf_context.GetSelf()
 
+	// Resolve SUPI from correlationId if available
+	var resolvedSupi string
+	if notif.CorrelationId != "" {
+		if supi, ok := ctx.GetSupiByCorrelationId(notif.CorrelationId); ok {
+			resolvedSupi = supi
+			logger.ProcLog.Debugf("Resolved SUPI from correlationId: %s -> %s",
+				notif.CorrelationId, supi)
+		} else {
+			logger.ProcLog.Warnf("Unknown correlationId: %s", notif.CorrelationId)
+		}
+	}
+
 	for i := range notif.NotificationItems {
 		item := &notif.NotificationItems[i]
+		// Use resolvedSupi if item.Supi is empty
+		if item.Supi == "" && resolvedSupi != "" {
+			item.Supi = resolvedSupi
+		}
 		if err := p.processUpfNotificationItem(ctx, item); err != nil {
 			logger.ProcLog.Warnf("Failed to process UPF notification item: %v", err)
 		}
@@ -90,7 +107,7 @@ func (p *Processor) processUpfNotificationItem(ctx *nwdaf_context.NWDAFContext, 
 func (p *Processor) handleUserDataUsageMeasures(ctx *nwdaf_context.NWDAFContext, item *UpfNotificationItem) {
 	supi := item.Supi
 	if supi == "" {
-		logger.ProcLog.Warnf("USER_DATA_USAGE_MEASURES without SUPI, ueIpv4=%s", item.UeIpv4Addr)
+		logger.ProcLog.Warnf("USER_DATA_USAGE_MEASURES without SUPI or correlationId, ueIpv4=%s", item.UeIpv4Addr)
 		return
 	}
 
