@@ -24,8 +24,16 @@ class NotificationHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(content_length)
 
         try:
-            notification = json.loads(body)
-            self._print_notification(notification)
+            # Per TS 29.520: notification body is array of NnwdafEventsSubscriptionNotification
+            notification_list = json.loads(body)
+            
+            # Handle both array (spec-compliant) and single object (legacy) formats
+            if isinstance(notification_list, list):
+                for notification in notification_list:
+                    self._print_notification(notification)
+            else:
+                # Legacy single object format
+                self._print_notification(notification_list)
         except json.JSONDecodeError:
             print(f"[{self._timestamp()}] ❌ Invalid JSON received")
             print(body.decode())

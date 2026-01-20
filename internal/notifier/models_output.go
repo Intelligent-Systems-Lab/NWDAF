@@ -38,3 +38,16 @@ type NotificationOutput struct {
 	models.NnwdafEventsSubscriptionNotification                           // Embed original
 	EventNotifications                          []EventNotificationOutput `json:"eventNotifications"` // Override type
 }
+
+// NotificationListOutput represents the notification request body
+// Per TS 29.520 §5.1.2.2.4: The POST request body to notificationURI is defined as:
+//
+//	schema:
+//	  type: array
+//	  items:
+//	    $ref: '#/components/schemas/NnwdafEventsSubscriptionNotification'
+//	  minItems: 1
+//
+// NWDAF MUST send notifications as an array of NnwdafEventsSubscriptionNotification,
+// even when sending a single notification.
+type NotificationListOutput []NotificationOutput

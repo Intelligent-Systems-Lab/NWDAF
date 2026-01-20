@@ -171,7 +171,9 @@ func (s *NotificationScheduler) sendNotification() {
 	// Convert to output format (without omitempty for 0 values)
 	output := s.convertToOutput(notification)
 
-	jsonData, err := json.Marshal(output)
+	// Per TS 29.520 §5.1.2.2.4: notification body MUST be array of NnwdafEventsSubscriptionNotification
+	notificationList := NotificationListOutput{output}
+	jsonData, err := json.Marshal(notificationList)
 	if err != nil {
 		logger.NotifierLog.Errorf("Failed to marshal notification: %v", err)
 		return
