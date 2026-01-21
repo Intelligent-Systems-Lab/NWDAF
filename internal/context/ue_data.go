@@ -91,18 +91,20 @@ func (c *NWDAFContext) GetUeData(supi string) (*UeCommunicationData, bool) {
 	return nil, false
 }
 
-// GetOrCreateUeData retrieves existing data or creates new entry
+// GetOrCreateUeData retrieves existing data or creates new entry atomically
+// Uses sync.Map.LoadOrStore to prevent race conditions when multiple goroutines
+// try to create data for the same SUPI concurrently
 func (c *NWDAFContext) GetOrCreateUeData(supi string) *UeCommunicationData {
-	if data, ok := c.GetUeData(supi); ok {
-		return data
-	}
 	newData := &UeCommunicationData{
 		Supi:      supi,
 		StartTime: time.Now(),
 		Events:    make([]models.SmfEventExposureEventNotification, 0),
 	}
-	c.StoreUeData(newData)
-	return newData
+
+	// LoadOrStore returns the existing value if present, otherwise stores and returns newData
+	// This is atomic - only one goroutine's newData will be stored
+	actual, _ := c.ueDataStore.LoadOrStore(supi, newData)
+	return actual.(*UeCommunicationData)
 }
 
 // AppendEvent adds an SMF event to UE data

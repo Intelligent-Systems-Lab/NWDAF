@@ -89,15 +89,8 @@ func (p *Processor) triggerUeCommunicationCollection(
 		}
 	}
 
-	// Calculate SMF report period (slightly faster than consumer)
-	// Use 75% of consumer period to ensure data freshness
-	var smfRepPeriod int32 = 10 // Default: 10s
-	if evtReq != nil && evtReq.RepPeriod > 0 {
-		smfRepPeriod = evtReq.RepPeriod * 3 / 4 // 75%
-		if smfRepPeriod < 5 {
-			smfRepPeriod = 5 // Minimum 5 seconds
-		}
-	}
+	// Fixed SMF report period for data collection
+	var smfRepPeriod int32 = 10 // Fixed: 10s
 
 	ctx := nwdaf_context.GetSelf()
 

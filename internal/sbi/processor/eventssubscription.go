@@ -23,6 +23,12 @@ func (p *Processor) HandleCreateSubscription(
 		return nil, "", problemDetails
 	}
 
+	// Phase 1.5: Apply defaults and validate notification method
+	// Per TS 29.520: notificationMethod defaults to THRESHOLD when omitted
+	if problemDetails := p.applyAndValidateDefaults(req); problemDetails != nil {
+		return nil, "", problemDetails
+	}
+
 	// Phase 2: Collect soft failures (failEventReports)
 	failEventReports := p.collectFailEventReports(req.EventSubscriptions)
 
@@ -261,6 +267,64 @@ func (p *Processor) validateSubscriptionRequest(req *models.NnwdafEventsSubscrip
 
 	// 3. Validate evtReq (ReportingInformation)
 	return p.validateEvtReq(req.EvtReq)
+}
+
+// applyAndValidateDefaults applies default values and validates notification method
+// Per TS 29.520: notificationMethod defaults to THRESHOLD when omitted
+// Priority: evtReq fields > EventSubscription fields
+func (p *Processor) applyAndValidateDefaults(req *models.NnwdafEventsSubscription) *models.ProblemDetails {
+	// Determine effective NotifMethod (evtReq takes priority)
+	effectiveNotifMethod := ""
+	if req.EvtReq != nil && req.EvtReq.NotifMethod != "" {
+		effectiveNotifMethod = string(req.EvtReq.NotifMethod)
+	}
+
+	// If no NotifMethod specified, defaults to THRESHOLD (per TS 29.520)
+	if effectiveNotifMethod == "" {
+		// TODO: Implement THRESHOLD notification method
+		return &models.ProblemDetails{
+			Status: http.StatusNotImplemented,
+			Cause:  "THRESHOLD_NOT_IMPLEMENTED",
+			Detail: "notificationMethod defaults to THRESHOLD which is not yet implemented. Please specify evtReq.notifMethod as PERIODIC.",
+		}
+	}
+
+	// Validate NotifMethod
+	switch effectiveNotifMethod {
+	case string(models.NwdafEventsSubscriptionNotificationMethod_PERIODIC):
+		// PERIODIC requires repPeriod
+		effectiveRepPeriod := int32(0)
+		if req.EvtReq != nil && req.EvtReq.RepPeriod > 0 {
+			effectiveRepPeriod = req.EvtReq.RepPeriod
+		}
+		if effectiveRepPeriod <= 0 {
+			return &models.ProblemDetails{
+				Status: http.StatusBadRequest,
+				Cause:  "INVALID_REQUEST",
+				Detail: "PERIODIC notificationMethod requires evtReq.repPeriod > 0",
+			}
+		}
+
+	case string(models.NwdafEventsSubscriptionNotificationMethod_THRESHOLD):
+		// TODO: Implement THRESHOLD notification method
+		return &models.ProblemDetails{
+			Status: http.StatusNotImplemented,
+			Cause:  "THRESHOLD_NOT_IMPLEMENTED",
+			Detail: "THRESHOLD notificationMethod is not yet implemented",
+		}
+
+	default:
+		return &models.ProblemDetails{
+			Status: http.StatusBadRequest,
+			Cause:  "UNSUPPORTED_NOTIF_METHOD",
+			Detail: fmt.Sprintf("Unsupported notificationMethod: %s", effectiveNotifMethod),
+		}
+	}
+
+	// MaxReportNbr: 0 means unlimited (no validation needed)
+	// MonDur: nil means no expiry (no validation needed)
+
+	return nil
 }
 
 // validateBasicStructure validates required fields in the subscription request

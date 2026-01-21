@@ -54,6 +54,7 @@ go test ./internal/sbi/consumer/... -v
 | `TestValidateEvtReq` | evtReq validation (PERIODIC/repPeriod/maxReportNbr) |
 | `TestCollectFailEventReports` | failEventReports collection |
 | `TestValidateEventTargetPeriod` | startTs/endTs validation |
+| `TestApplyAndValidateDefaults` | Default value handling (THRESHOLD/PERIODIC validation) |
 
 #### SMF Notification Handling (`smf_notify_test.go`)
 
@@ -436,4 +437,6 @@ test/
 | 400 | `INVALID_REQUEST` | Request format error |
 | 400 | `ALL_EVENTS_UNSUPPORTED` | All events unsupported |
 | 400 | `BOTH_STAT_PRED_NOT_ALLOWED` | Statistics + prediction not allowed |
+| 400 | `UNSUPPORTED_NOTIF_METHOD` | Unknown notificationMethod |
 | 404 | `SUBSCRIPTION_NOT_FOUND` | Subscription does not exist |
+| 501 | `THRESHOLD_NOT_IMPLEMENTED` | THRESHOLD notifMethod not yet implemented |

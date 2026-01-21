@@ -622,3 +622,111 @@ func TestValidateEventTargetPeriod(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyAndValidateDefaults(t *testing.T) {
+	p := &Processor{}
+
+	tests := []struct {
+		name       string
+		req        *models.NnwdafEventsSubscription
+		wantErr    bool
+		wantStatus int
+		errCause   string
+	}{
+		{
+			name: "No evtReq - defaults to THRESHOLD - 501",
+			req: &models.NnwdafEventsSubscription{
+				EventSubscriptions: []models.NwdafEventsSubscriptionEventSubscription{
+					{Event: models.NwdafEvent_UE_COMMUNICATION},
+				},
+			},
+			wantErr:    true,
+			wantStatus: 501,
+			errCause:   "THRESHOLD_NOT_IMPLEMENTED",
+		},
+		{
+			name: "Empty NotifMethod - defaults to THRESHOLD - 501",
+			req: &models.NnwdafEventsSubscription{
+				EventSubscriptions: []models.NwdafEventsSubscriptionEventSubscription{
+					{Event: models.NwdafEvent_UE_COMMUNICATION},
+				},
+				EvtReq: &models.ReportingInformation{},
+			},
+			wantErr:    true,
+			wantStatus: 501,
+			errCause:   "THRESHOLD_NOT_IMPLEMENTED",
+		},
+		{
+			name: "THRESHOLD explicitly specified - 501",
+			req: &models.NnwdafEventsSubscription{
+				EventSubscriptions: []models.NwdafEventsSubscriptionEventSubscription{
+					{Event: models.NwdafEvent_UE_COMMUNICATION},
+				},
+				EvtReq: &models.ReportingInformation{
+					NotifMethod: "THRESHOLD",
+				},
+			},
+			wantErr:    true,
+			wantStatus: 501,
+			errCause:   "THRESHOLD_NOT_IMPLEMENTED",
+		},
+		{
+			name: "PERIODIC without repPeriod - 400",
+			req: &models.NnwdafEventsSubscription{
+				EventSubscriptions: []models.NwdafEventsSubscriptionEventSubscription{
+					{Event: models.NwdafEvent_UE_COMMUNICATION},
+				},
+				EvtReq: &models.ReportingInformation{
+					NotifMethod: models.SmfEventExposureNotificationMethod_PERIODIC,
+				},
+			},
+			wantErr:    true,
+			wantStatus: 400,
+			errCause:   "INVALID_REQUEST",
+		},
+		{
+			name: "PERIODIC with repPeriod - valid",
+			req: &models.NnwdafEventsSubscription{
+				EventSubscriptions: []models.NwdafEventsSubscriptionEventSubscription{
+					{Event: models.NwdafEvent_UE_COMMUNICATION},
+				},
+				EvtReq: &models.ReportingInformation{
+					NotifMethod: models.SmfEventExposureNotificationMethod_PERIODIC,
+					RepPeriod:   60,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Unsupported notifMethod - 400",
+			req: &models.NnwdafEventsSubscription{
+				EventSubscriptions: []models.NwdafEventsSubscriptionEventSubscription{
+					{Event: models.NwdafEvent_UE_COMMUNICATION},
+				},
+				EvtReq: &models.ReportingInformation{
+					NotifMethod: "UNKNOWN_METHOD",
+				},
+			},
+			wantErr:    true,
+			wantStatus: 400,
+			errCause:   "UNSUPPORTED_NOTIF_METHOD",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := p.applyAndValidateDefaults(tt.req)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("applyAndValidateDefaults() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil {
+				if tt.wantStatus != 0 && int(err.Status) != tt.wantStatus {
+					t.Errorf("applyAndValidateDefaults() status = %v, want %v", err.Status, tt.wantStatus)
+				}
+				if tt.errCause != "" && err.Cause != tt.errCause {
+					t.Errorf("applyAndValidateDefaults() cause = %v, want %v", err.Cause, tt.errCause)
+				}
+			}
+		})
+	}
+}
