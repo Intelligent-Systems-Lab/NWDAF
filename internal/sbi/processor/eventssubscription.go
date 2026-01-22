@@ -245,6 +245,9 @@ func (p *Processor) HandleDeleteSubscription(subscriptionId string) *models.Prob
 		subscription.Scheduler.Stop()
 	}
 
+	// Cleanup SMF subscriptions and data collection resources
+	p.cleanupDataCollection(subscriptionId)
+
 	ctx.DeleteSubscription(subscriptionId)
 	logger.ProcLog.Infof("Subscription deleted: %s", subscriptionId)
 	return nil
@@ -744,4 +747,51 @@ func (p *Processor) isCommunRelated(eventSub *models.NwdafEventsSubscriptionEven
 	}
 
 	return false
+}
+
+// cleanupDataCollection removes SMF subscriptions when reference count reaches 0
+// Per free5gc pattern: keep related processor methods in same file
+// This method is called when a NWDAF subscription is deleted
+func (p *Processor) cleanupDataCollection(subscriptionId string) {
+	ctx := nwdaf_context.GetSelf()
+	consumer := p.nwdaf.Consumer()
+
+	// Get all resources tracked for this NWDAF subscription
+	resources := ctx.GetNwdafSubResources(subscriptionId)
+
+	if len(resources) == 0 {
+		logger.ProcLog.Debugf("No resources to cleanup for subscription: %s", subscriptionId)
+		return
+	}
+
+	// Release each SMF resource
+	for _, res := range resources {
+		shouldDelete, smfResource := ctx.ReleaseSmfResource(
+			res.SmfEndpoint,
+			res.Supi,
+			subscriptionId,
+		)
+
+		if shouldDelete && smfResource != nil {
+			// Last reference - delete notification routing
+			ctx.DeleteCorrelationToSupi(res.CorrelationId)
+
+			// Unsubscribe from SMF
+			if consumer != nil {
+				_, smfSubId, _ := smfResource.GetInfo()
+				err := consumer.UnsubscribeFromSmf(res.SmfEndpoint, smfSubId)
+				if err != nil {
+					logger.ProcLog.Errorf("Failed to unsubscribe from SMF: %v", err)
+				} else {
+					logger.ProcLog.Infof("Unsubscribed from SMF: endpoint=%s, subId=%s",
+						res.SmfEndpoint, smfSubId)
+				}
+			}
+		}
+	}
+
+	// Delete cleanup tracking for this subscription
+	ctx.DeleteNwdafSubResources(subscriptionId)
+
+	logger.ProcLog.Infof("Data collection cleanup completed for subscription: %s", subscriptionId)
 }

@@ -8,52 +8,6 @@ import (
 	"github.com/free5gc/openapi/models"
 )
 
-// TestSmfSubscriptionCRUD tests SMF subscription storage operations
-func TestSmfSubscriptionCRUD(t *testing.T) {
-	Init()
-	ctx := GetSelf()
-
-	// Clear any existing data
-	ctx.ClearSmfSubscriptions()
-
-	// Test Store
-	sub := &SmfSubscription{
-		SubscriptionId: "smf-sub-001",
-		SmfEndpoint:    "http://localhost:8081",
-		TargetSupi:     "imsi-208930000000003",
-		NotifId:        "notif-001",
-		Events:         []string{"PDU_SES_EST", "PDU_SES_REL"},
-		CreatedAt:      time.Now(),
-	}
-
-	ctx.StoreSmfSubscription(sub)
-
-	// Test Get
-	retrieved, ok := ctx.GetSmfSubscription("smf-sub-001")
-	if !ok {
-		t.Error("GetSmfSubscription() returned false for existing subscription")
-	}
-	if retrieved.SmfEndpoint != sub.SmfEndpoint {
-		t.Errorf("SmfEndpoint = %v, want %v", retrieved.SmfEndpoint, sub.SmfEndpoint)
-	}
-	if retrieved.TargetSupi != sub.TargetSupi {
-		t.Errorf("TargetSupi = %v, want %v", retrieved.TargetSupi, sub.TargetSupi)
-	}
-
-	// Test Get non-existent
-	_, ok = ctx.GetSmfSubscription("non-existent")
-	if ok {
-		t.Error("GetSmfSubscription() should return false for non-existent subscription")
-	}
-
-	// Test Delete
-	ctx.DeleteSmfSubscription("smf-sub-001")
-	_, ok = ctx.GetSmfSubscription("smf-sub-001")
-	if ok {
-		t.Error("GetSmfSubscription() should return false after deletion")
-	}
-}
-
 // TestUeDataCRUD tests UE communication data storage operations
 func TestUeDataCRUD(t *testing.T) {
 	Init()

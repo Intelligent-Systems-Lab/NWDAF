@@ -97,30 +97,53 @@ func (p *Processor) triggerUeCommunicationCollection(
 	// Subscribe to each SMF endpoint for each target SUPI
 	for _, smfEndpoint := range smfConfig.Endpoints {
 		for _, supi := range supis {
-			// Generate unique correlationId for this SUPI (TS 29.564)
-			correlationId := uuid.New().String()
+			// Try to get or create SMF resource (with reference counting)
+			resource, isNew := ctx.GetOrCreateSmfResource(smfEndpoint, supi, subscriptionId)
 
-			subId, err := consumer.SubscribeForUeCommunication(
-				smfEndpoint, supi, smfNotifUri, upfNotifUri, smfRepPeriod, correlationId,
-			)
-			if err != nil {
-				logger.ProcLog.Errorf("Failed to subscribe SMF for SUPI %s: %v", supi, err)
-				continue
+			var correlationId string
+
+			if !isNew {
+				// Resource exists - reuse existing SMF subscription
+				existingCorrId, _, refCount := resource.GetInfo()
+				correlationId = existingCorrId
+				logger.ProcLog.Infof("Reusing SMF subscription for %s (refCount=%d)",
+					supi, refCount)
+				// Note: correlationToSupi already exists, no need to store again
+			} else {
+				// New resource - create SMF subscription
+				correlationId = uuid.New().String()
+
+				subId, err := consumer.SubscribeForUeCommunication(
+					smfEndpoint, supi, smfNotifUri, upfNotifUri, smfRepPeriod, correlationId,
+				)
+
+				if err != nil {
+					// Release the resource if subscription failed
+					ctx.ReleaseSmfResource(smfEndpoint, supi, subscriptionId)
+					logger.ProcLog.Errorf("Failed to subscribe SMF for SUPI %s: %v", supi, err)
+					continue
+				}
+
+				// Update resource with SMF subscription details
+				resource.Lock()
+				resource.SmfSubId = subId
+				resource.CorrelationId = correlationId
+				resource.Unlock()
+
+				// Store notification routing (only for new SMF subscriptions)
+				ctx.StoreCorrelationToSupi(correlationId, supi)
+
+				logger.ProcLog.Infof("SMF subscription created: supi=%s, subId=%s, corrId=%s",
+					supi, subId, correlationId)
 			}
 
-			// Store correlationId -> SUPI mapping for UPF notification resolution
-			mapping := &nwdaf_context.CorrelationIdMapping{
-				CorrelationId: correlationId,
-				Supi:          supi,
-				NwdafSubId:    subscriptionId,
-				SmfSubId:      subId,
+			// Store cleanup tracking (for every NWDAF subscription)
+			ctx.AddNwdafSubResource(subscriptionId, nwdaf_context.NwdafSubResource{
 				SmfEndpoint:   smfEndpoint,
+				Supi:          supi,
+				CorrelationId: correlationId,
 				CreatedAt:     time.Now(),
-			}
-			ctx.StoreCorrelationMapping(mapping)
-
-			logger.ProcLog.Infof("SMF subscription created: supi=%s, subId=%s, corrId=%s",
-				supi, subId, correlationId)
+			})
 		}
 	}
 }

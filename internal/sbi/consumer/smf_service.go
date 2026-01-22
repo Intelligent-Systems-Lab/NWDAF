@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 
-	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -80,8 +79,8 @@ func (s *NsmfService) SubscribeToSmf(
 		subscriptionId = notifId
 	}
 
-	// Store subscription in context
-	s.storeSmfSubscription(subscriptionId, smfEndpoint, supi, notifId, events)
+	// NOTE: Subscription tracking now handled by SmfSubscriptionResource
+	// in data_collection.go via GetOrCreateSmfResource()
 
 	consumerLog.Infof("SMF subscription created: id=%s", subscriptionId)
 	return subscriptionId, nil
@@ -112,9 +111,8 @@ func (s *NsmfService) UnsubscribeFromSmf(
 		return fmt.Errorf("SMF unsubscription failed: status=%d, body=%s", resp.StatusCode, string(body))
 	}
 
-	// Remove from context
-	ctx := s.consumer.Context()
-	ctx.DeleteSmfSubscription(subscriptionId)
+	// NOTE: Resource cleanup handled by cleanupDataCollection()
+	// in eventssubscription.go via ReleaseSmfResource()
 
 	consumerLog.Infof("SMF subscription deleted: id=%s", subscriptionId)
 	return nil
@@ -175,8 +173,7 @@ func (s *NsmfService) SubscribeForUeCommunication(
 		subscriptionId = notifId
 	}
 
-	// Store subscription
-	s.storeSmfSubscription(subscriptionId, smfEndpoint, supi, notifId, []string{string(SmfEvent_UPF_EVENT)})
+	// NOTE: Subscription tracking now handled by SmfSubscriptionResource
 
 	consumerLog.Infof("SMF UE Communication subscription created: id=%s, corrId=%s", subscriptionId, correlationId)
 	return subscriptionId, nil
@@ -230,20 +227,6 @@ func (s *NsmfService) parseSubscriptionId(resp *http.Response) string {
 	_ = json.NewDecoder(resp.Body).Decode(&response)
 
 	return response.SubId
-}
-
-// storeSmfSubscription stores subscription info in context
-func (s *NsmfService) storeSmfSubscription(subscriptionId, smfEndpoint, supi, notifId string, events []string) {
-	ctx := s.consumer.Context()
-	sub := &nwdaf_context.SmfSubscription{
-		SubscriptionId: subscriptionId,
-		SmfEndpoint:    smfEndpoint,
-		TargetSupi:     supi,
-		NotifId:        notifId,
-		Events:         events,
-		CreatedAt:      time.Now(),
-	}
-	ctx.StoreSmfSubscription(sub)
 }
 
 // HTTPClient returns the underlying HTTP client for testing

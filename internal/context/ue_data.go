@@ -1,20 +1,69 @@
 package context
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
+	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/openapi/models"
 )
 
-// SmfSubscription represents a subscription to SMF event exposure
-type SmfSubscription struct {
-	SubscriptionId string
-	SmfEndpoint    string
-	TargetSupi     string
-	NotifId        string
-	Events         []string
-	CreatedAt      time.Time
+// SmfSubscriptionResource manages shared SMF subscriptions with reference counting
+// Per free5gc pattern: group related structures and methods in same file
+// This enables multiple NWDAF subscriptions to share a single SMF subscription
+type SmfSubscriptionResource struct {
+	mu sync.Mutex // Protects concurrent access to this struct
+
+	// Identify the SMF subscription
+	SmfEndpoint   string
+	Supi          string
+	SmfSubId      string // SMF subscription ID
+	CorrelationId string // Primary correlationId for UPF notifications
+
+	// Reference tracking
+	RefCount    int32           // Number of NWDAF subscriptions using this resource
+	NwdafSubIds map[string]bool // Set of NWDAF subscription IDs using this resource
+
+	// Metadata
+	CreatedAt  time.Time
+	LastUsedAt time.Time
+}
+
+// Lock acquires the mutex for thread-safe access
+func (r *SmfSubscriptionResource) Lock() { r.mu.Lock() }
+
+// Unlock releases the mutex
+func (r *SmfSubscriptionResource) Unlock() { r.mu.Unlock() }
+
+// GetInfo returns a copy of the resource info in a thread-safe manner
+// Returns (correlationId, smfSubId, refCount)
+func (r *SmfSubscriptionResource) GetInfo() (string, string, int32) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.CorrelationId, r.SmfSubId, r.RefCount
+}
+
+// ValidateInvariant checks that RefCount equals len(NwdafSubIds)
+// Returns error if the invariant is violated
+// This is a defensive check to catch bugs in reference counting logic
+func (r *SmfSubscriptionResource) ValidateInvariant() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.validateInvariantLocked()
+}
+
+// validateInvariantLocked is the internal version that assumes lock is already held
+// Use this when calling from a method that already holds the lock
+func (r *SmfSubscriptionResource) validateInvariantLocked() error {
+	expectedCount := int32(len(r.NwdafSubIds))
+	if r.RefCount != expectedCount {
+		return fmt.Errorf(
+			"INVARIANT VIOLATION: RefCount=%d but len(NwdafSubIds)=%d (resource=%s:%s)",
+			r.RefCount, expectedCount, r.SmfEndpoint, r.Supi,
+		)
+	}
+	return nil
 }
 
 // UeCommunicationData stores collected communication data for a UE
@@ -55,26 +104,6 @@ func (d *UeCommunicationData) Lock() { d.mu.Lock() }
 
 // Unlock releases the mutex
 func (d *UeCommunicationData) Unlock() { d.mu.Unlock() }
-
-// --- SMF Subscription Management ---
-
-// StoreSmfSubscription stores an SMF subscription
-func (c *NWDAFContext) StoreSmfSubscription(sub *SmfSubscription) {
-	c.smfSubscriptions.Store(sub.SubscriptionId, sub)
-}
-
-// GetSmfSubscription retrieves an SMF subscription by ID
-func (c *NWDAFContext) GetSmfSubscription(subscriptionId string) (*SmfSubscription, bool) {
-	if value, ok := c.smfSubscriptions.Load(subscriptionId); ok {
-		return value.(*SmfSubscription), true
-	}
-	return nil, false
-}
-
-// DeleteSmfSubscription removes an SMF subscription
-func (c *NWDAFContext) DeleteSmfSubscription(subscriptionId string) {
-	c.smfSubscriptions.Delete(subscriptionId)
-}
 
 // --- UE Data Management ---
 
@@ -136,10 +165,138 @@ func (c *NWDAFContext) ClearUeData() {
 	})
 }
 
-// ClearSmfSubscriptions removes all SMF subscriptions (for testing or reset)
-func (c *NWDAFContext) ClearSmfSubscriptions() {
-	c.smfSubscriptions.Range(func(key, value interface{}) bool {
-		c.smfSubscriptions.Delete(key)
+// --- SMF Resource Management (Reference Counting) ---
+
+// BuildResourceKey creates a composite key for SMF resource lookup
+// Key format: "smfEndpoint:supi"
+func BuildResourceKey(smfEndpoint, supi string) string {
+	return smfEndpoint + ":" + supi
+}
+
+// GetOrCreateSmfResource atomically gets or creates an SMF subscription resource
+// Returns (resource, isNew) where isNew indicates if the resource was just created
+// This method is thread-safe and handles concurrent access correctly
+// Note: If nwdafSubId already exists in the resource, no changes are made (idempotent)
+func (c *NWDAFContext) GetOrCreateSmfResource(
+	smfEndpoint, supi, nwdafSubId string,
+) (*SmfSubscriptionResource, bool) {
+	key := BuildResourceKey(smfEndpoint, supi)
+
+	// Try to load existing resource
+	if val, ok := c.smfResources.Load(key); ok {
+		resource := val.(*SmfSubscriptionResource)
+		resource.addReference(nwdafSubId, key)
+		return resource, false // existing resource
+	}
+
+	// Create new resource
+	newResource := &SmfSubscriptionResource{
+		SmfEndpoint: smfEndpoint,
+		Supi:        supi,
+		RefCount:    1,
+		NwdafSubIds: map[string]bool{nwdafSubId: true},
+		CreatedAt:   time.Now(),
+		LastUsedAt:  time.Now(),
+	}
+
+	// Atomic store - only one goroutine will succeed
+	actual, loaded := c.smfResources.LoadOrStore(key, newResource)
+
+	if loaded {
+		// Another goroutine created it first, use that one
+		resource := actual.(*SmfSubscriptionResource)
+		resource.addReference(nwdafSubId, key)
+		return resource, false
+	}
+
+	logger.CtxLog.Infof("Created new SMF resource: %s", key)
+	return newResource, true // new resource
+}
+
+// addReference increments the reference count if nwdafSubId is new
+// This method is idempotent - calling with same nwdafSubId multiple times has no effect
+func (r *SmfSubscriptionResource) addReference(nwdafSubId, key string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Idempotency check: only add if not already present
+	if r.NwdafSubIds[nwdafSubId] {
+		logger.CtxLog.Debugf("nwdafSubId already exists, skipping: %s (refCount=%d)", key, r.RefCount)
+		return
+	}
+
+	// Add new reference
+	r.RefCount++
+	r.NwdafSubIds[nwdafSubId] = true
+	r.LastUsedAt = time.Now()
+
+	logger.CtxLog.Debugf("Added reference to SMF resource: %s (refCount=%d)", key, r.RefCount)
+
+	// Validate invariant
+	if err := r.validateInvariantLocked(); err != nil {
+		logger.CtxLog.Error(err.Error())
+	}
+}
+
+// ReleaseSmfResource decrements reference count for an SMF resource
+// Returns (shouldDelete, resource) where shouldDelete indicates if refCount reached 0
+// If shouldDelete is true, the resource has been removed from the map
+func (c *NWDAFContext) ReleaseSmfResource(
+	smfEndpoint, supi, nwdafSubId string,
+) (shouldDelete bool, resource *SmfSubscriptionResource) {
+	key := BuildResourceKey(smfEndpoint, supi)
+
+	val, ok := c.smfResources.Load(key)
+	if !ok {
+		logger.CtxLog.Warnf("SMF resource not found for release: %s", key)
+		return false, nil
+	}
+
+	resource = val.(*SmfSubscriptionResource)
+	resource.mu.Lock()
+	defer resource.mu.Unlock()
+
+	// Remove NWDAF subscription reference
+	delete(resource.NwdafSubIds, nwdafSubId)
+	resource.RefCount--
+
+	logger.CtxLog.Debugf("Released SMF resource: %s (refCount=%d)", key, resource.RefCount)
+
+	if resource.RefCount <= 0 {
+		// Defensive check: warn if NwdafSubIds not empty
+		if len(resource.NwdafSubIds) != 0 {
+			logger.CtxLog.Warnf(
+				"RefCount=0 but NwdafSubIds not empty: %v (resource=%s:%s)",
+				resource.NwdafSubIds, resource.SmfEndpoint, resource.Supi,
+			)
+		}
+
+		c.smfResources.Delete(key)
+		logger.CtxLog.Infof("Deleted SMF resource (refCount=0): %s", key)
+		return true, resource
+	}
+
+	// Validate invariant (use locked version - already holding mutex)
+	if err := resource.validateInvariantLocked(); err != nil {
+		logger.CtxLog.Error(err.Error())
+	}
+
+	return false, resource
+}
+
+// GetSmfResource retrieves an SMF resource by composite key
+func (c *NWDAFContext) GetSmfResource(smfEndpoint, supi string) (*SmfSubscriptionResource, bool) {
+	key := BuildResourceKey(smfEndpoint, supi)
+	if val, ok := c.smfResources.Load(key); ok {
+		return val.(*SmfSubscriptionResource), true
+	}
+	return nil, false
+}
+
+// ClearSmfResources removes all SMF resources (for testing or reset)
+func (c *NWDAFContext) ClearSmfResources() {
+	c.smfResources.Range(func(key, value interface{}) bool {
+		c.smfResources.Delete(key)
 		return true
 	})
 }
