@@ -8,16 +8,16 @@ const (
 )
 
 // Extended NsmfEventExposure with UPF_EVENT support
+// Per TS 29.508: notifId is used as correlation ID for notification routing
 type ExtendedNsmfEventExposure struct {
-	Supi                string                      `json:"supi,omitempty"`
-	NotifUri            string                      `json:"notifUri"`
-	NotifId             string                      `json:"notifId"`
-	NotifyCorrelationId string                      `json:"notifyCorrelationId"` // Required per TS 29.564
-	SubId               string                      `json:"subId,omitempty"`
-	EventSubs           []ExtendedEventSubscription `json:"eventSubs"`
-	NotifMethod         string                      `json:"notifMethod,omitempty"`  // PERIODIC, ONE_TIME, etc.
-	RepPeriod           int32                       `json:"repPeriod,omitempty"`    // Report period in seconds
-	MaxReportNbr        int32                       `json:"maxReportNbr,omitempty"` // Maximum reports
+	Supi         string                      `json:"supi,omitempty"`
+	NotifUri     string                      `json:"notifUri"`
+	NotifId      string                      `json:"notifId"` // Correlation ID per TS 29.508
+	SubId        string                      `json:"subId,omitempty"`
+	EventSubs    []ExtendedEventSubscription `json:"eventSubs"`
+	NotifMethod  string                      `json:"notifMethod,omitempty"`  // PERIODIC, ONE_TIME, etc.
+	RepPeriod    int32                       `json:"repPeriod,omitempty"`    // Report period in seconds
+	MaxReportNbr int32                       `json:"maxReportNbr,omitempty"` // Maximum reports
 }
 
 // ExtendedEventSubscription supports both standard SMF events and UPF_EVENT

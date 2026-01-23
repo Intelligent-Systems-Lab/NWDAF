@@ -133,8 +133,6 @@ func (s *NsmfService) SubscribeForUeCommunication(
 	consumerLog.Infof("Subscribing for UE Communication: endpoint=%s, supi=%s, repPeriod=%ds, corrId=%s",
 		smfEndpoint, supi, repPeriod, correlationId)
 
-	notifId := uuid.New().String()
-
 	// Build subscription with UPF_EVENT for traffic volume data
 	eventSubs := []ExtendedEventSubscription{
 		{
@@ -154,14 +152,15 @@ func (s *NsmfService) SubscribeForUeCommunication(
 		},
 	}
 
+	// Use correlationId as NotifId per TS 29.508
+	// SMF will return this ID in notifications for correlation
 	request := ExtendedNsmfEventExposure{
-		Supi:                supi,
-		NotifUri:            smfNotifUri,
-		NotifId:             notifId,
-		NotifyCorrelationId: correlationId, // Required per TS 29.564
-		EventSubs:           eventSubs,
-		NotifMethod:         "PERIODIC",
-		RepPeriod:           repPeriod,
+		Supi:        supi,
+		NotifUri:    smfNotifUri,
+		NotifId:     correlationId, // Use as correlation ID
+		EventSubs:   eventSubs,
+		NotifMethod: "PERIODIC",
+		RepPeriod:   repPeriod,
 	}
 
 	subscriptionId, err := s.sendRequest(smfEndpoint, &request)
@@ -170,12 +169,12 @@ func (s *NsmfService) SubscribeForUeCommunication(
 	}
 
 	if subscriptionId == "" {
-		subscriptionId = notifId
+		subscriptionId = correlationId
 	}
 
 	// NOTE: Subscription tracking now handled by SmfSubscriptionResource
 
-	consumerLog.Infof("SMF UE Communication subscription created: id=%s, corrId=%s", subscriptionId, correlationId)
+	consumerLog.Infof("SMF UE Communication subscription created: id=%s, notifId=%s", subscriptionId, correlationId)
 	return subscriptionId, nil
 }
 

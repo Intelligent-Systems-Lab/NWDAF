@@ -64,7 +64,8 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
         upf_notify_uri = None
         supi = request.get("supi", "unknown")
         rep_period = request.get("repPeriod", 10)  # Default 10s if not specified
-        notify_correlation_id = request.get("notifyCorrelationId", "")  # TS 29.564 required
+        # Per TS 29.508: notifId is used as correlation ID (notifyCorrelationId doesn't exist in SMF)
+        notify_correlation_id = request.get("notifId", "")
         
         for event_sub in request.get("eventSubs", []):
             if event_sub.get("event") == "UPF_EVENT":
@@ -85,7 +86,8 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
         self._log(f"   SUPI: {supi}")
         self._log(f"   UPF notify URI: {upf_notify_uri}")
         self._log(f"   Report Period: {rep_period}s")
-        self._log(f"   CorrelationId: {notify_correlation_id}")
+        self._log(f"   NotifId (correlationId): {notify_correlation_id}")
+
         
         # Start UPF notification thread if URI provided
         if upf_notify_uri:
