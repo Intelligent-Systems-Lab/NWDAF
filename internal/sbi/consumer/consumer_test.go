@@ -63,9 +63,8 @@ func TestEmbeddedMethodPromotion(t *testing.T) {
 
 	// Verify the method exists and is callable (will fail due to no SMF, but that's ok)
 	// The point is to verify the method is promoted
-	var _ func(string, string, []string, string) (string, error) = c.SubscribeToSmf
+	var _ func(string, SmfSubscriptionOptions) (string, error) = c.SubscribeToSmf
 	var _ func(string, string) error = c.UnsubscribeFromSmf
-	var _ func(string, string, string, string, int32, string) (string, error) = c.SubscribeForUeCommunication
 }
 
 // TestExtendedEventSubscription tests UPF event subscription model

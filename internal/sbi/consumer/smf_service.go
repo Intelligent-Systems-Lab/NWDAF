@@ -8,10 +8,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
-
-	"github.com/free5gc/openapi/models"
 )
 
 const (
@@ -44,30 +40,32 @@ func NewNsmfService(c *Consumer) *NsmfService {
 	}
 }
 
-// SubscribeToSmf creates a basic event exposure subscription to SMF
+// SmfSubscriptionOptions configures SMF event exposure subscription
+type SmfSubscriptionOptions struct {
+	Supi        string
+	NotifUri    string
+	NotifId     string // Correlation ID for notification routing
+	EventSubs   []ExtendedEventSubscription
+	NotifMethod string // "PERIODIC" | "ONE_TIME"
+	RepPeriod   int32  // Reporting period in seconds (for PERIODIC)
+}
+
+// SubscribeToSmf creates an event exposure subscription to SMF
+// Uses SmfSubscriptionOptions for flexible configuration of different event types
 func (s *NsmfService) SubscribeToSmf(
 	smfEndpoint string,
-	supi string,
-	events []string,
-	notifUri string,
+	opts SmfSubscriptionOptions,
 ) (string, error) {
-	consumerLog.Infof("Subscribing to SMF: endpoint=%s, supi=%s", smfEndpoint, supi)
+	consumerLog.Infof("Subscribing to SMF: endpoint=%s, supi=%s, notifId=%s",
+		smfEndpoint, opts.Supi, opts.NotifId)
 
-	notifId := uuid.New().String()
-
-	// Build subscription request
-	eventSubs := make([]models.SmfEventExposureEventSubscription, 0, len(events))
-	for _, event := range events {
-		eventSubs = append(eventSubs, models.SmfEventExposureEventSubscription{
-			Event: models.SmfEvent(event),
-		})
-	}
-
-	request := models.NsmfEventExposure{
-		Supi:      supi,
-		NotifUri:  notifUri,
-		NotifId:   notifId,
-		EventSubs: eventSubs,
+	request := ExtendedNsmfEventExposure{
+		Supi:        opts.Supi,
+		NotifUri:    opts.NotifUri,
+		NotifId:     opts.NotifId,
+		EventSubs:   opts.EventSubs,
+		NotifMethod: opts.NotifMethod,
+		RepPeriod:   opts.RepPeriod,
 	}
 
 	subscriptionId, err := s.sendRequest(smfEndpoint, &request)
@@ -76,14 +74,40 @@ func (s *NsmfService) SubscribeToSmf(
 	}
 
 	if subscriptionId == "" {
-		subscriptionId = notifId
+		subscriptionId = opts.NotifId
 	}
-
-	// NOTE: Subscription tracking now handled by SmfSubscriptionResource
-	// in data_collection.go via GetOrCreateSmfResource()
 
 	consumerLog.Infof("SMF subscription created: id=%s", subscriptionId)
 	return subscriptionId, nil
+}
+
+// BuildUpfEventSubs constructs ExtendedEventSubscription for UPF_EVENT
+// upfNotifUri: notification URI for UPF events
+// volume: include VOLUME_MEASUREMENT
+// throughput: include THROUGHPUT_MEASUREMENT
+func BuildUpfEventSubs(upfNotifUri string, volume, throughput bool) []ExtendedEventSubscription {
+	measureTypes := []MeasurementType{}
+	if volume {
+		measureTypes = append(measureTypes, MeasurementType_VOLUME_MEASUREMENT)
+	}
+	if throughput {
+		measureTypes = append(measureTypes, MeasurementType_THROUGHPUT_MEASUREMENT)
+	}
+
+	return []ExtendedEventSubscription{
+		{
+			Event: SmfEvent_UPF_EVENT,
+			UpfEvents: []UpfEvent{
+				{
+					Type:                     UpfEventType_USER_DATA_USAGE_MEASURES,
+					MeasurementTypes:         measureTypes,
+					GranularityOfMeasurement: Granularity_PER_SESSION,
+				},
+			},
+			BundlingAllowed:       true,
+			BundledEventNotifyUri: upfNotifUri,
+		},
+	}
 }
 
 // UnsubscribeFromSmf deletes an event exposure subscription from SMF
@@ -116,66 +140,6 @@ func (s *NsmfService) UnsubscribeFromSmf(
 
 	consumerLog.Infof("SMF subscription deleted: id=%s", subscriptionId)
 	return nil
-}
-
-// SubscribeForUeCommunication subscribes to SMF for all UE communication data
-// Combines UPF_EVENT for traffic volume measurements
-// repPeriod: reporting period in seconds (for SMF to send UPF notifications)
-// correlationId: unique ID to map UPF notifications back to the target SUPI (TS 29.564)
-func (s *NsmfService) SubscribeForUeCommunication(
-	smfEndpoint string,
-	supi string,
-	smfNotifUri string,
-	upfNotifUri string,
-	repPeriod int32,
-	correlationId string,
-) (string, error) {
-	consumerLog.Infof("Subscribing for UE Communication: endpoint=%s, supi=%s, repPeriod=%ds, corrId=%s",
-		smfEndpoint, supi, repPeriod, correlationId)
-
-	// Build subscription with UPF_EVENT for traffic volume data
-	eventSubs := []ExtendedEventSubscription{
-		{
-			Event: SmfEvent_UPF_EVENT,
-			UpfEvents: []UpfEvent{
-				{
-					Type: UpfEventType_USER_DATA_USAGE_MEASURES,
-					MeasurementTypes: []MeasurementType{
-						MeasurementType_VOLUME_MEASUREMENT,
-						MeasurementType_THROUGHPUT_MEASUREMENT,
-					},
-					GranularityOfMeasurement: Granularity_PER_SESSION,
-				},
-			},
-			BundlingAllowed:       true,
-			BundledEventNotifyUri: upfNotifUri,
-		},
-	}
-
-	// Use correlationId as NotifId per TS 29.508
-	// SMF will return this ID in notifications for correlation
-	request := ExtendedNsmfEventExposure{
-		Supi:        supi,
-		NotifUri:    smfNotifUri,
-		NotifId:     correlationId, // Use as correlation ID
-		EventSubs:   eventSubs,
-		NotifMethod: "PERIODIC",
-		RepPeriod:   repPeriod,
-	}
-
-	subscriptionId, err := s.sendRequest(smfEndpoint, &request)
-	if err != nil {
-		return "", err
-	}
-
-	if subscriptionId == "" {
-		subscriptionId = correlationId
-	}
-
-	// NOTE: Subscription tracking now handled by SmfSubscriptionResource
-
-	consumerLog.Infof("SMF UE Communication subscription created: id=%s, notifId=%s", subscriptionId, correlationId)
-	return subscriptionId, nil
 }
 
 // sendRequest sends a POST subscription request to SMF

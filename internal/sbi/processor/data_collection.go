@@ -7,6 +7,7 @@ import (
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
+	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
@@ -76,8 +77,8 @@ func (p *Processor) triggerUeCommunicationCollection(
 	}
 
 	// Get consumer for SMF subscription
-	consumer := p.nwdaf.Consumer()
-	if consumer == nil {
+	smfConsumer := p.nwdaf.Consumer()
+	if smfConsumer == nil {
 		logger.ProcLog.Warnf("Consumer not available for data collection")
 		return
 	}
@@ -118,9 +119,15 @@ func (p *Processor) triggerUeCommunicationCollection(
 				// New resource - create SMF subscription
 				correlationId = uuid.New().String()
 
-				subId, err := consumer.SubscribeForUeCommunication(
-					smfEndpoint, supi, smfNotifUri, upfNotifUri, smfRepPeriod, correlationId,
-				)
+				eventSubs := consumer.BuildUpfEventSubs(upfNotifUri, true, true)
+				subId, err := smfConsumer.SubscribeToSmf(smfEndpoint, consumer.SmfSubscriptionOptions{
+					Supi:        supi,
+					NotifUri:    smfNotifUri,
+					NotifId:     correlationId,
+					EventSubs:   eventSubs,
+					NotifMethod: "PERIODIC",
+					RepPeriod:   smfRepPeriod,
+				})
 
 				if err != nil {
 					// Release the resource if subscription failed
