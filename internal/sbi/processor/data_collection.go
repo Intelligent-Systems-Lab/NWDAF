@@ -15,7 +15,6 @@ import (
 // Per 3GPP TS 23.288 §6.2: NWDAF invokes Nnf_EventExposure_Subscribe to collect data
 func (p *Processor) TriggerDataCollection(
 	eventSubs []models.NwdafEventsSubscriptionEventSubscription,
-	evtReq *models.ReportingInformation,
 	subscriptionId string,
 ) {
 	// Guard: subscription may have been deleted during async execution
@@ -28,7 +27,7 @@ func (p *Processor) TriggerDataCollection(
 	for _, eventSub := range eventSubs {
 		switch eventSub.Event {
 		case models.NwdafEvent_UE_COMMUNICATION:
-			p.triggerUeCommunicationCollection(&eventSub, evtReq, subscriptionId)
+			p.triggerUeCommunicationCollection(&eventSub, subscriptionId)
 		case models.NwdafEvent_ABNORMAL_BEHAVIOUR:
 			// Currently not supported - skip
 			logger.ProcLog.Debugf("ABNORMAL_BEHAVIOUR data collection not implemented")
@@ -42,7 +41,6 @@ func (p *Processor) TriggerDataCollection(
 // Per TS 23.288: NWDAF subscribes to SMF via Nsmf_EventExposure for UE communication analytics
 func (p *Processor) triggerUeCommunicationCollection(
 	eventSub *models.NwdafEventsSubscriptionEventSubscription,
-	evtReq *models.ReportingInformation,
 	subscriptionId string,
 ) {
 	// Check if SMF data collection is enabled in config

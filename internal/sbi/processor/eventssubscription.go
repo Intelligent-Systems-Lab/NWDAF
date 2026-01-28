@@ -104,7 +104,7 @@ func (p *Processor) HandleCreateSubscription(
 				logger.ProcLog.Errorf("Panic in TriggerDataCollection for subscription %s: %v", subscriptionId, r)
 			}
 		}()
-		p.TriggerDataCollection(req.EventSubscriptions, req.EvtReq, subscriptionId)
+		p.TriggerDataCollection(req.EventSubscriptions, subscriptionId)
 	}()
 
 	// Prepare response
