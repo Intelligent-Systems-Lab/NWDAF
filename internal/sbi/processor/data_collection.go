@@ -18,6 +18,13 @@ func (p *Processor) TriggerDataCollection(
 	evtReq *models.ReportingInformation,
 	subscriptionId string,
 ) {
+	// Guard: subscription may have been deleted during async execution
+	ctx := nwdaf_context.GetSelf()
+	if ctx.GetSubscription(subscriptionId) == nil {
+		logger.ProcLog.Warnf("Subscription %s not found, skipping data collection", subscriptionId)
+		return
+	}
+
 	for _, eventSub := range eventSubs {
 		switch eventSub.Event {
 		case models.NwdafEvent_UE_COMMUNICATION:
