@@ -67,18 +67,44 @@ go test ./internal/sbi/consumer/... -v
 
 #### UPF Notification Handling (`upf_notify_test.go`)
 
+Tests raw UPF data point storage for on-demand analytics aggregation.
+
+**Basic Processing**
 | Test Function | Description |
 |---------------|-------------|
-| `TestHandleUpfNotification` | Basic UPF notification processing |
-| `TestHandleUpfNotification_VolumeAggregation` | Volume accumulation across notifications |
-| `TestHandleUpfNotification_ThroughputUpdate` | Throughput value updates |
-| `TestHandleUpfNotification_MissingSupi` | Missing SUPI handling |
+| `TestHandleUpfNotification_Basic` | Basic notification → creates `RawUpfData` entry with timestamp, volume, throughput |
+
+**Raw Data Accumulation**
+| Test Function | Description |
+|---------------|-------------|
+| `TestHandleUpfNotification_MultipleNotifications` | Multiple notifications → preserves all data points in `RawUpfData` slice |
+| `TestHandleUpfNotification_MultipleMeasurementsInOneItem` | Multiple measurements in one item → creates separate data points |
+
+**Timestamp Tests**
+| Test Function | Description |
+|---------------|-------------|
+| `TestHandleUpfNotification_TimestampPreservation` | Verifies timestamps are preserved exactly in each data point |
+| `TestHandleUpfNotification_LastUpdateTracking` | Verifies `LastUpdate` is updated to latest notification time |
+
+**Metadata Tests**
+| Test Function | Description |
+|---------------|-------------|
+| `TestHandleUpfNotification_SessionMetadata` | Table-driven: Dnn/Snssai/RatType storage |
 | `TestHandleUpfNotification_MultipleUEs` | Multiple UEs in one notification |
-| `TestHandleUpfNotification_MultipleMeasurements` | Multiple measurements aggregation |
-| `TestHandleUpfNotification_SessionMetadata` | Dnn/Snssai/RatType updates |
-| `TestHandleUpfNotification_VolumeOnlyMeasurement` | Volume-only measurement |
-| `TestHandleUpfNotification_ThroughputOnlyMeasurement` | Throughput-only measurement |
-| `TestHandleUpfNotification_EmptyNotification` | Empty notification handling |
+
+**Volume/Throughput Tests**
+| Test Function | Description |
+|---------------|-------------|
+| `TestHandleUpfNotification_VolumeOnly` | Volume-only measurement (no throughput) |
+| `TestHandleUpfNotification_ThroughputOnly` | Throughput-only measurement (no volume) |
+
+**Edge Cases**
+| Test Function | Description |
+|---------------|-------------|
+| `TestHandleUpfNotification_MissingSupi` | Missing SUPI → no data stored |
+| `TestHandleUpfNotification_EmptyNotification` | Empty notification → no error |
+| `TestHandleUpfNotification_EmptyMeasurements` | Empty measurements → creates UE data but no raw data |
+| `TestHandleUpfNotification_CorrelationIdResolution` | SUPI resolved from correlationId |
 
 ### 2.3 Notifier Tests
 
@@ -94,10 +120,40 @@ Location: `internal/notifier/notifier_test.go`
 
 Location: `internal/context/`
 
+#### UE Data Tests (`ue_data_test.go`)
+
+**CRUD Operations**
+| Test Function | Description |
+|---------------|-------------|
+| `TestUeDataStore` | Table-driven: Store and retrieve UE data |
+| `TestUeDataGet_NotFound` | Non-existent SUPI returns false |
+| `TestGetOrCreateUeData` | Creates new or returns existing |
+| `TestClearUeData` | Clears all UE data |
+
+**RawUpfData Tests**
+| Test Function | Description |
+|---------------|-------------|
+| `TestRawUpfData_Append` | Appends multiple data points to `RawUpfData` slice |
+| `TestRawUpfData_TimestampPreservation` | Timestamps preserved exactly |
+| `TestRawUpfData_ThroughputStorage` | Throughput strings stored correctly |
+
+**AppendEvent Tests**
+| Test Function | Description |
+|---------------|-------------|
+| `TestAppendEvent` | SMF event appending and metadata update |
+
+**Concurrency Tests**
+| Test Function | Description |
+|---------------|-------------|
+| `TestConcurrentRawDataAppend` | 100 goroutines appending data points concurrently |
+| `TestConcurrentGetOrCreate` | 50 goroutines calling GetOrCreate for same SUPI |
+
+#### Other Context Tests
+
 | Test File | Tests |
 |-----------|-------|
 | `context_test.go` | Subscription CRUD operations |
-| `ue_data_test.go` | UE data storage, SMF subscription, AppendEvent, **concurrent update** |
+| `correlation_mapping_test.go` | SMF resource reference counting, correlation ID mapping |
 
 #### Thread Safety Testing
 

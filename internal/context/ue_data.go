@@ -66,6 +66,16 @@ func (r *SmfSubscriptionResource) validateInvariantLocked() error {
 	return nil
 }
 
+// UpfDataPoint represents a single UPF measurement with timestamp
+// Used for storing raw data instead of pre-aggregating
+type UpfDataPoint struct {
+	Timestamp    time.Time
+	UlVolume     int64
+	DlVolume     int64
+	UlThroughput string
+	DlThroughput string
+}
+
 // UeCommunicationData stores collected communication data for a UE
 type UeCommunicationData struct {
 	mu sync.Mutex // Protects concurrent access to this struct
@@ -81,6 +91,9 @@ type UeCommunicationData struct {
 	// Raw events received from SMF
 	Events []models.SmfEventExposureEventNotification
 
+	// Raw UPF data points for on-demand aggregation
+	RawUpfData []UpfDataPoint
+
 	// Session lifecycle tracking
 	IsActive          bool
 	CommStartTime     time.Time     // PDU Session established time
@@ -89,14 +102,7 @@ type UeCommunicationData struct {
 	// UP Status tracking (for commDur calculation via ACTIVATED/DEACTIVATED)
 	LastActivationTime time.Time // Last UP ACTIVATED timestamp
 
-	// Aggregated metrics from UPF_EVENT
-	TotalUlVolume int64 // Total uplink volume (bytes)
-	TotalDlVolume int64 // Total downlink volume (bytes)
-	SessionCount  int32
-
-	// Throughput measurements from UPF_EVENT
-	LastUlThroughput string // Latest uplink throughput (e.g., "10 Mbps")
-	LastDlThroughput string // Latest downlink throughput
+	SessionCount int32
 }
 
 // Lock acquires the mutex for this UE data

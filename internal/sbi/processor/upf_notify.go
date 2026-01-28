@@ -115,28 +115,32 @@ func (p *Processor) handleUserDataUsageMeasures(ctx *nwdaf_context.NWDAFContext,
 	data.Lock()
 	defer data.Unlock()
 
-	// Process measurements
+	// Process measurements - store raw data points
 	for _, usage := range item.UserDataUsageMeasurements {
-		// Volume measurement - aggregate totals
+		dataPoint := nwdaf_context.UpfDataPoint{
+			Timestamp: item.TimeStamp,
+		}
+
+		// Volume measurement
 		if usage.VolumeMeasurement != nil {
-			data.TotalUlVolume += usage.VolumeMeasurement.UlVolume
-			data.TotalDlVolume += usage.VolumeMeasurement.DlVolume
+			dataPoint.UlVolume = usage.VolumeMeasurement.UlVolume
+			dataPoint.DlVolume = usage.VolumeMeasurement.DlVolume
 			logger.ProcLog.Infof("UPF VOLUME: supi=%s, ulVol=%d, dlVol=%d",
 				supi, usage.VolumeMeasurement.UlVolume, usage.VolumeMeasurement.DlVolume)
 		}
 
-		// Throughput measurement - store latest values
+		// Throughput measurement
 		if usage.ThroughputMeasurement != nil {
-			if usage.ThroughputMeasurement.UlThroughput != "" {
-				data.LastUlThroughput = usage.ThroughputMeasurement.UlThroughput
-			}
-			if usage.ThroughputMeasurement.DlThroughput != "" {
-				data.LastDlThroughput = usage.ThroughputMeasurement.DlThroughput
-			}
+			dataPoint.UlThroughput = usage.ThroughputMeasurement.UlThroughput
+			dataPoint.DlThroughput = usage.ThroughputMeasurement.DlThroughput
 			logger.ProcLog.Infof("UPF THROUGHPUT: supi=%s, ulTput=%s, dlTput=%s",
 				supi, usage.ThroughputMeasurement.UlThroughput, usage.ThroughputMeasurement.DlThroughput)
 		}
+
+		data.RawUpfData = append(data.RawUpfData, dataPoint)
 	}
+
+	data.LastUpdate = item.TimeStamp
 
 	// Update session metadata
 	if item.Dnn != "" {

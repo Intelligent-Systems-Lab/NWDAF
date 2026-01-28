@@ -74,8 +74,12 @@ func generateUeCommunicationAnalytics(eventSub *models.NwdafEventsSubscriptionEv
 				// Use collected data from UPF notifications
 				ueData.Lock()
 
-				ulVol += ueData.TotalUlVolume
-				dlVol += ueData.TotalDlVolume
+				// Aggregate from raw data points
+				for _, dp := range ueData.RawUpfData {
+					ulVol += dp.UlVolume
+					dlVol += dp.DlVolume
+				}
+				dataPointCount += len(ueData.RawUpfData)
 
 				// Calculate communication duration from timestamps
 				if !ueData.StartTime.IsZero() && !ueData.LastUpdate.IsZero() {
@@ -90,7 +94,6 @@ func generateUeCommunicationAnalytics(eventSub *models.NwdafEventsSubscriptionEv
 					dnn = ueData.Dnn
 				}
 
-				dataPointCount++
 				ueData.Unlock()
 				notifierLog.Debugf("Using collected data for UE %s: ulVol=%d, dlVol=%d", supi, ulVol, dlVol)
 			}

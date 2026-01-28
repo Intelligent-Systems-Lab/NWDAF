@@ -2,26 +2,41 @@ package processor
 
 import (
 	"testing"
+	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/openapi/models"
 )
 
-// TestHandleUpfNotification tests basic UPF notification processing
-func TestHandleUpfNotification(t *testing.T) {
+// =============================================================================
+// Setup Helper
+// =============================================================================
+
+func setupTest() (*Processor, *nwdaf_context.NWDAFContext) {
 	nwdaf_context.Init()
 	ctx := nwdaf_context.GetSelf()
 	ctx.ClearUeData()
+	return &Processor{}, ctx
+}
 
-	p := &Processor{}
+// =============================================================================
+// Basic Notification Processing Tests
+// =============================================================================
+
+func TestHandleUpfNotification_Basic(t *testing.T) {
+	p, ctx := setupTest()
+
+	supi := "imsi-208930000000001"
+	ts := time.Now()
 
 	notification := &UpfNotificationData{
-		CorrelationId: "upf-notif-001",
+		CorrelationId: "test-corr-001",
 		NotificationItems: []UpfNotificationItem{
 			{
 				EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
-				Supi:      "imsi-208930000000003",
+				Supi:      supi,
 				Dnn:       "internet",
+				TimeStamp: ts,
 				UserDataUsageMeasurements: []UserDataUsageMeasurements{
 					{
 						VolumeMeasurement: &VolumeMeasurement{
@@ -40,264 +55,356 @@ func TestHandleUpfNotification(t *testing.T) {
 
 	err := p.HandleUpfNotification(notification)
 	if err != nil {
-		t.Errorf("HandleUpfNotification() error = %v", err)
+		t.Fatalf("HandleUpfNotification() error = %v", err)
 	}
 
-	// Verify UE data was stored
-	data, ok := ctx.GetUeData("imsi-208930000000003")
+	// Verify UE data was created
+	data, ok := ctx.GetUeData(supi)
 	if !ok {
-		t.Fatal("HandleUpfNotification() did not store UE data")
+		t.Fatal("UE data not created")
 	}
-	if data.TotalUlVolume != 1024 {
-		t.Errorf("TotalUlVolume = %v, want 1024", data.TotalUlVolume)
+
+	// Verify raw data point stored correctly
+	if len(data.RawUpfData) != 1 {
+		t.Fatalf("RawUpfData length = %v, want 1", len(data.RawUpfData))
 	}
-	if data.TotalDlVolume != 2048 {
-		t.Errorf("TotalDlVolume = %v, want 2048", data.TotalDlVolume)
+
+	dp := data.RawUpfData[0]
+	if dp.UlVolume != 1024 {
+		t.Errorf("UlVolume = %v, want 1024", dp.UlVolume)
 	}
-	if data.LastUlThroughput != "10 Mbps" {
-		t.Errorf("LastUlThroughput = %v, want '10 Mbps'", data.LastUlThroughput)
+	if dp.DlVolume != 2048 {
+		t.Errorf("DlVolume = %v, want 2048", dp.DlVolume)
 	}
-	if data.LastDlThroughput != "50 Mbps" {
-		t.Errorf("LastDlThroughput = %v, want '50 Mbps'", data.LastDlThroughput)
+	if dp.UlThroughput != "10 Mbps" {
+		t.Errorf("UlThroughput = %v, want '10 Mbps'", dp.UlThroughput)
 	}
+	if dp.DlThroughput != "50 Mbps" {
+		t.Errorf("DlThroughput = %v, want '50 Mbps'", dp.DlThroughput)
+	}
+	if !dp.Timestamp.Equal(ts) {
+		t.Errorf("Timestamp = %v, want %v", dp.Timestamp, ts)
+	}
+
+	// Verify metadata
 	if data.Dnn != "internet" {
 		t.Errorf("Dnn = %v, want 'internet'", data.Dnn)
 	}
 }
 
-// TestHandleUpfNotification_VolumeAggregation tests that volume is aggregated correctly across multiple notifications
-func TestHandleUpfNotification_VolumeAggregation(t *testing.T) {
-	nwdaf_context.Init()
-	ctx := nwdaf_context.GetSelf()
-	ctx.ClearUeData()
+// =============================================================================
+// Raw Data Accumulation Tests
+// =============================================================================
 
-	p := &Processor{}
-	supi := "imsi-208930000000003"
+func TestHandleUpfNotification_MultipleNotifications(t *testing.T) {
+	p, ctx := setupTest()
 
-	// First notification - initial volume
-	notif1 := &UpfNotificationData{
-		CorrelationId: "upf-notif-001",
-		NotificationItems: []UpfNotificationItem{
-			{
-				EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
-				Supi:      supi,
-				Dnn:       "internet",
-				UserDataUsageMeasurements: []UserDataUsageMeasurements{
-					{
-						VolumeMeasurement: &VolumeMeasurement{
-							UlVolume: 1000,
-							DlVolume: 2000,
+	supi := "imsi-208930000000001"
+	baseTime := time.Now()
+
+	notifications := []struct {
+		ulVol int64
+		dlVol int64
+		ts    time.Time
+	}{
+		{1000, 2000, baseTime},
+		{500, 1000, baseTime.Add(10 * time.Second)},
+		{2500, 5000, baseTime.Add(20 * time.Second)},
+	}
+
+	for _, n := range notifications {
+		notif := &UpfNotificationData{
+			NotificationItems: []UpfNotificationItem{
+				{
+					EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
+					Supi:      supi,
+					TimeStamp: n.ts,
+					UserDataUsageMeasurements: []UserDataUsageMeasurements{
+						{
+							VolumeMeasurement: &VolumeMeasurement{
+								UlVolume: n.ulVol,
+								DlVolume: n.dlVol,
+							},
 						},
 					},
 				},
 			},
-		},
+		}
+		p.HandleUpfNotification(notif)
 	}
-	p.HandleUpfNotification(notif1)
 
-	// Verify first notification
 	data, _ := ctx.GetUeData(supi)
-	if data.TotalUlVolume != 1000 || data.TotalDlVolume != 2000 {
-		t.Errorf("First notification: UL=%v DL=%v, want UL=1000 DL=2000",
-			data.TotalUlVolume, data.TotalDlVolume)
+
+	// Verify all data points preserved
+	if len(data.RawUpfData) != 3 {
+		t.Fatalf("RawUpfData length = %v, want 3", len(data.RawUpfData))
 	}
 
-	// Second notification - additional volume
-	notif2 := &UpfNotificationData{
-		CorrelationId: "upf-notif-002",
-		NotificationItems: []UpfNotificationItem{
-			{
-				EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
-				Supi:      supi,
-				UserDataUsageMeasurements: []UserDataUsageMeasurements{
-					{
-						VolumeMeasurement: &VolumeMeasurement{
-							UlVolume: 500,
-							DlVolume: 1000,
-						},
-					},
-				},
-			},
-		},
-	}
-	p.HandleUpfNotification(notif2)
-
-	// Verify aggregation
-	data, _ = ctx.GetUeData(supi)
-	if data.TotalUlVolume != 1500 {
-		t.Errorf("Aggregated TotalUlVolume = %v, want 1500", data.TotalUlVolume)
-	}
-	if data.TotalDlVolume != 3000 {
-		t.Errorf("Aggregated TotalDlVolume = %v, want 3000", data.TotalDlVolume)
+	// Verify each data point
+	for i, n := range notifications {
+		dp := data.RawUpfData[i]
+		if dp.UlVolume != n.ulVol {
+			t.Errorf("RawUpfData[%d].UlVolume = %v, want %v", i, dp.UlVolume, n.ulVol)
+		}
+		if dp.DlVolume != n.dlVol {
+			t.Errorf("RawUpfData[%d].DlVolume = %v, want %v", i, dp.DlVolume, n.dlVol)
+		}
+		if !dp.Timestamp.Equal(n.ts) {
+			t.Errorf("RawUpfData[%d].Timestamp mismatch", i)
+		}
 	}
 
-	// Third notification - even more volume
-	notif3 := &UpfNotificationData{
-		NotificationItems: []UpfNotificationItem{
-			{
-				EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
-				Supi:      supi,
-				UserDataUsageMeasurements: []UserDataUsageMeasurements{
-					{
-						VolumeMeasurement: &VolumeMeasurement{
-							UlVolume: 2500,
-							DlVolume: 5000,
-						},
-					},
-				},
-			},
-		},
+	// Verify aggregated totals (for analytics verification)
+	var totalUl, totalDl int64
+	for _, dp := range data.RawUpfData {
+		totalUl += dp.UlVolume
+		totalDl += dp.DlVolume
 	}
-	p.HandleUpfNotification(notif3)
-
-	// Verify total aggregation
-	data, _ = ctx.GetUeData(supi)
-	if data.TotalUlVolume != 4000 {
-		t.Errorf("Final TotalUlVolume = %v, want 4000", data.TotalUlVolume)
+	if totalUl != 4000 {
+		t.Errorf("Total UlVolume = %v, want 4000", totalUl)
 	}
-	if data.TotalDlVolume != 8000 {
-		t.Errorf("Final TotalDlVolume = %v, want 8000", data.TotalDlVolume)
+	if totalDl != 8000 {
+		t.Errorf("Total DlVolume = %v, want 8000", totalDl)
 	}
 }
 
-// TestHandleUpfNotification_ThroughputUpdate tests throughput value updates
-func TestHandleUpfNotification_ThroughputUpdate(t *testing.T) {
-	nwdaf_context.Init()
-	ctx := nwdaf_context.GetSelf()
-	ctx.ClearUeData()
+func TestHandleUpfNotification_MultipleMeasurementsInOneItem(t *testing.T) {
+	p, ctx := setupTest()
 
-	p := &Processor{}
-	supi := "imsi-208930000000003"
+	supi := "imsi-208930000000001"
+	ts := time.Now()
 
-	// First throughput measurement
-	notif1 := &UpfNotificationData{
-		NotificationItems: []UpfNotificationItem{
-			{
-				EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
-				Supi:      supi,
-				UserDataUsageMeasurements: []UserDataUsageMeasurements{
-					{
-						ThroughputMeasurement: &ThroughputMeasurement{
-							UlThroughput: "5 Mbps",
-							DlThroughput: "20 Mbps",
-						},
-					},
-				},
-			},
-		},
-	}
-	p.HandleUpfNotification(notif1)
-
-	data, _ := ctx.GetUeData(supi)
-	if data.LastUlThroughput != "5 Mbps" {
-		t.Errorf("LastUlThroughput = %v, want '5 Mbps'", data.LastUlThroughput)
-	}
-
-	// Updated throughput measurement - should overwrite
-	notif2 := &UpfNotificationData{
-		NotificationItems: []UpfNotificationItem{
-			{
-				EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
-				Supi:      supi,
-				UserDataUsageMeasurements: []UserDataUsageMeasurements{
-					{
-						ThroughputMeasurement: &ThroughputMeasurement{
-							UlThroughput: "15 Mbps",
-							DlThroughput: "100 Mbps",
-						},
-					},
-				},
-			},
-		},
-	}
-	p.HandleUpfNotification(notif2)
-
-	data, _ = ctx.GetUeData(supi)
-	if data.LastUlThroughput != "15 Mbps" {
-		t.Errorf("Updated LastUlThroughput = %v, want '15 Mbps'", data.LastUlThroughput)
-	}
-	if data.LastDlThroughput != "100 Mbps" {
-		t.Errorf("Updated LastDlThroughput = %v, want '100 Mbps'", data.LastDlThroughput)
-	}
-}
-
-// TestHandleUpfNotification_MissingSupi tests handling of notification without SUPI
-func TestHandleUpfNotification_MissingSupi(t *testing.T) {
-	nwdaf_context.Init()
-	ctx := nwdaf_context.GetSelf()
-	ctx.ClearUeData()
-
-	p := &Processor{}
-
-	// Notification without SUPI (only IP address)
 	notification := &UpfNotificationData{
 		NotificationItems: []UpfNotificationItem{
 			{
-				EventType:  UpfEventType_USER_DATA_USAGE_MEASURES,
-				UeIpv4Addr: "10.0.0.1", // No SUPI
+				EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
+				Supi:      supi,
+				TimeStamp: ts,
 				UserDataUsageMeasurements: []UserDataUsageMeasurements{
-					{
-						VolumeMeasurement: &VolumeMeasurement{
-							UlVolume: 1024,
-							DlVolume: 2048,
-						},
-					},
+					{VolumeMeasurement: &VolumeMeasurement{UlVolume: 100, DlVolume: 200}},
+					{VolumeMeasurement: &VolumeMeasurement{UlVolume: 50, DlVolume: 100}},
+					{VolumeMeasurement: &VolumeMeasurement{UlVolume: 25, DlVolume: 50}},
 				},
 			},
 		},
 	}
 
-	err := p.HandleUpfNotification(notification)
-	if err != nil {
-		t.Errorf("HandleUpfNotification() should not error on missing SUPI")
+	p.HandleUpfNotification(notification)
+
+	data, _ := ctx.GetUeData(supi)
+
+	// Each measurement creates a separate data point
+	if len(data.RawUpfData) != 3 {
+		t.Fatalf("RawUpfData length = %v, want 3", len(data.RawUpfData))
 	}
 
-	// No data should be stored without SUPI
-	_, ok := ctx.GetUeData("")
-	if ok {
-		t.Error("Should not store data without SUPI")
+	expectedVolumes := []struct{ ul, dl int64 }{
+		{100, 200},
+		{50, 100},
+		{25, 50},
+	}
+
+	for i, exp := range expectedVolumes {
+		if data.RawUpfData[i].UlVolume != exp.ul {
+			t.Errorf("RawUpfData[%d].UlVolume = %v, want %v", i, data.RawUpfData[i].UlVolume, exp.ul)
+		}
+		if data.RawUpfData[i].DlVolume != exp.dl {
+			t.Errorf("RawUpfData[%d].DlVolume = %v, want %v", i, data.RawUpfData[i].DlVolume, exp.dl)
+		}
 	}
 }
 
-// TestHandleUpfNotification_MultipleUEs tests notifications for multiple UEs
+// =============================================================================
+// Timestamp Tests
+// =============================================================================
+
+func TestHandleUpfNotification_TimestampPreservation(t *testing.T) {
+	p, ctx := setupTest()
+
+	supi := "imsi-208930000000001"
+
+	timestamps := []time.Time{
+		time.Date(2026, 1, 28, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, 1, 28, 10, 15, 0, 0, time.UTC),
+		time.Date(2026, 1, 28, 10, 30, 0, 0, time.UTC),
+	}
+
+	for _, ts := range timestamps {
+		notif := &UpfNotificationData{
+			NotificationItems: []UpfNotificationItem{
+				{
+					EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
+					Supi:      supi,
+					TimeStamp: ts,
+					UserDataUsageMeasurements: []UserDataUsageMeasurements{
+						{VolumeMeasurement: &VolumeMeasurement{UlVolume: 100}},
+					},
+				},
+			},
+		}
+		p.HandleUpfNotification(notif)
+	}
+
+	data, _ := ctx.GetUeData(supi)
+
+	for i, expected := range timestamps {
+		if !data.RawUpfData[i].Timestamp.Equal(expected) {
+			t.Errorf("Timestamp[%d] = %v, want %v", i, data.RawUpfData[i].Timestamp, expected)
+		}
+	}
+}
+
+func TestHandleUpfNotification_LastUpdateTracking(t *testing.T) {
+	p, ctx := setupTest()
+
+	supi := "imsi-208930000000001"
+	ts1 := time.Date(2026, 1, 28, 10, 0, 0, 0, time.UTC)
+	ts2 := time.Date(2026, 1, 28, 12, 0, 0, 0, time.UTC)
+
+	// First notification
+	p.HandleUpfNotification(&UpfNotificationData{
+		NotificationItems: []UpfNotificationItem{
+			{
+				EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
+				Supi:      supi,
+				TimeStamp: ts1,
+				UserDataUsageMeasurements: []UserDataUsageMeasurements{
+					{VolumeMeasurement: &VolumeMeasurement{UlVolume: 100}},
+				},
+			},
+		},
+	})
+
+	data, _ := ctx.GetUeData(supi)
+	if !data.LastUpdate.Equal(ts1) {
+		t.Errorf("LastUpdate after first notif = %v, want %v", data.LastUpdate, ts1)
+	}
+
+	// Second notification
+	p.HandleUpfNotification(&UpfNotificationData{
+		NotificationItems: []UpfNotificationItem{
+			{
+				EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
+				Supi:      supi,
+				TimeStamp: ts2,
+				UserDataUsageMeasurements: []UserDataUsageMeasurements{
+					{VolumeMeasurement: &VolumeMeasurement{UlVolume: 200}},
+				},
+			},
+		},
+	})
+
+	data, _ = ctx.GetUeData(supi)
+	if !data.LastUpdate.Equal(ts2) {
+		t.Errorf("LastUpdate after second notif = %v, want %v", data.LastUpdate, ts2)
+	}
+}
+
+// =============================================================================
+// Metadata Tests
+// =============================================================================
+
+func TestHandleUpfNotification_SessionMetadata(t *testing.T) {
+	tests := []struct {
+		name    string
+		dnn     string
+		snssai  *models.Snssai
+		ratType models.RatType
+	}{
+		{
+			name:    "internet with NR",
+			dnn:     "internet",
+			snssai:  &models.Snssai{Sst: 1, Sd: "010203"},
+			ratType: models.RatType_NR,
+		},
+		{
+			name:    "iot with LTE",
+			dnn:     "iot",
+			snssai:  &models.Snssai{Sst: 2, Sd: "112233"},
+			ratType: models.RatType_EUTRA,
+		},
+		{
+			name:    "enterprise without snssai",
+			dnn:     "enterprise",
+			snssai:  nil,
+			ratType: models.RatType_NR,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, ctx := setupTest()
+
+			supi := "imsi-208930000000001"
+			p.HandleUpfNotification(&UpfNotificationData{
+				NotificationItems: []UpfNotificationItem{
+					{
+						EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
+						Supi:      supi,
+						Dnn:       tt.dnn,
+						Snssai:    tt.snssai,
+						RatType:   tt.ratType,
+						TimeStamp: time.Now(),
+						UserDataUsageMeasurements: []UserDataUsageMeasurements{
+							{VolumeMeasurement: &VolumeMeasurement{UlVolume: 100}},
+						},
+					},
+				},
+			})
+
+			data, _ := ctx.GetUeData(supi)
+
+			if data.Dnn != tt.dnn {
+				t.Errorf("Dnn = %v, want %v", data.Dnn, tt.dnn)
+			}
+			if tt.snssai != nil {
+				if data.Snssai == nil || data.Snssai.Sst != tt.snssai.Sst {
+					t.Errorf("Snssai mismatch")
+				}
+			}
+			if data.RatType != tt.ratType {
+				t.Errorf("RatType = %v, want %v", data.RatType, tt.ratType)
+			}
+		})
+	}
+}
+
+// =============================================================================
+// Multiple UE Tests
+// =============================================================================
+
 func TestHandleUpfNotification_MultipleUEs(t *testing.T) {
-	nwdaf_context.Init()
-	ctx := nwdaf_context.GetSelf()
-	ctx.ClearUeData()
+	p, ctx := setupTest()
 
-	p := &Processor{}
+	ts := time.Now()
 
-	// Notification with multiple UEs
 	notification := &UpfNotificationData{
 		NotificationItems: []UpfNotificationItem{
 			{
 				EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
 				Supi:      "imsi-001",
 				Dnn:       "internet",
+				TimeStamp: ts,
 				UserDataUsageMeasurements: []UserDataUsageMeasurements{
-					{
-						VolumeMeasurement: &VolumeMeasurement{UlVolume: 100, DlVolume: 200},
-					},
+					{VolumeMeasurement: &VolumeMeasurement{UlVolume: 100, DlVolume: 200}},
 				},
 			},
 			{
 				EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
 				Supi:      "imsi-002",
 				Dnn:       "iot",
+				TimeStamp: ts,
 				UserDataUsageMeasurements: []UserDataUsageMeasurements{
-					{
-						VolumeMeasurement: &VolumeMeasurement{UlVolume: 300, DlVolume: 400},
-					},
+					{VolumeMeasurement: &VolumeMeasurement{UlVolume: 300, DlVolume: 400}},
 				},
 			},
 			{
 				EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
 				Supi:      "imsi-003",
 				Dnn:       "voice",
+				TimeStamp: ts,
 				UserDataUsageMeasurements: []UserDataUsageMeasurements{
-					{
-						VolumeMeasurement: &VolumeMeasurement{UlVolume: 500, DlVolume: 600},
-					},
+					{VolumeMeasurement: &VolumeMeasurement{UlVolume: 500, DlVolume: 600}},
 				},
 			},
 		},
@@ -305,161 +412,82 @@ func TestHandleUpfNotification_MultipleUEs(t *testing.T) {
 
 	p.HandleUpfNotification(notification)
 
-	// Verify all UEs have data
-	ue1, ok := ctx.GetUeData("imsi-001")
-	if !ok || ue1.TotalUlVolume != 100 || ue1.Dnn != "internet" {
-		t.Error("imsi-001 data incorrect")
+	// Verify each UE has correct data
+	testCases := []struct {
+		supi  string
+		dnn   string
+		ulVol int64
+		dlVol int64
+	}{
+		{"imsi-001", "internet", 100, 200},
+		{"imsi-002", "iot", 300, 400},
+		{"imsi-003", "voice", 500, 600},
 	}
 
-	ue2, ok := ctx.GetUeData("imsi-002")
-	if !ok || ue2.TotalUlVolume != 300 || ue2.Dnn != "iot" {
-		t.Error("imsi-002 data incorrect")
-	}
-
-	ue3, ok := ctx.GetUeData("imsi-003")
-	if !ok || ue3.TotalUlVolume != 500 || ue3.Dnn != "voice" {
-		t.Error("imsi-003 data incorrect")
+	for _, tc := range testCases {
+		data, ok := ctx.GetUeData(tc.supi)
+		if !ok {
+			t.Errorf("UE %s not found", tc.supi)
+			continue
+		}
+		if len(data.RawUpfData) != 1 {
+			t.Errorf("UE %s: RawUpfData length = %v, want 1", tc.supi, len(data.RawUpfData))
+			continue
+		}
+		if data.RawUpfData[0].UlVolume != tc.ulVol {
+			t.Errorf("UE %s: UlVolume = %v, want %v", tc.supi, data.RawUpfData[0].UlVolume, tc.ulVol)
+		}
+		if data.Dnn != tc.dnn {
+			t.Errorf("UE %s: Dnn = %v, want %v", tc.supi, data.Dnn, tc.dnn)
+		}
 	}
 }
 
-// TestHandleUpfNotification_MultipleMeasurements tests multiple measurements in one item
-func TestHandleUpfNotification_MultipleMeasurements(t *testing.T) {
-	nwdaf_context.Init()
-	ctx := nwdaf_context.GetSelf()
-	ctx.ClearUeData()
+// =============================================================================
+// Volume-Only and Throughput-Only Tests
+// =============================================================================
 
-	p := &Processor{}
-	supi := "imsi-208930000000003"
+func TestHandleUpfNotification_VolumeOnly(t *testing.T) {
+	p, ctx := setupTest()
 
-	// Notification with multiple measurements in one item
-	notification := &UpfNotificationData{
+	supi := "imsi-208930000000001"
+	p.HandleUpfNotification(&UpfNotificationData{
 		NotificationItems: []UpfNotificationItem{
 			{
 				EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
 				Supi:      supi,
+				TimeStamp: time.Now(),
 				UserDataUsageMeasurements: []UserDataUsageMeasurements{
 					{
-						VolumeMeasurement: &VolumeMeasurement{UlVolume: 100, DlVolume: 200},
-					},
-					{
-						VolumeMeasurement: &VolumeMeasurement{UlVolume: 50, DlVolume: 100},
-					},
-					{
-						VolumeMeasurement: &VolumeMeasurement{UlVolume: 25, DlVolume: 50},
-					},
-				},
-			},
-		},
-	}
-
-	p.HandleUpfNotification(notification)
-
-	data, _ := ctx.GetUeData(supi)
-	// All measurements should be aggregated
-	if data.TotalUlVolume != 175 {
-		t.Errorf("TotalUlVolume = %v, want 175 (100+50+25)", data.TotalUlVolume)
-	}
-	if data.TotalDlVolume != 350 {
-		t.Errorf("TotalDlVolume = %v, want 350 (200+100+50)", data.TotalDlVolume)
-	}
-}
-
-// TestHandleUpfNotification_SessionMetadata tests session metadata update
-func TestHandleUpfNotification_SessionMetadata(t *testing.T) {
-	nwdaf_context.Init()
-	ctx := nwdaf_context.GetSelf()
-	ctx.ClearUeData()
-
-	p := &Processor{}
-	supi := "imsi-208930000000003"
-
-	notification := &UpfNotificationData{
-		NotificationItems: []UpfNotificationItem{
-			{
-				EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
-				Supi:      supi,
-				Dnn:       "enterprise",
-				Snssai:    &models.Snssai{Sst: 1, Sd: "010203"},
-				RatType:   models.RatType_NR,
-				UserDataUsageMeasurements: []UserDataUsageMeasurements{
-					{
-						VolumeMeasurement: &VolumeMeasurement{UlVolume: 100, DlVolume: 200},
-					},
-				},
-			},
-		},
-	}
-
-	p.HandleUpfNotification(notification)
-
-	data, _ := ctx.GetUeData(supi)
-	if data.Dnn != "enterprise" {
-		t.Errorf("Dnn = %v, want 'enterprise'", data.Dnn)
-	}
-	if data.Snssai == nil || data.Snssai.Sst != 1 {
-		t.Error("Snssai not stored correctly")
-	}
-	if data.RatType != models.RatType_NR {
-		t.Errorf("RatType = %v, want NR", data.RatType)
-	}
-}
-
-// TestHandleUpfNotification_VolumeOnlyMeasurement tests volume-only measurement
-func TestHandleUpfNotification_VolumeOnlyMeasurement(t *testing.T) {
-	nwdaf_context.Init()
-	ctx := nwdaf_context.GetSelf()
-	ctx.ClearUeData()
-
-	p := &Processor{}
-	supi := "imsi-208930000000003"
-
-	notification := &UpfNotificationData{
-		NotificationItems: []UpfNotificationItem{
-			{
-				EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
-				Supi:      supi,
-				UserDataUsageMeasurements: []UserDataUsageMeasurements{
-					{
-						VolumeMeasurement: &VolumeMeasurement{
-							UlVolume: 5000,
-							DlVolume: 10000,
-						},
+						VolumeMeasurement: &VolumeMeasurement{UlVolume: 5000, DlVolume: 10000},
 						// No ThroughputMeasurement
 					},
 				},
 			},
 		},
-	}
+	})
 
-	p.HandleUpfNotification(notification)
+	data, _ := ctx.GetUeData(supi)
+	dp := data.RawUpfData[0]
 
-	data, ok := ctx.GetUeData(supi)
-	if !ok {
-		t.Fatal("UE data not stored")
+	if dp.UlVolume != 5000 {
+		t.Errorf("UlVolume = %v, want 5000", dp.UlVolume)
 	}
-	if data.TotalUlVolume != 5000 {
-		t.Errorf("TotalUlVolume = %v, want 5000", data.TotalUlVolume)
-	}
-	// Throughput should remain empty
-	if data.LastUlThroughput != "" {
-		t.Errorf("LastUlThroughput should be empty, got %v", data.LastUlThroughput)
+	if dp.UlThroughput != "" {
+		t.Errorf("UlThroughput should be empty, got %v", dp.UlThroughput)
 	}
 }
 
-// TestHandleUpfNotification_ThroughputOnlyMeasurement tests throughput-only measurement
-func TestHandleUpfNotification_ThroughputOnlyMeasurement(t *testing.T) {
-	nwdaf_context.Init()
-	ctx := nwdaf_context.GetSelf()
-	ctx.ClearUeData()
+func TestHandleUpfNotification_ThroughputOnly(t *testing.T) {
+	p, ctx := setupTest()
 
-	p := &Processor{}
-	supi := "imsi-208930000000003"
-
-	notification := &UpfNotificationData{
+	supi := "imsi-208930000000001"
+	p.HandleUpfNotification(&UpfNotificationData{
 		NotificationItems: []UpfNotificationItem{
 			{
 				EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
 				Supi:      supi,
+				TimeStamp: time.Now(),
 				UserDataUsageMeasurements: []UserDataUsageMeasurements{
 					{
 						// No VolumeMeasurement
@@ -471,27 +499,53 @@ func TestHandleUpfNotification_ThroughputOnlyMeasurement(t *testing.T) {
 				},
 			},
 		},
-	}
+	})
 
-	p.HandleUpfNotification(notification)
+	data, _ := ctx.GetUeData(supi)
+	dp := data.RawUpfData[0]
 
-	data, ok := ctx.GetUeData(supi)
-	if !ok {
-		t.Fatal("UE data not stored")
+	if dp.UlVolume != 0 {
+		t.Errorf("UlVolume = %v, want 0", dp.UlVolume)
 	}
-	// Volume should be 0
-	if data.TotalUlVolume != 0 {
-		t.Errorf("TotalUlVolume = %v, want 0", data.TotalUlVolume)
-	}
-	// Throughput should be set
-	if data.LastUlThroughput != "25 Mbps" {
-		t.Errorf("LastUlThroughput = %v, want '25 Mbps'", data.LastUlThroughput)
+	if dp.UlThroughput != "25 Mbps" {
+		t.Errorf("UlThroughput = %v, want '25 Mbps'", dp.UlThroughput)
 	}
 }
 
-// TestHandleUpfNotification_EmptyNotification tests handling of empty notification
+// =============================================================================
+// Edge Cases
+// =============================================================================
+
+func TestHandleUpfNotification_MissingSupi(t *testing.T) {
+	p, ctx := setupTest()
+
+	notification := &UpfNotificationData{
+		NotificationItems: []UpfNotificationItem{
+			{
+				EventType:  UpfEventType_USER_DATA_USAGE_MEASURES,
+				UeIpv4Addr: "10.0.0.1", // No SUPI
+				TimeStamp:  time.Now(),
+				UserDataUsageMeasurements: []UserDataUsageMeasurements{
+					{VolumeMeasurement: &VolumeMeasurement{UlVolume: 1024}},
+				},
+			},
+		},
+	}
+
+	err := p.HandleUpfNotification(notification)
+	if err != nil {
+		t.Errorf("Should not error on missing SUPI, got %v", err)
+	}
+
+	// Nothing should be stored
+	_, ok := ctx.GetUeData("")
+	if ok {
+		t.Error("Should not store data without SUPI")
+	}
+}
+
 func TestHandleUpfNotification_EmptyNotification(t *testing.T) {
-	p := &Processor{}
+	p, _ := setupTest()
 
 	notification := &UpfNotificationData{
 		NotificationItems: []UpfNotificationItem{},
@@ -499,6 +553,74 @@ func TestHandleUpfNotification_EmptyNotification(t *testing.T) {
 
 	err := p.HandleUpfNotification(notification)
 	if err != nil {
-		t.Errorf("HandleUpfNotification() should not error on empty notification")
+		t.Errorf("Should not error on empty notification, got %v", err)
+	}
+}
+
+func TestHandleUpfNotification_EmptyMeasurements(t *testing.T) {
+	p, ctx := setupTest()
+
+	supi := "imsi-208930000000001"
+	notification := &UpfNotificationData{
+		NotificationItems: []UpfNotificationItem{
+			{
+				EventType:                 UpfEventType_USER_DATA_USAGE_MEASURES,
+				Supi:                      supi,
+				TimeStamp:                 time.Now(),
+				UserDataUsageMeasurements: []UserDataUsageMeasurements{}, // Empty
+			},
+		},
+	}
+
+	p.HandleUpfNotification(notification)
+
+	data, ok := ctx.GetUeData(supi)
+	if !ok {
+		t.Fatal("UE data should be created even with empty measurements")
+	}
+	if len(data.RawUpfData) != 0 {
+		t.Errorf("RawUpfData should be empty, got %d items", len(data.RawUpfData))
+	}
+}
+
+// =============================================================================
+// Correlation ID Resolution Tests
+// =============================================================================
+
+func TestHandleUpfNotification_CorrelationIdResolution(t *testing.T) {
+	p, ctx := setupTest()
+
+	supi := "imsi-208930000000001"
+	correlationId := "corr-123"
+
+	// Register correlation ID
+	ctx.StoreCorrelationToSupi(correlationId, supi)
+
+	// Notification without SUPI but with correlationId
+	notification := &UpfNotificationData{
+		CorrelationId: correlationId,
+		NotificationItems: []UpfNotificationItem{
+			{
+				EventType: UpfEventType_USER_DATA_USAGE_MEASURES,
+				// No Supi - should be resolved from correlationId
+				TimeStamp: time.Now(),
+				UserDataUsageMeasurements: []UserDataUsageMeasurements{
+					{VolumeMeasurement: &VolumeMeasurement{UlVolume: 1000}},
+				},
+			},
+		},
+	}
+
+	p.HandleUpfNotification(notification)
+
+	data, ok := ctx.GetUeData(supi)
+	if !ok {
+		t.Fatal("SUPI should be resolved from correlationId")
+	}
+	if len(data.RawUpfData) != 1 {
+		t.Errorf("RawUpfData length = %v, want 1", len(data.RawUpfData))
+	}
+	if data.RawUpfData[0].UlVolume != 1000 {
+		t.Errorf("UlVolume = %v, want 1000", data.RawUpfData[0].UlVolume)
 	}
 }
