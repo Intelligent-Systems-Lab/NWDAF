@@ -237,18 +237,8 @@ func (s *NotificationScheduler) buildNotification() models.NnwdafEventsSubscript
 	var eventNotifications []models.NwdafEventsSubscriptionEventNotification
 
 	for _, eventSub := range s.eventSubs {
-		if eventSub.Event == models.NwdafEvent_ABNORMAL_BEHAVIOUR {
-			eventNotification := models.NwdafEventsSubscriptionEventNotification{
-				Event:        eventSub.Event,
-				AbnorBehavrs: generateMockAbnormalBehaviours(),
-			}
-			eventNotifications = append(eventNotifications, eventNotification)
-		} else if eventSub.Event == models.NwdafEvent_UE_COMMUNICATION {
-			eventNotification := models.NwdafEventsSubscriptionEventNotification{
-				Event:   eventSub.Event,
-				UeComms: []models.UeCommunication{generateUeCommunicationAnalytics(&eventSub)},
-			}
-			eventNotifications = append(eventNotifications, eventNotification)
+		if handler, ok := GetHandler(eventSub.Event); ok {
+			eventNotifications = append(eventNotifications, handler.BuildEventNotification(&eventSub))
 		}
 	}
 

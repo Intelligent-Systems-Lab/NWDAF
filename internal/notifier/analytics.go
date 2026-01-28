@@ -41,19 +41,6 @@ func generateMockAbnormalBehaviours() []models.AbnormalBehaviour {
 	}
 }
 
-// GenerateAnalytics generates analytics based on collected data
-// Uses rule-based logic for UE_COMMUNICATION analytics
-func GenerateAnalytics(eventSub *models.NwdafEventsSubscriptionEventSubscription) interface{} {
-	switch eventSub.Event {
-	case models.NwdafEvent_ABNORMAL_BEHAVIOUR:
-		return generateMockAbnormalBehaviours()
-	case models.NwdafEvent_UE_COMMUNICATION:
-		return generateUeCommunicationAnalytics(eventSub)
-	default:
-		return nil
-	}
-}
-
 // generateUeCommunicationAnalytics generates UE Communication analytics using rule-based logic
 // Per TS 23.288 §6.7.3: Analytics based on collected UPF traffic data
 func generateUeCommunicationAnalytics(eventSub *models.NwdafEventsSubscriptionEventSubscription) models.UeCommunication {
