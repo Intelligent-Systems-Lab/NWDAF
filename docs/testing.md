@@ -451,6 +451,37 @@ In **Terminal 1** you should see:
 [HH:MM:SS] 📤 UPF notification #1 sent ... (status: 204)
 ```
 
+#### Sample SMF Subscription Request (from NWDAF)
+
+The fake server outputs the JSON request it receives. Example:
+
+```json
+{
+  "supi": "imsi-208930000000001",
+  "notifUri": "http://127.0.0.1:8080/collector/notify",
+  "notifId": "4021c603-5ba2-4135-8be0-d51f915c6394",
+  "eventSubs": [
+    {
+      "event": "UPF_EVENT",
+      "upfEvents": [
+        {
+          "type": "USER_DATA_USAGE_MEASURES",
+          "measurementTypes": [
+            "VOLUME_MEASUREMENT",
+            "THROUGHPUT_MEASUREMENT"
+          ],
+          "granularityOfMeasurement": "PER_SESSION"
+        }
+      ],
+      "bundlingAllowed": true,
+      "bundledEventNotifyUri": "http://127.0.0.1:8080/collector/upf-notify"
+    }
+  ],
+  "notifMethod": "PERIODIC",
+  "repPeriod": 10
+}
+```
+
 ### 6.7 Cleanup
 
 Press `Ctrl+C` to stop all services.

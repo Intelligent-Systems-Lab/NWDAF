@@ -87,6 +87,8 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
         self._log(f"   UPF notify URI: {upf_notify_uri}")
         self._log(f"   Report Period: {rep_period}s")
         self._log(f"   NotifId (correlationId): {notify_correlation_id}")
+        self._log(f"   📋 Request JSON:")
+        self._log_json(request)
 
         
         # Start UPF notification thread if URI provided
@@ -162,6 +164,8 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
                 )
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     self._log(f"📤 UPF notification #{count} sent (corrId: {correlation_id[:8]}..., status: {resp.status})")
+                    self._log(f"   📋 Notification JSON:")
+                    self._log_json(notification)
             except Exception as e:
                 self._log(f"❌ Failed to send UPF notification: {e}")
     
@@ -216,6 +220,12 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
     def _log(self, message: str):
         """Print log message with timestamp."""
         print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
+    
+    def _log_json(self, data: dict):
+        """Print formatted JSON data."""
+        formatted = json.dumps(data, indent=2, ensure_ascii=False)
+        for line in formatted.split('\n'):
+            print(f"[{datetime.now().strftime('%H:%M:%S')}]   {line}")
     
     def log_message(self, format, *args):
         """Suppress default HTTP logging."""
