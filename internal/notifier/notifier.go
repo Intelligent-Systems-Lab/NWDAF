@@ -194,7 +194,11 @@ func (s *NotificationScheduler) sendNotification() {
 		logger.NotifierLog.Warnf("Failed to send notification to %s: %v", s.notificationURI, err)
 		return
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			logger.NotifierLog.Debugf("failed to close response body (may be ignored): %v", closeErr)
+		}
+	}()
 
 	if resp.StatusCode == http.StatusNoContent {
 		logger.NotifierLog.Infof("Notification #%d sent successfully to %s for subscription %s",

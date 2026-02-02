@@ -143,10 +143,17 @@ func (s *NsmfService) UnsubscribeFromSmf(
 	if err != nil {
 		return fmt.Errorf("failed to send request to SMF: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			consumerLog.Debugf("failed to close response body (may be ignored): %v", closeErr)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			consumerLog.Debugf("failed to read error response body: %v", readErr)
+		}
 		return fmt.Errorf("SMF unsubscription failed: status=%d, body=%s", resp.StatusCode, string(body))
 	}
 
@@ -182,10 +189,17 @@ func (s *NsmfService) sendRequest(smfEndpoint string, request interface{}) (stri
 	if err != nil {
 		return "", fmt.Errorf("failed to send request to SMF: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			consumerLog.Debugf("failed to close response body (may be ignored): %v", closeErr)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			consumerLog.Debugf("failed to read error response body: %v", readErr)
+		}
 		return "", fmt.Errorf("SMF subscription failed: status=%d, body=%s", resp.StatusCode, string(body))
 	}
 
@@ -210,8 +224,10 @@ func (s *NsmfService) parseSubscriptionId(resp *http.Response) string {
 	var response struct {
 		SubId string `json:"subId"`
 	}
-	// Ignore decode errors - body parsing is optional fallback
-	_ = json.NewDecoder(resp.Body).Decode(&response)
+	// Body parsing is optional fallback, log but don't fail
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&response); decodeErr != nil {
+		consumerLog.Debugf("failed to decode subscription response body (may be ignored): %v", decodeErr)
+	}
 
 	return response.SubId
 }
