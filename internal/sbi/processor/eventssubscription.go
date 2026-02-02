@@ -269,8 +269,8 @@ func (p *Processor) validateSubscriptionRequest(req *models.NnwdafEventsSubscrip
 	}
 
 	// 2. Validate each event subscription
-	for i, eventSub := range req.EventSubscriptions {
-		if err := p.validateEventSubscription(i, &eventSub); err != nil {
+	for i := range req.EventSubscriptions {
+		if err := p.validateEventSubscription(i, &req.EventSubscriptions[i]); err != nil {
 			return err
 		}
 	}
@@ -466,7 +466,8 @@ func (p *Processor) collectFailEventReports(
 ) []models.FailureEventInfo {
 	var failReports []models.FailureEventInfo
 
-	for _, eventSub := range eventSubs {
+	for i := range eventSubs {
+		eventSub := &eventSubs[i]
 		// Check if event type is supported (soft failure)
 		if !p.isEventSupported(eventSub.Event) {
 			failReports = append(failReports, models.FailureEventInfo{

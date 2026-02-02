@@ -25,10 +25,11 @@ func (p *Processor) TriggerDataCollection(
 		return
 	}
 
-	for _, eventSub := range eventSubs {
+	for i := range eventSubs {
+		eventSub := &eventSubs[i]
 		switch eventSub.Event {
 		case models.NwdafEvent_UE_COMMUNICATION:
-			p.triggerUeCommunicationCollection(&eventSub, subscriptionId)
+			p.triggerUeCommunicationCollection(eventSub, subscriptionId)
 		case models.NwdafEvent_ABNORMAL_BEHAVIOUR:
 			// Currently not supported - skip
 			logger.ProcLog.Debugf("ABNORMAL_BEHAVIOUR data collection not implemented")

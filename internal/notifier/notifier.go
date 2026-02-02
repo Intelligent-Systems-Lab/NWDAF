@@ -250,9 +250,10 @@ func (s *NotificationScheduler) convertToOutput(n models.NnwdafEventsSubscriptio
 func (s *NotificationScheduler) buildNotification() models.NnwdafEventsSubscriptionNotification {
 	var eventNotifications []models.NwdafEventsSubscriptionEventNotification
 
-	for _, eventSub := range s.eventSubs {
+	for i := range s.eventSubs {
+		eventSub := &s.eventSubs[i]
 		if handler, ok := GetHandler(eventSub.Event); ok {
-			eventNotifications = append(eventNotifications, handler.BuildEventNotification(s.subscriptionId, &eventSub))
+			eventNotifications = append(eventNotifications, handler.BuildEventNotification(s.subscriptionId, eventSub))
 		}
 	}
 

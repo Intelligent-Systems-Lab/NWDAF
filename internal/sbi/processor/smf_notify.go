@@ -18,8 +18,9 @@ func (p *Processor) HandleSmfNotification(notification *models.NsmfEventExposure
 	ctx := nwdaf_context.GetSelf()
 	correlationId := notification.NotifId
 
-	for _, event := range notification.EventNotifs {
-		if err := p.processSmfEvent(ctx, correlationId, &event); err != nil {
+	for i := range notification.EventNotifs {
+		event := &notification.EventNotifs[i]
+		if err := p.processSmfEvent(ctx, correlationId, event); err != nil {
 			logger.ProcLog.Errorf("Failed to process event: %v", err)
 			continue
 		}
