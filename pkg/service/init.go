@@ -52,13 +52,16 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 	nwdaf.nwdafCtx.NwdafName = cfg.GetNwdafName()
 
 	// Initialize consumer
-	nwdaf.consumer, _ = consumer.NewConsumer()
+	var err error
+	nwdaf.consumer, err = consumer.NewConsumer()
+	if err != nil {
+		return nil, err
+	}
 
 	// Initialize processor
 	nwdaf.processor = processor.NewProcessor(nwdaf)
 
 	// Initialize SBI server
-	var err error
 	nwdaf.sbiServer, err = sbi.NewServer(nwdaf)
 	if err != nil {
 		return nil, err
