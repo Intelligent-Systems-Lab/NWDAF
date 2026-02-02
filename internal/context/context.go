@@ -32,20 +32,19 @@ type NWDAFContext struct {
 	mu            sync.RWMutex
 	subscriptions map[string]*Subscription
 
-	// UE Communication data collected from SMF/UPF
-	ueDataStore sync.Map // map[string]*UeCommunicationData
-
-	// Notification routing: correlationId → supi (for UPF notifications)
-	// Per TS 29.564: resolve SUPI from notifyCorrelationId
-	correlationToSupiMap sync.Map // map[string]string
-
 	// Cleanup tracking: nwdafSubId → []NwdafSubResource
 	// Tracks SMF resources used by each NWDAF subscription for proper cleanup
 	nwdafSubResourcesMap sync.Map // map[string][]NwdafSubResource
 
-	// SMF subscription resources with reference counting
-	// Key: "smfEndpoint:supi" (composite key) -> *SmfSubscriptionResource
-	smfResources sync.Map
+	// --- Unified Storage ---
+
+	// SMF subscriptions: correlationId → *SmfSubscription
+	// Unified structure with reference counting and target type support
+	smfSubscriptions sync.Map
+
+	// Traffic data: correlationId → *TrafficDataBucket
+	// Two-layer nested map: bucket contains map[ipAddress]*TrafficData
+	trafficDataStore sync.Map
 }
 
 // Subscription represents an individual event subscription

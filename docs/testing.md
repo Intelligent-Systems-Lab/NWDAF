@@ -58,53 +58,30 @@ go test ./internal/sbi/consumer/... -v
 
 #### SMF Notification Handling (`smf_notify_test.go`)
 
+Tests SMF event processing and TrafficData enrichment.
+
 | Test Function | Description |
 |---------------|-------------|
-| `TestHandleSmfNotification` | Basic SMF notification processing |
-| `TestHandlePduSessionLifecycle` | PDU session establishment/release |
-| `TestHandleSmfNotification_MissingSupi` | Missing SUPI handling |
-| `TestHandleMultipleEvents` | Multiple events in one notification |
+| `TestHandleSmfNotification_Basic` | Basic SMF notification processing |
+| `TestHandleSmfNotification_EnrichTrafficData` | Enrich SUPI/DNN/SNSSAI/RatType |
+| `TestHandleSmfNotification_MultipleEvents` | Multiple events in one notification |
+| `TestHandleSmfNotification_MissingSupi` | Missing SUPI handling (skip event) |
+| `TestHandleSmfNotification_NoMatchingBucket` | No bucket → no error, no creation |
+| `TestHandleSmfNotification_EnrichMultipleTrafficData` | Enrich all IPs in bucket |
 
 #### UPF Notification Handling (`upf_notify_test.go`)
 
-Tests raw UPF data point storage for on-demand analytics aggregation.
+Tests UPF data point storage using bucket-based architecture.
 
-**Basic Processing**
 | Test Function | Description |
 |---------------|-------------|
-| `TestHandleUpfNotification_Basic` | Basic notification → creates `RawUpfData` entry with timestamp, volume, throughput |
-
-**Raw Data Accumulation**
-| Test Function | Description |
-|---------------|-------------|
-| `TestHandleUpfNotification_MultipleNotifications` | Multiple notifications → preserves all data points in `RawUpfData` slice |
-| `TestHandleUpfNotification_MultipleMeasurementsInOneItem` | Multiple measurements in one item → creates separate data points |
-
-**Timestamp Tests**
-| Test Function | Description |
-|---------------|-------------|
-| `TestHandleUpfNotification_TimestampPreservation` | Verifies timestamps are preserved exactly in each data point |
-| `TestHandleUpfNotification_LastUpdateTracking` | Verifies `LastUpdate` is updated to latest notification time |
-
-**Metadata Tests**
-| Test Function | Description |
-|---------------|-------------|
-| `TestHandleUpfNotification_SessionMetadata` | Table-driven: Dnn/Snssai/RatType storage |
-| `TestHandleUpfNotification_MultipleUEs` | Multiple UEs in one notification |
-
-**Volume/Throughput Tests**
-| Test Function | Description |
-|---------------|-------------|
-| `TestHandleUpfNotification_VolumeOnly` | Volume-only measurement (no throughput) |
-| `TestHandleUpfNotification_ThroughputOnly` | Throughput-only measurement (no volume) |
-
-**Edge Cases**
-| Test Function | Description |
-|---------------|-------------|
-| `TestHandleUpfNotification_MissingSupi` | Missing SUPI → no data stored |
-| `TestHandleUpfNotification_EmptyNotification` | Empty notification → no error |
-| `TestHandleUpfNotification_EmptyMeasurements` | Empty measurements → creates UE data but no raw data |
-| `TestHandleUpfNotification_CorrelationIdResolution` | SUPI resolved from correlationId |
+| `TestHandleUpfNotification_Basic` | Basic notification → creates TrafficData with RawUpfData |
+| `TestHandleUpfNotification_MultipleItems` | Multiple IP addresses in one notification |
+| `TestHandleUpfNotification_DataAccumulation` | Multiple notifications → RawUpfData accumulates |
+| `TestHandleUpfNotification_MissingCorrelationId` | Missing correlationId → skip (no error) |
+| `TestHandleUpfNotification_UpdateSmfSubscription` | Updates SmfSubscription.LastUpdate |
+| `TestHandleUpfNotification_WithMetadata` | DNN/SNSSAI/RatType/SUPI storage |
+| `TestHandleUpfNotification_ThroughputMeasurement` | Throughput strings stored correctly |
 
 ### 2.3 Notifier Tests
 
@@ -120,40 +97,55 @@ Location: `internal/notifier/notifier_test.go`
 
 Location: `internal/context/`
 
-#### UE Data Tests (`ue_data_test.go`)
+#### Traffic Data Tests (`traffic_data_test.go`)
 
-**CRUD Operations**
+**TrafficDataBucket Tests**
 | Test Function | Description |
 |---------------|-------------|
-| `TestUeDataStore` | Table-driven: Store and retrieve UE data |
-| `TestUeDataGet_NotFound` | Non-existent SUPI returns false |
-| `TestGetOrCreateUeData` | Creates new or returns existing |
-| `TestClearUeData` | Clears all UE data |
+| `TestTrafficDataBucket_Basic` | Bucket creation with correlationId |
+| `TestTrafficDataBucket_GetOrCreate` | Get or create by IP address |
+| `TestTrafficDataBucket_Get` | Get existing TrafficData |
+| `TestTrafficDataBucket_GetAll` | Get all TrafficData in bucket |
+| `TestTrafficDataBucket_Delete` | Delete by IP address |
+| `TestTrafficDataBucket_Concurrent` | 100 goroutines concurrent access |
 
-**RawUpfData Tests**
+**TrafficData Tests**
 | Test Function | Description |
 |---------------|-------------|
-| `TestRawUpfData_Append` | Appends multiple data points to `RawUpfData` slice |
-| `TestRawUpfData_TimestampPreservation` | Timestamps preserved exactly |
-| `TestRawUpfData_ThroughputStorage` | Throughput strings stored correctly |
+| `TestTrafficData_EnrichWithSupi` | SUPI enrichment (first wins) |
+| `TestTrafficData_AppendDataPoint` | Append RawUpfData with timestamp |
 
-**AppendEvent Tests**
+**NWDAFContext TrafficBucket Tests**
 | Test Function | Description |
 |---------------|-------------|
-| `TestAppendEvent` | SMF event appending and metadata update |
+| `TestNWDAFContext_TrafficBucket` | Get/Create/Delete bucket |
+| `TestNWDAFContext_GetOrCreateTrafficData` | Get or create TrafficData |
+| `TestNWDAFContext_GetAllTrafficDataForCorrelation` | Get all data for correlationId |
 
-**Concurrency Tests**
+**SmfSubscription Tests**
 | Test Function | Description |
 |---------------|-------------|
-| `TestConcurrentRawDataAppend` | 100 goroutines appending data points concurrently |
-| `TestConcurrentGetOrCreate` | 50 goroutines calling GetOrCreate for same SUPI |
+| `TestNWDAFContext_SmfSubscription` | Get/Create/Update/Delete |
+| `TestSmfSubscription_ReferenceCount` | Reference counting (add/remove) |
+| `TestSmfSubscription_UpdateLastSeen` | LastUpdate timestamp |
+| `TestSmfSubscription_ValidateInvariant` | RefCount == len(NwdafSubIds) |
+
+**Unified Query Tests (nwdafSubId → correlationIds → data)**
+| Test Function | Description |
+|---------------|-------------|
+| `TestGetCorrelationIdsByNwdafSubId` | Get correlationIds by nwdafSubId |
+| `TestGetCorrelationIdsByNwdafSubId_Empty` | Non-existent nwdafSubId → nil |
+| `TestGetTrafficBucketsByNwdafSubId` | Get buckets by nwdafSubId |
+| `TestGetTrafficDataByNwdafSubId` | Get all TrafficData by nwdafSubId |
+| `TestGetTrafficDataByNwdafSubId_Empty` | Non-existent → nil |
+| `TestGetTrafficDataByNwdafSubId_MultipleCorrelations` | Multiple correlationIds |
+| `TestGetTrafficDataByNwdafSubId_NoBucket` | Resource exists but no bucket → nil |
 
 #### Other Context Tests
 
 | Test File | Tests |
 |-----------|-------|
 | `context_test.go` | Subscription CRUD operations |
-| `correlation_mapping_test.go` | SMF resource reference counting, correlation ID mapping |
 
 #### Thread Safety Testing
 

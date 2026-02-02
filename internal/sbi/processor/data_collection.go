@@ -40,6 +40,7 @@ func (p *Processor) TriggerDataCollection(
 
 // triggerUeCommunicationCollection subscribes to SMF for UE communication data
 // Per TS 23.288: NWDAF subscribes to SMF via Nsmf_EventExposure for UE communication analytics
+// Supports both SUPI-based and Group ID subscriptions (unified architecture)
 func (p *Processor) triggerUeCommunicationCollection(
 	eventSub *models.NwdafEventsSubscriptionEventSubscription,
 	subscriptionId string,
@@ -60,19 +61,6 @@ func (p *Processor) triggerUeCommunicationCollection(
 
 	if eventSub.TgtUe == nil {
 		logger.ProcLog.Warnf("TgtUe is nil, cannot trigger data collection")
-		return
-	}
-
-	// Extract target SUPIs
-	supis := eventSub.TgtUe.Supis
-	if len(supis) == 0 && len(eventSub.TgtUe.IntGroupIds) > 0 {
-		// TODO: Resolve intGroupIds to SUPIs via UDM
-		logger.ProcLog.Infof("IntGroupIds data collection not yet implemented: %v", eventSub.TgtUe.IntGroupIds)
-		return
-	}
-
-	if len(supis) == 0 {
-		logger.ProcLog.Warnf("No target SUPIs for data collection")
 		return
 	}
 
@@ -100,59 +88,115 @@ func (p *Processor) triggerUeCommunicationCollection(
 
 	ctx := nwdaf_context.GetSelf()
 
-	// Subscribe to each SMF endpoint for each target SUPI
-	for _, smfEndpoint := range smfConfig.Endpoints {
-		for _, supi := range supis {
-			// Try to get or create SMF resource (with reference counting)
-			resource, isNew := ctx.GetOrCreateSmfResource(smfEndpoint, supi, subscriptionId)
+	// Build targets from TgtUe
+	var targets []DataCollectionTarget
 
-			var correlationId string
+	// Handle SUPI-based subscriptions
+	for _, supi := range eventSub.TgtUe.Supis {
+		targets = append(targets, DataCollectionTarget{
+			TargetType: nwdaf_context.TargetType_SUPI,
+			Supi:       supi,
+		})
+	}
+
+	// Handle Group ID subscriptions
+	for _, groupId := range eventSub.TgtUe.IntGroupIds {
+		targets = append(targets, DataCollectionTarget{
+			TargetType: nwdaf_context.TargetType_GROUP_ID,
+			GroupId:    groupId,
+		})
+	}
+
+	if len(targets) > 0 {
+		p.triggerTargetDataCollection(
+			ctx, smfConsumer, smfConfig.Endpoints,
+			targets, subscriptionId,
+			smfNotifUri, upfNotifUri, smfRepPeriod,
+		)
+	}
+}
+
+// DataCollectionTarget abstracts SUPI vs Group ID for unified collection
+type DataCollectionTarget struct {
+	TargetType nwdaf_context.TargetType
+	Supi       string
+	GroupId    string
+}
+
+// Identifier returns human-readable target identifier
+func (t DataCollectionTarget) Identifier() string {
+	if t.TargetType == nwdaf_context.TargetType_GROUP_ID {
+		return "groupId=" + t.GroupId
+	}
+	return "supi=" + t.Supi
+}
+
+// triggerTargetDataCollection handles both SUPI and Group ID subscriptions
+func (p *Processor) triggerTargetDataCollection(
+	ctx *nwdaf_context.NWDAFContext,
+	smfConsumer *consumer.Consumer,
+	endpoints []string,
+	targets []DataCollectionTarget,
+	subscriptionId string,
+	smfNotifUri, upfNotifUri string,
+	smfRepPeriod int32,
+) {
+	for _, smfEndpoint := range endpoints {
+		for _, target := range targets {
+			correlationId := uuid.New().String()
+
+			// Get or create SMF subscription (with reference counting)
+			sub, isNew := ctx.GetOrCreateSmfSubscription(correlationId, subscriptionId)
 
 			if !isNew {
-				// Resource exists - reuse existing SMF subscription
-				existingCorrId, _, refCount := resource.GetInfo()
-				correlationId = existingCorrId
+				_, _, refCount := sub.GetInfo()
 				logger.ProcLog.Infof("Reusing SMF subscription for %s (refCount=%d)",
-					supi, refCount)
-				// Note: correlationToSupi already exists, no need to store again
+					target.Identifier(), refCount)
 			} else {
-				// New resource - create SMF subscription
-				correlationId = uuid.New().String()
-
+				// Build SMF subscription options based on target type
 				eventSubs := consumer.BuildUpfEventSubs(upfNotifUri, true, true)
-				subId, err := smfConsumer.SubscribeToSmf(smfEndpoint, consumer.SmfSubscriptionOptions{
-					Supi:        supi,
+				opts := consumer.SmfSubscriptionOptions{
 					NotifUri:    smfNotifUri,
 					NotifId:     correlationId,
 					EventSubs:   eventSubs,
 					NotifMethod: "PERIODIC",
 					RepPeriod:   smfRepPeriod,
-				})
+				}
 
+				// Set target (SUPI or GroupId)
+				if target.TargetType == nwdaf_context.TargetType_GROUP_ID {
+					opts.GroupId = target.GroupId
+				} else {
+					opts.Supi = target.Supi
+				}
+
+				subId, err := smfConsumer.SubscribeToSmf(smfEndpoint, opts)
 				if err != nil {
-					// Release the resource if subscription failed
-					ctx.ReleaseSmfResource(smfEndpoint, supi, subscriptionId)
-					logger.ProcLog.Errorf("Failed to subscribe SMF for SUPI %s: %v", supi, err)
+					ctx.ReleaseSmfSubscription(correlationId, subscriptionId)
+					logger.ProcLog.Errorf("Failed to subscribe SMF for %s: %v",
+						target.Identifier(), err)
 					continue
 				}
 
-				// Update resource with SMF subscription details
-				resource.Lock()
-				resource.SmfSubId = subId
-				resource.CorrelationId = correlationId
-				resource.Unlock()
+				// Update subscription with details
+				sub.Lock()
+				sub.TargetType = target.TargetType
+				sub.Supi = target.Supi
+				sub.GroupId = target.GroupId
+				sub.SmfEndpoint = smfEndpoint
+				sub.SmfSubId = subId
+				sub.Unlock()
 
-				// Store notification routing (only for new SMF subscriptions)
-				ctx.StoreCorrelationToSupi(correlationId, supi)
-
-				logger.ProcLog.Infof("SMF subscription created: supi=%s, subId=%s, corrId=%s",
-					supi, subId, correlationId)
+				logger.ProcLog.Infof("SMF subscription created: %s, subId=%s, corrId=%s",
+					target.Identifier(), subId, correlationId)
 			}
 
-			// Store cleanup tracking (for every NWDAF subscription)
+			// Store cleanup tracking
 			ctx.AddNwdafSubResource(subscriptionId, nwdaf_context.NwdafSubResource{
 				SmfEndpoint:   smfEndpoint,
-				Supi:          supi,
+				TargetType:    target.TargetType,
+				Supi:          target.Supi,
+				GroupId:       target.GroupId,
 				CorrelationId: correlationId,
 				CreatedAt:     time.Now(),
 			})

@@ -28,6 +28,7 @@ type UpfNotificationData struct {
 type UpfNotificationItem struct {
 	EventType                 UpfEventType                `json:"eventType"`
 	UeIpv4Addr                string                      `json:"ueIpv4Addr,omitempty"`
+	UeIpv6Prefix              string                      `json:"ueIpv6Prefix,omitempty"`
 	Supi                      string                      `json:"supi,omitempty"`
 	Dnn                       string                      `json:"dnn,omitempty"`
 	Snssai                    *models.Snssai              `json:"snssai,omitempty"`
@@ -56,93 +57,67 @@ type ThroughputMeasurement struct {
 }
 
 // HandleUpfNotification processes UPF event exposure notifications
-// Per TS 29.564: UPF notifications may not include SUPI, use correlationId to resolve
+// Unified handler for both SUPI-based and Group ID subscriptions
+// Uses two-layer bucket storage: correlationId → TrafficDataBucket → ipAddress → TrafficData
 func (p *Processor) HandleUpfNotification(notif *UpfNotificationData) error {
 	logger.ProcLog.Infof("Processing UPF notification, items: %d, correlationId: %s",
 		len(notif.NotificationItems), notif.CorrelationId)
 
-	ctx := nwdaf_context.GetSelf()
-
-	// Resolve SUPI from correlationId if available
-	var resolvedSupi string
-	if notif.CorrelationId != "" {
-		if supi, ok := ctx.GetSupiByCorrelationId(notif.CorrelationId); ok {
-			resolvedSupi = supi
-			logger.ProcLog.Debugf("Resolved SUPI from correlationId: %s -> %s",
-				notif.CorrelationId, supi)
-		} else {
-			logger.ProcLog.Warnf("Unknown correlationId: %s", notif.CorrelationId)
-		}
+	if notif.CorrelationId == "" {
+		logger.ProcLog.Warnf("UPF notification without correlationId, cannot route")
+		return nil
 	}
 
+	ctx := nwdaf_context.GetSelf()
+	correlationId := notif.CorrelationId
+
+	// Get or create bucket for this correlation ID
+	bucket := ctx.GetOrCreateTrafficBucket(correlationId)
+
+	// Update SMF subscription's last seen time if available
+	if sub := ctx.GetSmfSubscription(correlationId); sub != nil {
+		sub.UpdateLastSeen()
+	}
+
+	// Process each notification item into unified storage
 	for i := range notif.NotificationItems {
 		item := &notif.NotificationItems[i]
-		// Use resolvedSupi if item.Supi is empty
-		if item.Supi == "" && resolvedSupi != "" {
-			item.Supi = resolvedSupi
-		}
-		if err := p.processUpfNotificationItem(ctx, item); err != nil {
-			logger.ProcLog.Warnf("Failed to process UPF notification item: %v", err)
-		}
+		p.processUpfNotificationItemUnified(ctx, bucket, item)
 	}
 
 	return nil
 }
 
-// processUpfNotificationItem handles a single UPF notification item
-func (p *Processor) processUpfNotificationItem(ctx *nwdaf_context.NWDAFContext, item *UpfNotificationItem) error {
-	switch item.EventType {
-	case UpfEventType_USER_DATA_USAGE_MEASURES:
-		p.handleUserDataUsageMeasures(ctx, item)
-	case UpfEventType_USER_DATA_USAGE_TRENDS:
-		logger.ProcLog.Debugf("USER_DATA_USAGE_TRENDS: supi=%s (not implemented)", item.Supi)
-	default:
-		logger.ProcLog.Debugf("Unhandled UPF event type: %s", item.EventType)
+// processUpfNotificationItemUnified handles a single UPF notification item
+// using the unified bucket-based storage
+func (p *Processor) processUpfNotificationItemUnified(
+	ctx *nwdaf_context.NWDAFContext,
+	bucket *nwdaf_context.TrafficDataBucket,
+	item *UpfNotificationItem,
+) {
+	// Get IP address (required field per TS 29.564)
+	ipAddr := item.UeIpv4Addr
+	if ipAddr == "" {
+		ipAddr = item.UeIpv6Prefix
 	}
-
-	return nil
-}
-
-// handleUserDataUsageMeasures processes USER_DATA_USAGE_MEASURES events
-func (p *Processor) handleUserDataUsageMeasures(ctx *nwdaf_context.NWDAFContext, item *UpfNotificationItem) {
-	supi := item.Supi
-	if supi == "" {
-		logger.ProcLog.Warnf("USER_DATA_USAGE_MEASURES without SUPI or correlationId, ueIpv4=%s", item.UeIpv4Addr)
+	if ipAddr == "" {
+		logger.ProcLog.Warnf("UPF notification item without IP address, skipping")
 		return
 	}
 
-	data := ctx.GetOrCreateUeData(supi)
+	// Get or create TrafficData for this IP
+	data := bucket.GetOrCreate(ipAddr)
+
 	data.Lock()
 	defer data.Unlock()
 
-	// Process measurements - store raw data points
-	for _, usage := range item.UserDataUsageMeasurements {
-		dataPoint := nwdaf_context.UpfDataPoint{
-			Timestamp: item.TimeStamp,
-		}
-
-		// Volume measurement
-		if usage.VolumeMeasurement != nil {
-			dataPoint.UlVolume = usage.VolumeMeasurement.UlVolume
-			dataPoint.DlVolume = usage.VolumeMeasurement.DlVolume
-			logger.ProcLog.Infof("UPF VOLUME: supi=%s, ulVol=%d, dlVol=%d",
-				supi, usage.VolumeMeasurement.UlVolume, usage.VolumeMeasurement.DlVolume)
-		}
-
-		// Throughput measurement
-		if usage.ThroughputMeasurement != nil {
-			dataPoint.UlThroughput = usage.ThroughputMeasurement.UlThroughput
-			dataPoint.DlThroughput = usage.ThroughputMeasurement.DlThroughput
-			logger.ProcLog.Infof("UPF THROUGHPUT: supi=%s, ulTput=%s, dlTput=%s",
-				supi, usage.ThroughputMeasurement.UlThroughput, usage.ThroughputMeasurement.DlThroughput)
-		}
-
-		data.RawUpfData = append(data.RawUpfData, dataPoint)
+	// Enrich with SUPI if available
+	if item.Supi != "" && data.Supi == "" {
+		data.Supi = item.Supi
+		logger.ProcLog.Debugf("Enriched IP %s with SUPI %s", ipAddr, item.Supi)
 	}
 
-	data.LastUpdate = item.TimeStamp
-
-	// Update session metadata
+	// Enrich session metadata
 	if item.Dnn != "" {
 		data.Dnn = item.Dnn
 	}
@@ -152,4 +127,29 @@ func (p *Processor) handleUserDataUsageMeasures(ctx *nwdaf_context.NWDAFContext,
 	if item.RatType != "" {
 		data.RatType = item.RatType
 	}
+
+	// Process measurements
+	for _, usage := range item.UserDataUsageMeasurements {
+		dataPoint := nwdaf_context.UpfDataPoint{
+			Timestamp: item.TimeStamp,
+		}
+
+		if usage.VolumeMeasurement != nil {
+			dataPoint.UlVolume = usage.VolumeMeasurement.UlVolume
+			dataPoint.DlVolume = usage.VolumeMeasurement.DlVolume
+			logger.ProcLog.Infof("UPF VOLUME: ip=%s, ulVol=%d, dlVol=%d",
+				ipAddr, usage.VolumeMeasurement.UlVolume, usage.VolumeMeasurement.DlVolume)
+		}
+
+		if usage.ThroughputMeasurement != nil {
+			dataPoint.UlThroughput = usage.ThroughputMeasurement.UlThroughput
+			dataPoint.DlThroughput = usage.ThroughputMeasurement.DlThroughput
+			logger.ProcLog.Infof("UPF THROUGHPUT: ip=%s, ulTput=%s, dlTput=%s",
+				ipAddr, usage.ThroughputMeasurement.UlThroughput, usage.ThroughputMeasurement.DlThroughput)
+		}
+
+		data.RawUpfData = append(data.RawUpfData, dataPoint)
+	}
+
+	data.LastUpdate = item.TimeStamp
 }

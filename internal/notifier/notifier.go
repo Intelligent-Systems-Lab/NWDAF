@@ -238,7 +238,7 @@ func (s *NotificationScheduler) buildNotification() models.NnwdafEventsSubscript
 
 	for _, eventSub := range s.eventSubs {
 		if handler, ok := GetHandler(eventSub.Event); ok {
-			eventNotifications = append(eventNotifications, handler.BuildEventNotification(&eventSub))
+			eventNotifications = append(eventNotifications, handler.BuildEventNotification(s.subscriptionId, &eventSub))
 		}
 	}
 

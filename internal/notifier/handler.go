@@ -7,7 +7,7 @@ import (
 
 // AnalyticsHandler builds event notifications for a specific event type
 type AnalyticsHandler interface {
-	BuildEventNotification(eventSub *models.NwdafEventsSubscriptionEventSubscription) models.NwdafEventsSubscriptionEventNotification
+	BuildEventNotification(nwdafSubId string, eventSub *models.NwdafEventsSubscriptionEventSubscription) models.NwdafEventsSubscriptionEventNotification
 }
 
 // analyticsHandlers maps event types to their handlers
@@ -26,11 +26,12 @@ func GetHandler(event models.NwdafEvent) (AnalyticsHandler, bool) {
 type UeCommunicationHandler struct{}
 
 func (h *UeCommunicationHandler) BuildEventNotification(
+	nwdafSubId string,
 	eventSub *models.NwdafEventsSubscriptionEventSubscription,
 ) models.NwdafEventsSubscriptionEventNotification {
 	return models.NwdafEventsSubscriptionEventNotification{
 		Event:   eventSub.Event,
-		UeComms: []models.UeCommunication{generateUeCommunicationAnalytics(eventSub)},
+		UeComms: []models.UeCommunication{generateUeCommunicationAnalytics(nwdafSubId)},
 	}
 }
 
@@ -38,6 +39,7 @@ func (h *UeCommunicationHandler) BuildEventNotification(
 type AbnormalBehaviourHandler struct{}
 
 func (h *AbnormalBehaviourHandler) BuildEventNotification(
+	nwdafSubId string,
 	eventSub *models.NwdafEventsSubscriptionEventSubscription,
 ) models.NwdafEventsSubscriptionEventNotification {
 	return models.NwdafEventsSubscriptionEventNotification{

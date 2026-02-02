@@ -4,159 +4,198 @@ import (
 	"testing"
 	"time"
 
-	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/openapi/models"
 )
 
-// TestHandleSmfNotification tests SMF notification processing
-func TestHandleSmfNotification(t *testing.T) {
-	nwdaf_context.Init()
-	ctx := nwdaf_context.GetSelf()
-	ctx.ClearUeData()
+// =============================================================================
+// SMF Notification Tests
+// =============================================================================
 
-	p := &Processor{}
+func TestHandleSmfNotification_Basic(t *testing.T) {
+	setupTestContext()
+	p := newTestProcessor()
 
-	notification := &models.NsmfEventExposureNotification{
-		NotifId: "notif-001",
+	ts := time.Now()
+	notif := &models.NsmfEventExposureNotification{
+		NotifId: "test-corr-001",
 		EventNotifs: []models.SmfEventExposureEventNotification{
 			{
-				Supi:    "imsi-208930000000003",
-				Dnn:     "internet",
-				PduSeId: 1,
-				Event:   models.SmfEvent_PDU_SES_EST,
+				Event:     models.SmfEvent_PDU_SES_EST,
+				Supi:      "imsi-001",
+				PduSeId:   1,
+				Dnn:       "internet",
+				TimeStamp: &ts,
 			},
 		},
 	}
 
-	err := p.HandleSmfNotification(notification)
+	err := p.HandleSmfNotification(notif)
 	if err != nil {
-		t.Errorf("HandleSmfNotification() error = %v", err)
+		t.Fatalf("HandleSmfNotification failed: %v", err)
+	}
+}
+
+func TestHandleSmfNotification_EnrichTrafficData(t *testing.T) {
+	ctx := setupTestContext()
+	p := newTestProcessor()
+
+	correlationId := "test-corr-001"
+
+	// Pre-create bucket with traffic data (simulating UPF notification came first)
+	bucket := ctx.GetOrCreateTrafficBucket(correlationId)
+	data := bucket.GetOrCreate("192.168.1.1")
+
+	snssai := &models.Snssai{Sst: 1, Sd: "010203"}
+	ts := time.Now()
+
+	// SMF notification should enrich the data
+	notif := &models.NsmfEventExposureNotification{
+		NotifId: correlationId,
+		EventNotifs: []models.SmfEventExposureEventNotification{
+			{
+				Event:     models.SmfEvent_PDU_SES_EST,
+				Supi:      "imsi-001",
+				PduSeId:   1,
+				Dnn:       "internet",
+				Snssai:    snssai,
+				RatType:   models.RatType_NR,
+				TimeStamp: &ts,
+			},
+		},
 	}
 
-	// Verify UE data was stored
-	data, ok := ctx.GetUeData("imsi-208930000000003")
-	if !ok {
-		t.Error("HandleSmfNotification() did not store UE data")
-	}
+	_ = p.HandleSmfNotification(notif)
+
+	// Verify enrichment
 	if data.Dnn != "internet" {
-		t.Errorf("Dnn = %v, want internet", data.Dnn)
+		t.Errorf("Dnn = %q, want 'internet'", data.Dnn)
 	}
-	if !data.IsActive {
-		t.Error("IsActive should be true after PDU_SES_EST")
+	if data.Snssai == nil || data.Snssai.Sst != 1 {
+		t.Errorf("Snssai not enriched correctly")
 	}
-}
-
-// TestHandlePduSessionLifecycle tests PDU session establishment and release
-func TestHandlePduSessionLifecycle(t *testing.T) {
-	nwdaf_context.Init()
-	ctx := nwdaf_context.GetSelf()
-	ctx.ClearUeData()
-
-	p := &Processor{}
-	supi := "imsi-208930000000003"
-
-	// Simulate PDU session establishment
-	estTime := time.Now()
-	estEvent := &models.SmfEventExposureEventNotification{
-		Supi:      supi,
-		Dnn:       "internet",
-		PduSeId:   1,
-		Event:     models.SmfEvent_PDU_SES_EST,
-		TimeStamp: &estTime,
+	if data.RatType != models.RatType_NR {
+		t.Errorf("RatType = %v, want NR", data.RatType)
 	}
-
-	p.handlePduSessionEstablished(ctx, estEvent)
-
-	data, ok := ctx.GetUeData(supi)
-	if !ok {
-		t.Fatal("UE data not created after PDU_SES_EST")
-	}
-	if data.SessionCount != 1 {
-		t.Errorf("SessionCount = %v, want 1", data.SessionCount)
-	}
-	if !data.IsActive {
-		t.Error("IsActive should be true after establishment")
-	}
-
-	// Simulate PDU session release (after 2 seconds)
-	relTime := estTime.Add(2 * time.Second)
-	relEvent := &models.SmfEventExposureEventNotification{
-		Supi:      supi,
-		PduSeId:   1,
-		Event:     models.SmfEvent_PDU_SES_REL,
-		TimeStamp: &relTime,
-	}
-
-	p.handlePduSessionReleased(ctx, relEvent)
-
-	data, _ = ctx.GetUeData(supi)
-	if data.IsActive {
-		t.Error("IsActive should be false after release")
-	}
-	if data.TotalCommDuration < 2*time.Second {
-		t.Errorf("TotalCommDuration = %v, expected >= 2s", data.TotalCommDuration)
+	if data.Supi != "imsi-001" {
+		t.Errorf("Supi = %q, want 'imsi-001'", data.Supi)
 	}
 }
 
-// TestHandleSmfNotification_MissingSupi tests handling without SUPI
-func TestHandleSmfNotification_MissingSupi(t *testing.T) {
-	nwdaf_context.Init()
-	ctx := nwdaf_context.GetSelf()
-	ctx.ClearUeData()
+func TestHandleSmfNotification_MultipleEvents(t *testing.T) {
+	setupTestContext()
+	p := newTestProcessor()
 
-	p := &Processor{}
-
-	// Event without SUPI should be skipped
-	notification := &models.NsmfEventExposureNotification{
-		NotifId: "notif-002",
+	ts := time.Now()
+	notif := &models.NsmfEventExposureNotification{
+		NotifId: "test-corr-001",
 		EventNotifs: []models.SmfEventExposureEventNotification{
 			{
-				Dnn:   "internet",
-				Event: models.SmfEvent_PDU_SES_EST,
+				Event:     models.SmfEvent_PDU_SES_EST,
+				Supi:      "imsi-001",
+				PduSeId:   1,
+				TimeStamp: &ts,
+			},
+			{
+				Event:     models.SmfEvent_PDU_SES_REL,
+				Supi:      "imsi-001",
+				PduSeId:   1,
+				TimeStamp: &ts,
 			},
 		},
 	}
 
-	err := p.HandleSmfNotification(notification)
+	err := p.HandleSmfNotification(notif)
 	if err != nil {
-		t.Errorf("HandleSmfNotification() should not error on missing SUPI")
+		t.Fatalf("HandleSmfNotification with multiple events failed: %v", err)
 	}
 }
 
-// TestHandleMultipleEvents tests processing multiple events in one notification
-func TestHandleMultipleEvents(t *testing.T) {
-	nwdaf_context.Init()
-	ctx := nwdaf_context.GetSelf()
-	ctx.ClearUeData()
+func TestHandleSmfNotification_MissingSupi(t *testing.T) {
+	setupTestContext()
+	p := newTestProcessor()
 
-	p := &Processor{}
-
-	now := time.Now()
-	notification := &models.NsmfEventExposureNotification{
-		NotifId: "notif-003",
+	notif := &models.NsmfEventExposureNotification{
+		NotifId: "test-corr-001",
 		EventNotifs: []models.SmfEventExposureEventNotification{
 			{
+				Event:   models.SmfEvent_PDU_SES_EST,
+				Supi:    "", // Missing
+				PduSeId: 1,
+			},
+		},
+	}
+
+	// Should not error, just skip the event
+	err := p.HandleSmfNotification(notif)
+	if err != nil {
+		t.Errorf("Should not error on missing SUPI: %v", err)
+	}
+}
+
+func TestHandleSmfNotification_NoMatchingBucket(t *testing.T) {
+	ctx := setupTestContext()
+	p := newTestProcessor()
+
+	correlationId := "test-corr-001"
+	// Don't create bucket - simulating SMF notification before UPF
+
+	ts := time.Now()
+	notif := &models.NsmfEventExposureNotification{
+		NotifId: correlationId,
+		EventNotifs: []models.SmfEventExposureEventNotification{
+			{
+				Event:     models.SmfEvent_PDU_SES_EST,
+				Supi:      "imsi-001",
+				PduSeId:   1,
+				Dnn:       "internet",
+				TimeStamp: &ts,
+			},
+		},
+	}
+
+	// Should not error even without a bucket
+	err := p.HandleSmfNotification(notif)
+	if err != nil {
+		t.Fatalf("HandleSmfNotification failed: %v", err)
+	}
+
+	// Bucket should NOT be created by SMF notification
+	if ctx.GetTrafficBucket(correlationId) != nil {
+		t.Error("SMF notification should not create traffic bucket")
+	}
+}
+
+func TestHandleSmfNotification_EnrichMultipleTrafficData(t *testing.T) {
+	ctx := setupTestContext()
+	p := newTestProcessor()
+
+	correlationId := "test-corr-001"
+
+	// Pre-create bucket with multiple IPs
+	bucket := ctx.GetOrCreateTrafficBucket(correlationId)
+	data1 := bucket.GetOrCreate("192.168.1.1")
+	data2 := bucket.GetOrCreate("192.168.1.2")
+
+	ts := time.Now()
+	notif := &models.NsmfEventExposureNotification{
+		NotifId: correlationId,
+		EventNotifs: []models.SmfEventExposureEventNotification{
+			{
+				Event:     models.SmfEvent_PDU_SES_EST,
 				Supi:      "imsi-001",
 				Dnn:       "internet",
-				Event:     models.SmfEvent_PDU_SES_EST,
-				TimeStamp: &now,
-			},
-			{
-				Supi:      "imsi-002",
-				Dnn:       "internet",
-				Event:     models.SmfEvent_PDU_SES_EST,
-				TimeStamp: &now,
+				TimeStamp: &ts,
 			},
 		},
 	}
 
-	p.HandleSmfNotification(notification)
+	_ = p.HandleSmfNotification(notif)
 
-	// Both UEs should have data
-	_, ok1 := ctx.GetUeData("imsi-001")
-	_, ok2 := ctx.GetUeData("imsi-002")
-
-	if !ok1 || !ok2 {
-		t.Error("HandleSmfNotification should process all events")
+	// Both should be enriched
+	if data1.Dnn != "internet" {
+		t.Errorf("data1.Dnn = %q, want 'internet'", data1.Dnn)
+	}
+	if data2.Dnn != "internet" {
+		t.Errorf("data2.Dnn = %q, want 'internet'", data2.Dnn)
 	}
 }

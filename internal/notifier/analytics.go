@@ -43,7 +43,8 @@ func generateMockAbnormalBehaviours() []models.AbnormalBehaviour {
 
 // generateUeCommunicationAnalytics generates UE Communication analytics using rule-based logic
 // Per TS 23.288 §6.7.3: Analytics based on collected UPF traffic data
-func generateUeCommunicationAnalytics(eventSub *models.NwdafEventsSubscriptionEventSubscription) models.UeCommunication {
+// Uses unified query: nwdafSubId → correlationIds → TrafficDataBuckets
+func generateUeCommunicationAnalytics(nwdafSubId string) models.UeCommunication {
 	now := time.Now()
 	ctx := nwdaf_context.GetSelf()
 
@@ -53,45 +54,45 @@ func generateUeCommunicationAnalytics(eventSub *models.NwdafEventsSubscriptionEv
 	var confidence int32 = 50
 	dnn := "internet"
 
-	// Try to get collected data for target UEs
+	// Track collected data points
 	dataPointCount := 0
-	if eventSub.TgtUe != nil && len(eventSub.TgtUe.Supis) > 0 {
-		for _, supi := range eventSub.TgtUe.Supis {
-			if ueData, ok := ctx.GetUeData(supi); ok {
-				// Use collected data from UPF notifications
-				ueData.Lock()
 
-				// Aggregate from raw data points
-				for _, dp := range ueData.RawUpfData {
-					ulVol += dp.UlVolume
-					dlVol += dp.DlVolume
-				}
-				dataPointCount += len(ueData.RawUpfData)
+	// Get all traffic data for this NWDAF subscription
+	// Unified query: nwdafSubId → correlationIds → buckets → data
+	trafficDataList := ctx.GetTrafficDataByNwdafSubId(nwdafSubId)
 
-				// Calculate communication duration from timestamps
-				if !ueData.StartTime.IsZero() && !ueData.LastUpdate.IsZero() {
-					duration := int32(ueData.LastUpdate.Sub(ueData.StartTime).Seconds())
-					if duration > commDur {
-						commDur = duration
-					}
-				}
+	for _, trafficData := range trafficDataList {
+		trafficData.Lock()
 
-				// Use DNN from UPF data if available
-				if ueData.Dnn != "" {
-					dnn = ueData.Dnn
-				}
+		// Aggregate from raw data points
+		for _, dp := range trafficData.RawUpfData {
+			ulVol += dp.UlVolume
+			dlVol += dp.DlVolume
+		}
+		dataPointCount += len(trafficData.RawUpfData)
 
-				ueData.Unlock()
-				notifierLog.Debugf("Using collected data for UE %s: ulVol=%d, dlVol=%d", supi, ulVol, dlVol)
+		// Calculate communication duration from timestamps
+		if !trafficData.CreatedAt.IsZero() && !trafficData.LastUpdate.IsZero() {
+			duration := int32(trafficData.LastUpdate.Sub(trafficData.CreatedAt).Seconds())
+			if duration > commDur {
+				commDur = duration
 			}
 		}
+
+		// Use DNN from data if available
+		if trafficData.Dnn != "" {
+			dnn = trafficData.Dnn
+		}
+
+		trafficData.Unlock()
+		notifierLog.Debugf("Using collected data (ip=%s): ulVol=%d, dlVol=%d",
+			trafficData.IpAddress, ulVol, dlVol)
 	}
 
 	// Rule-based confidence calculation
-	// If no data collected, confidence should be 0
 	if ulVol == 0 && dlVol == 0 {
 		confidence = 0
-		notifierLog.Debugf("No collected data, confidence set to 0")
+		notifierLog.Debugf("No collected data for nwdafSubId=%s, confidence=0", nwdafSubId)
 	} else {
 		confidence = calculateConfidence(dataPointCount, ulVol, dlVol)
 	}

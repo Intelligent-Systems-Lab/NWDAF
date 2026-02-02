@@ -9,8 +9,10 @@ const (
 
 // Extended NsmfEventExposure with UPF_EVENT support
 // Per TS 29.508: notifId is used as correlation ID for notification routing
+// Supports both individual SUPI and Group ID subscriptions
 type ExtendedNsmfEventExposure struct {
 	Supi         string                      `json:"supi,omitempty"`
+	GroupId      string                      `json:"groupId,omitempty"` // For Group ID subscriptions (TS 29.508)
 	NotifUri     string                      `json:"notifUri"`
 	NotifId      string                      `json:"notifId"` // Correlation ID per TS 29.508
 	SubId        string                      `json:"subId,omitempty"`

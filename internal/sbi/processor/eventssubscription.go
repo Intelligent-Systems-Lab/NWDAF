@@ -772,21 +772,17 @@ func (p *Processor) cleanupDataCollection(subscriptionId string) {
 		return
 	}
 
-	// Release each SMF resource
+	// Release each SMF subscription
 	for _, res := range resources {
-		shouldDelete, smfResource := ctx.ReleaseSmfResource(
-			res.SmfEndpoint,
-			res.Supi,
-			subscriptionId,
-		)
+		shouldDelete, smfSub := ctx.ReleaseSmfSubscription(res.CorrelationId, subscriptionId)
 
-		if shouldDelete && smfResource != nil {
-			// Last reference - delete notification routing
-			ctx.DeleteCorrelationToSupi(res.CorrelationId)
+		if shouldDelete && smfSub != nil {
+			// Last reference - clean up traffic data bucket
+			ctx.DeleteTrafficBucket(res.CorrelationId)
 
 			// Unsubscribe from SMF
 			if consumer != nil {
-				_, smfSubId, _ := smfResource.GetInfo()
+				_, smfSubId, _ := smfSub.GetInfo()
 				err := consumer.UnsubscribeFromSmf(res.SmfEndpoint, smfSubId)
 				if err != nil {
 					logger.ProcLog.Errorf("Failed to unsubscribe from SMF: %v", err)
