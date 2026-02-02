@@ -51,7 +51,7 @@ func generateUeCommunicationAnalytics(nwdafSubId string) models.UeCommunication 
 	// Default values
 	var ulVol, dlVol int64 = 0, 0
 	var commDur int32 = 60 // Default 1 minute
-	var confidence int32 = 50
+	var confidence int32   // Will be calculated based on data
 	dnn := "internet"
 
 	// Track collected data points
