@@ -7,7 +7,10 @@ import (
 
 // AnalyticsHandler builds event notifications for a specific event type
 type AnalyticsHandler interface {
-	BuildEventNotification(nwdafSubId string, eventSub *models.NwdafEventsSubscriptionEventSubscription) models.NwdafEventsSubscriptionEventNotification
+	BuildEventNotification(
+		nwdafSubId string,
+		eventSub *models.NwdafEventsSubscriptionEventSubscription,
+	) models.NwdafEventsSubscriptionEventNotification
 }
 
 // analyticsHandlers maps event types to their handlers

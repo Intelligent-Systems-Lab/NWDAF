@@ -311,7 +311,9 @@ func (c *NWDAFContext) GetSmfSubscription(correlationId string) *SmfSubscription
 }
 
 // ReleaseSmfSubscription decrements reference and returns true if last reference
-func (c *NWDAFContext) ReleaseSmfSubscription(correlationId, nwdafSubId string) (shouldDelete bool, sub *SmfSubscription) {
+func (c *NWDAFContext) ReleaseSmfSubscription(
+	correlationId, nwdafSubId string,
+) (shouldDelete bool, sub *SmfSubscription) {
 	val, ok := c.smfSubscriptions.Load(correlationId)
 	if !ok {
 		logger.CtxLog.Warnf("SmfSubscription not found for release: %s", correlationId)

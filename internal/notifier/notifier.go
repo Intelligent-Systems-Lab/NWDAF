@@ -77,7 +77,8 @@ func (s *NotificationScheduler) Start() {
 	if s.monDur != nil {
 		monDurStr = s.monDur.Format(time.RFC3339)
 	}
-	logger.NotifierLog.Infof("Notification scheduler started for subscription %s (period: %ds, maxReports: %d, monDur: %s)",
+	logger.NotifierLog.Infof(
+		"Notification scheduler started for subscription %s (period: %ds, maxReports: %d, monDur: %s)",
 		s.subscriptionId, s.repPeriod, s.maxReportNbr, monDurStr)
 }
 

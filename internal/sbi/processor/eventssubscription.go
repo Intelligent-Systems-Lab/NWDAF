@@ -71,7 +71,9 @@ func (p *Processor) HandleCreateSubscription(
 	logger.ProcLog.Infof("Subscription created: %s", subscriptionId)
 
 	// Start notification scheduler for PERIODIC notifications
-	if subscription.NotifMethod == string(models.NwdafEventsSubscriptionNotificationMethod_PERIODIC) && subscription.RepPeriod > 0 {
+
+	isPeriodic := subscription.NotifMethod == string(models.NwdafEventsSubscriptionNotificationMethod_PERIODIC)
+	if isPeriodic && subscription.RepPeriod > 0 {
 		// Create completion callback to handle scheduler termination
 		onComplete := func(subId string, reason string) {
 			logger.ProcLog.Infof("Subscription %s notification completed: %s", subId, reason)
@@ -189,7 +191,8 @@ func (p *Processor) HandleUpdateSubscription(
 	ctx.UpdateSubscription(subscription)
 
 	// Start new scheduler if PERIODIC notification requested
-	if subscription.NotifMethod == string(models.NwdafEventsSubscriptionNotificationMethod_PERIODIC) && subscription.RepPeriod > 0 {
+	isPeriodic := subscription.NotifMethod == string(models.NwdafEventsSubscriptionNotificationMethod_PERIODIC)
+	if isPeriodic && subscription.RepPeriod > 0 {
 		// Create completion callback to handle scheduler termination
 		onComplete := func(subId string, reason string) {
 			logger.ProcLog.Infof("Subscription %s notification completed: %s", subId, reason)
@@ -295,7 +298,8 @@ func (p *Processor) applyAndValidateDefaults(req *models.NnwdafEventsSubscriptio
 		return &models.ProblemDetails{
 			Status: http.StatusNotImplemented,
 			Cause:  "THRESHOLD_NOT_IMPLEMENTED",
-			Detail: "notificationMethod defaults to THRESHOLD which is not yet implemented. Please specify evtReq.notifMethod as PERIODIC.",
+			Detail: "notificationMethod defaults to THRESHOLD which is not yet implemented. " +
+				"Please specify evtReq.notifMethod as PERIODIC.",
 		}
 	}
 
@@ -443,7 +447,8 @@ func (p *Processor) validateEventTargetPeriod(
 		return &models.ProblemDetails{
 			Status: http.StatusBadRequest,
 			Cause:  "BOTH_STAT_PRED_NOT_ALLOWED",
-			Detail: fmt.Sprintf("eventSubscriptions[%d]: analytics target period with startTs in past and endTs in future is not allowed", index),
+			Detail: fmt.Sprintf("eventSubscriptions[%d]: analytics target period with startTs in past "+
+				"and endTs in future is not allowed", index),
 		}
 	}
 
