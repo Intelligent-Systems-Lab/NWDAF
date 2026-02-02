@@ -179,12 +179,22 @@ func (s *NotificationScheduler) sendNotification() {
 		return
 	}
 
-	resp, err := http.Post(s.notificationURI, "application/json", bytes.NewBuffer(jsonData))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.notificationURI, bytes.NewBuffer(jsonData))
+	if err != nil {
+		logger.NotifierLog.Errorf("Failed to create request: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		logger.NotifierLog.Warnf("Failed to send notification to %s: %v", s.notificationURI, err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNoContent {
 		logger.NotifierLog.Infof("Notification #%d sent successfully to %s for subscription %s",
