@@ -13,9 +13,9 @@ import (
 func TestTrafficDataBucket_Basic(t *testing.T) {
 	Init()
 
-	bucket := NewTrafficDataBucket("test-corr-001")
+	bucket := NewTrafficDataBucket(testCorsId)
 
-	if bucket.CorrelationId != "test-corr-001" {
+	if bucket.CorrelationId != testCorsId {
 		t.Errorf("CorrelationId = %q, want %q", bucket.CorrelationId, "test-corr-001")
 	}
 
@@ -24,20 +24,27 @@ func TestTrafficDataBucket_Basic(t *testing.T) {
 	}
 }
 
-func TestTrafficDataBucket_GetOrCreate(t *testing.T) {
+const (
+	testCorsId    = "test-corr-001"
+	testIpAddress = "192.168.1.1"
+	testSupi      = "imsi-001"
+	testNwdafSub  = "nwdaf-sub-001"
+)
+
+func TestTrafficDataBucket_AddUpfData(t *testing.T) {
 	Init()
 
-	bucket := NewTrafficDataBucket("test-corr-001")
+	bucket := NewTrafficDataBucket(testCorsId)
 
 	// First call should create
 	data1 := bucket.GetOrCreate("192.168.1.1")
 	if data1 == nil {
 		t.Fatal("GetOrCreate returned nil")
 	}
-	if data1.IpAddress != "192.168.1.1" {
+	if data1.IpAddress != testIpAddress {
 		t.Errorf("IpAddress = %q, want %q", data1.IpAddress, "192.168.1.1")
 	}
-	if data1.CorrelationId != "test-corr-001" {
+	if data1.CorrelationId != testCorsId {
 		t.Errorf("CorrelationId = %q, want %q", data1.CorrelationId, "test-corr-001")
 	}
 
@@ -61,7 +68,7 @@ func TestTrafficDataBucket_GetOrCreate(t *testing.T) {
 func TestTrafficDataBucket_Get(t *testing.T) {
 	Init()
 
-	bucket := NewTrafficDataBucket("test-corr-001")
+	bucket := NewTrafficDataBucket(testCorsId)
 
 	// Get on non-existent should return nil
 	if bucket.Get("192.168.1.1") != nil {
@@ -79,7 +86,7 @@ func TestTrafficDataBucket_Get(t *testing.T) {
 func TestTrafficDataBucket_GetAll(t *testing.T) {
 	Init()
 
-	bucket := NewTrafficDataBucket("test-corr-001")
+	bucket := NewTrafficDataBucket(testCorsId)
 
 	ips := []string{"192.168.1.1", "192.168.1.2", "10.0.0.1"}
 	for _, ip := range ips {
@@ -106,7 +113,7 @@ func TestTrafficDataBucket_GetAll(t *testing.T) {
 func TestTrafficDataBucket_Delete(t *testing.T) {
 	Init()
 
-	bucket := NewTrafficDataBucket("test-corr-001")
+	bucket := NewTrafficDataBucket(testCorsId)
 	bucket.GetOrCreate("192.168.1.1")
 	bucket.GetOrCreate("192.168.1.2")
 
@@ -132,7 +139,7 @@ func TestTrafficDataBucket_Delete(t *testing.T) {
 func TestTrafficDataBucket_GetIpAddresses(t *testing.T) {
 	Init()
 
-	bucket := NewTrafficDataBucket("test-corr-001")
+	bucket := NewTrafficDataBucket(testCorsId)
 	bucket.GetOrCreate("192.168.1.1")
 	bucket.GetOrCreate("192.168.1.2")
 
@@ -145,7 +152,7 @@ func TestTrafficDataBucket_GetIpAddresses(t *testing.T) {
 func TestTrafficDataBucket_Concurrent(t *testing.T) {
 	Init()
 
-	bucket := NewTrafficDataBucket("test-corr-001")
+	bucket := NewTrafficDataBucket(testCorsId)
 	var wg sync.WaitGroup
 	numGoroutines := 100
 
@@ -176,14 +183,15 @@ func TestTrafficData_EnrichWithSupi(t *testing.T) {
 	Init()
 
 	data := &TrafficData{
-		IpAddress: "192.168.1.1",
+		CorrelationId: testCorsId,
+		IpAddress:     testIpAddress,
 	}
 
 	// First enrichment should succeed
-	if !data.EnrichWithSupi("imsi-001") {
+	if !data.EnrichWithSupi(testSupi) {
 		t.Error("First enrichment should return true")
 	}
-	if data.Supi != "imsi-001" {
+	if data.Supi != testSupi {
 		t.Errorf("Supi = %q, want %q", data.Supi, "imsi-001")
 	}
 
@@ -191,7 +199,7 @@ func TestTrafficData_EnrichWithSupi(t *testing.T) {
 	if data.EnrichWithSupi("imsi-002") {
 		t.Error("Second enrichment should return false")
 	}
-	if data.Supi != "imsi-001" {
+	if data.Supi != testSupi {
 		t.Errorf("Supi = %q, want %q (should not change)", data.Supi, "imsi-001")
 	}
 }
@@ -235,7 +243,7 @@ func TestNWDAFContext_TrafficBucket(t *testing.T) {
 	ctx := GetSelf()
 	ctx.ClearTrafficDataStore()
 
-	correlationId := "test-corr-001"
+	correlationId := testCorsId
 
 	// GetTrafficBucket on non-existent should return nil
 	if ctx.GetTrafficBucket(correlationId) != nil {
@@ -316,8 +324,8 @@ func TestNWDAFContext_SmfSubscription(t *testing.T) {
 	ctx := GetSelf()
 	ctx.ClearSmfSubscriptions()
 
-	correlationId := "test-corr-001"
-	nwdafSubId := "nwdaf-sub-001"
+	correlationId := testCorsId
+	nwdafSubId := testNwdafSub
 
 	// GetSmfSubscription on non-existent should return nil
 	if ctx.GetSmfSubscription(correlationId) != nil {
@@ -376,7 +384,7 @@ func TestSmfSubscription_ReferenceCount(t *testing.T) {
 	ctx := GetSelf()
 	ctx.ClearSmfSubscriptions()
 
-	correlationId := "test-corr-001"
+	correlationId := testCorsId
 	nwdafSub1 := "nwdaf-sub-001"
 	nwdafSub2 := "nwdaf-sub-002"
 
@@ -459,7 +467,7 @@ func TestGetCorrelationIdsByNwdafSubId(t *testing.T) {
 	ctx.ClearNwdafSubResourcesMap()
 	ctx.ClearTrafficDataStore()
 
-	nwdafSubId := "nwdaf-sub-001"
+	nwdafSubId := testNwdafSub
 
 	// Add resources for this NWDAF subscription
 	ctx.AddNwdafSubResource(nwdafSubId, NwdafSubResource{
@@ -507,7 +515,7 @@ func TestGetTrafficBucketsByNwdafSubId(t *testing.T) {
 	ctx.ClearNwdafSubResourcesMap()
 	ctx.ClearTrafficDataStore()
 
-	nwdafSubId := "nwdaf-sub-001"
+	nwdafSubId := testNwdafSub
 
 	// Add resources
 	ctx.AddNwdafSubResource(nwdafSubId, NwdafSubResource{
@@ -533,7 +541,7 @@ func TestGetTrafficDataByNwdafSubId(t *testing.T) {
 	ctx.ClearNwdafSubResourcesMap()
 	ctx.ClearTrafficDataStore()
 
-	nwdafSubId := "nwdaf-sub-001"
+	nwdafSubId := testNwdafSub
 
 	// Add resource
 	ctx.AddNwdafSubResource(nwdafSubId, NwdafSubResource{
@@ -569,7 +577,7 @@ func TestGetTrafficDataByNwdafSubId_MultipleCorrelations(t *testing.T) {
 	ctx.ClearNwdafSubResourcesMap()
 	ctx.ClearTrafficDataStore()
 
-	nwdafSubId := "nwdaf-sub-001"
+	nwdafSubId := testNwdafSub
 
 	// Add two correlation IDs for same NWDAF subscription
 	ctx.AddNwdafSubResource(nwdafSubId, NwdafSubResource{CorrelationId: "corr-001"})
@@ -604,7 +612,7 @@ func TestGetTrafficDataByNwdafSubId_NoBucket(t *testing.T) {
 	ctx.ClearNwdafSubResourcesMap()
 	ctx.ClearTrafficDataStore()
 
-	nwdafSubId := "nwdaf-sub-001"
+	nwdafSubId := testNwdafSub
 
 	// Add resource but don't create bucket
 	ctx.AddNwdafSubResource(nwdafSubId, NwdafSubResource{CorrelationId: "corr-001"})

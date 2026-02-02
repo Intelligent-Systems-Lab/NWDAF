@@ -23,7 +23,10 @@ func TestNewConsumer(t *testing.T) {
 // TestConsumerContext tests Consumer.Context() method
 func TestConsumerContext(t *testing.T) {
 	nwdaf_context.Init()
-	c, _ := NewConsumer()
+	c, err := NewConsumer()
+	if err != nil {
+		t.Fatalf("NewConsumer failed: %v", err)
+	}
 
 	ctx := c.Context()
 	if ctx == nil {
@@ -33,7 +36,10 @@ func TestConsumerContext(t *testing.T) {
 
 // TestNsmfServiceHTTPClient tests HTTP client is properly initialized
 func TestNsmfServiceHTTPClient(t *testing.T) {
-	c, _ := NewConsumer()
+	c, err := NewConsumer()
+	if err != nil {
+		t.Fatalf("NewConsumer failed: %v", err)
+	}
 
 	// Get the HTTP client - should be a single instance
 	client := c.NsmfService.HTTPClient()
@@ -56,7 +62,10 @@ func TestNsmfServiceHTTPClient(t *testing.T) {
 // TestEmbeddedMethodPromotion tests that NsmfService methods are promoted to Consumer
 func TestEmbeddedMethodPromotion(t *testing.T) {
 	nwdaf_context.Init()
-	c, _ := NewConsumer()
+	c, err := NewConsumer()
+	if err != nil {
+		t.Fatalf("NewConsumer failed: %v", err)
+	}
 
 	// These methods should be accessible directly on Consumer via embedding
 	// We can't call them without a real SMF, but we can verify they exist

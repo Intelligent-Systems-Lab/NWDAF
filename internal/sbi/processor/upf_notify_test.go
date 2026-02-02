@@ -10,6 +10,11 @@ import (
 	"github.com/free5gc/openapi/models"
 )
 
+const (
+	testCorsId = "test-corr-001"
+	testDnn    = "internet"
+)
+
 // mockNwdafApp implements NwdafApp for testing
 type mockNwdafApp struct{}
 
@@ -41,7 +46,7 @@ func TestHandleUpfNotification_Basic(t *testing.T) {
 	ctx := setupTestContext()
 	p := newTestProcessor()
 
-	correlationId := "test-corr-001"
+	correlationId := testCorsId
 	ts := time.Now()
 
 	notif := &UpfNotificationData{
@@ -97,7 +102,7 @@ func TestHandleUpfNotification_MultipleItems(t *testing.T) {
 	ctx := setupTestContext()
 	p := newTestProcessor()
 
-	correlationId := "test-corr-001"
+	correlationId := testCorsId
 
 	notif := &UpfNotificationData{
 		CorrelationId: correlationId,
@@ -144,7 +149,7 @@ func TestHandleUpfNotification_DataAccumulation(t *testing.T) {
 	ctx := setupTestContext()
 	p := newTestProcessor()
 
-	correlationId := "test-corr-001"
+	correlationId := testCorsId
 
 	// First notification
 	notif1 := &UpfNotificationData{
@@ -159,7 +164,9 @@ func TestHandleUpfNotification_DataAccumulation(t *testing.T) {
 			},
 		},
 	}
-	_ = p.HandleUpfNotification(notif1)
+	if err := p.HandleUpfNotification(notif1); err != nil {
+		t.Errorf("First notification failed: %v", err)
+	}
 
 	// Second notification
 	notif2 := &UpfNotificationData{
@@ -174,7 +181,9 @@ func TestHandleUpfNotification_DataAccumulation(t *testing.T) {
 			},
 		},
 	}
-	_ = p.HandleUpfNotification(notif2)
+	if err := p.HandleUpfNotification(notif2); err != nil {
+		t.Errorf("Second notification failed: %v", err)
+	}
 
 	bucket := ctx.GetTrafficBucket(correlationId)
 	data := bucket.Get("192.168.1.1")
@@ -217,7 +226,7 @@ func TestHandleUpfNotification_UpdateSmfSubscription(t *testing.T) {
 	ctx := setupTestContext()
 	p := newTestProcessor()
 
-	correlationId := "test-corr-001"
+	correlationId := testCorsId
 
 	// Create SmfSubscription first
 	sub, _ := ctx.GetOrCreateSmfSubscription(correlationId, "nwdaf-sub-001")
@@ -235,7 +244,9 @@ func TestHandleUpfNotification_UpdateSmfSubscription(t *testing.T) {
 		},
 	}
 
-	_ = p.HandleUpfNotification(notif)
+	if err := p.HandleUpfNotification(notif); err != nil {
+		t.Errorf("HandleUpfNotification failed: %v", err)
+	}
 
 	// LastUpdate should be updated
 	if !sub.LastUpdate.After(originalLastUpdate) {
@@ -247,7 +258,7 @@ func TestHandleUpfNotification_WithMetadata(t *testing.T) {
 	ctx := setupTestContext()
 	p := newTestProcessor()
 
-	correlationId := "test-corr-001"
+	correlationId := testCorsId
 	snssai := &models.Snssai{Sst: 1, Sd: "010203"}
 
 	notif := &UpfNotificationData{
@@ -264,12 +275,14 @@ func TestHandleUpfNotification_WithMetadata(t *testing.T) {
 		},
 	}
 
-	_ = p.HandleUpfNotification(notif)
+	if err := p.HandleUpfNotification(notif); err != nil {
+		t.Errorf("HandleUpfNotification failed: %v", err)
+	}
 
 	bucket := ctx.GetTrafficBucket(correlationId)
 	data := bucket.Get("192.168.1.1")
 
-	if data.Dnn != "internet" {
+	if data.Dnn != testDnn {
 		t.Errorf("Dnn = %q, want 'internet'", data.Dnn)
 	}
 	if data.Snssai == nil || data.Snssai.Sst != 1 {
@@ -287,7 +300,7 @@ func TestHandleUpfNotification_ThroughputMeasurement(t *testing.T) {
 	ctx := setupTestContext()
 	p := newTestProcessor()
 
-	correlationId := "test-corr-001"
+	correlationId := testCorsId
 
 	notif := &UpfNotificationData{
 		CorrelationId: correlationId,
@@ -307,7 +320,9 @@ func TestHandleUpfNotification_ThroughputMeasurement(t *testing.T) {
 		},
 	}
 
-	_ = p.HandleUpfNotification(notif)
+	if err := p.HandleUpfNotification(notif); err != nil {
+		t.Errorf("HandleUpfNotification failed: %v", err)
+	}
 
 	bucket := ctx.GetTrafficBucket(correlationId)
 	data := bucket.Get("192.168.1.1")

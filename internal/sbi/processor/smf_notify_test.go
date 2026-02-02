@@ -39,7 +39,7 @@ func TestHandleSmfNotification_EnrichTrafficData(t *testing.T) {
 	ctx := setupTestContext()
 	p := newTestProcessor()
 
-	correlationId := "test-corr-001"
+	correlationId := testCorsId
 
 	// Pre-create bucket with traffic data (simulating UPF notification came first)
 	bucket := ctx.GetOrCreateTrafficBucket(correlationId)
@@ -64,10 +64,12 @@ func TestHandleSmfNotification_EnrichTrafficData(t *testing.T) {
 		},
 	}
 
-	_ = p.HandleSmfNotification(notif)
+	if err := p.HandleSmfNotification(notif); err != nil {
+		t.Errorf("HandleSmfNotification failed: %v", err)
+	}
 
 	// Verify enrichment
-	if data.Dnn != "internet" {
+	if data.Dnn != testDnn {
 		t.Errorf("Dnn = %q, want 'internet'", data.Dnn)
 	}
 	if data.Snssai == nil || data.Snssai.Sst != 1 {
@@ -136,7 +138,7 @@ func TestHandleSmfNotification_NoMatchingBucket(t *testing.T) {
 	ctx := setupTestContext()
 	p := newTestProcessor()
 
-	correlationId := "test-corr-001"
+	correlationId := testCorsId
 	// Don't create bucket - simulating SMF notification before UPF
 
 	ts := time.Now()
@@ -169,7 +171,7 @@ func TestHandleSmfNotification_EnrichMultipleTrafficData(t *testing.T) {
 	ctx := setupTestContext()
 	p := newTestProcessor()
 
-	correlationId := "test-corr-001"
+	correlationId := testCorsId
 
 	// Pre-create bucket with multiple IPs
 	bucket := ctx.GetOrCreateTrafficBucket(correlationId)
@@ -189,7 +191,9 @@ func TestHandleSmfNotification_EnrichMultipleTrafficData(t *testing.T) {
 		},
 	}
 
-	_ = p.HandleSmfNotification(notif)
+	if err := p.HandleSmfNotification(notif); err != nil {
+		t.Errorf("HandleSmfNotification failed: %v", err)
+	}
 
 	// Both should be enriched
 	if data1.Dnn != "internet" {
