@@ -82,7 +82,7 @@ func ReadConfig(cfgPath string) (*Config, error) {
 		return nil, err
 	}
 
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	if err = yaml.Unmarshal(data, cfg); err != nil {
 		logger.CfgLog.Errorf("Failed to parse config file: %v", err)
 		return nil, err
 	}
