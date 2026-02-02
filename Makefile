@@ -1,4 +1,4 @@
-.PHONY: build clean run
+.PHONY: build clean run lint lint-fix
 
 BINARY_NAME=nwdaf
 BUILD_DIR=bin
@@ -22,4 +22,11 @@ deps:
 test:
 	go test -v ./...
 
+lint:
+	golangci-lint run ./...
+
+lint-fix:
+	golangci-lint run --fix ./...
+
 .DEFAULT_GOAL := build
+

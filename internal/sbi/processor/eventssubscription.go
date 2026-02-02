@@ -5,11 +5,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/free5gc/openapi/models"
-
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/notifier"
+	"github.com/free5gc/openapi/models"
 )
 
 // HandleCreateSubscription processes new subscription requests

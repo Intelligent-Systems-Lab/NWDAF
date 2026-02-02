@@ -4,10 +4,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/free5gc/openapi/models"
 	"github.com/google/uuid"
 
 	"github.com/free5gc/nwdaf/internal/logger"
+	"github.com/free5gc/openapi/models"
 )
 
 var nwdafContext *NWDAFContext
