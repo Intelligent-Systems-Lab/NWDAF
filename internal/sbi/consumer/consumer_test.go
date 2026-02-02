@@ -13,7 +13,7 @@ func TestNewConsumer(t *testing.T) {
 		t.Errorf("NewConsumer() error = %v", err)
 	}
 	if c == nil {
-		t.Error("NewConsumer() returned nil")
+		t.Fatal("NewConsumer() returned nil")
 	}
 	if c.NsmfService == nil {
 		t.Error("NsmfService should be initialized")
@@ -38,7 +38,7 @@ func TestNsmfServiceHTTPClient(t *testing.T) {
 	// Get the HTTP client - should be a single instance
 	client := c.NsmfService.HTTPClient()
 	if client == nil {
-		t.Error("HTTPClient() returned nil")
+		t.Fatal("HTTPClient() returned nil")
 	}
 
 	// Same client should be returned (single instance)

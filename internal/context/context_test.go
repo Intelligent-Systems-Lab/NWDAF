@@ -40,7 +40,7 @@ func TestSubscriptionCRUD(t *testing.T) {
 	// Test Get
 	retrieved := ctx.GetSubscription(sub.ID)
 	if retrieved == nil {
-		t.Errorf("GetSubscription() returned nil for existing subscription")
+		t.Fatalf("GetSubscription() returned nil for existing subscription")
 	}
 
 	if retrieved.NotificationURI != sub.NotificationURI {
