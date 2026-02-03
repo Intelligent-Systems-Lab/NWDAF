@@ -144,7 +144,14 @@ func (p *Processor) triggerTargetDataCollection(
 ) {
 	for _, smfEndpoint := range endpoints {
 		for _, target := range targets {
-			correlationId := uuid.New().String()
+			targetId := target.Identifier()
+			correlationId, found := ctx.GetSmfCorrelationId(targetId, smfEndpoint)
+
+			if !found {
+				correlationId = uuid.New().String()
+				// Store mapping optimistically so other threads might use it
+				ctx.StoreSmfCorrelationId(targetId, smfEndpoint, correlationId)
+			}
 
 			// Get or create SMF subscription (with reference counting)
 			sub, isNew := ctx.GetOrCreateSmfSubscription(correlationId, subscriptionId)
@@ -152,7 +159,7 @@ func (p *Processor) triggerTargetDataCollection(
 			if !isNew {
 				_, _, refCount := sub.GetInfo()
 				logger.ProcLog.Infof("Reusing SMF subscription for %s (refCount=%d)",
-					target.Identifier(), refCount)
+					targetId, refCount)
 			} else {
 				// Build SMF subscription options based on target type
 				eventSubs := consumer.BuildUpfEventSubs(upfNotifUri, true, true)

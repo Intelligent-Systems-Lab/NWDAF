@@ -83,6 +83,14 @@ Tests UPF data point storage using bucket-based architecture.
 | `TestHandleUpfNotification_WithMetadata` | DNN/SNSSAI/RatType/SUPI storage |
 | `TestHandleUpfNotification_ThroughputMeasurement` | Throughput strings stored correctly |
 
+#### Data Collection Tests (`data_collection_test.go`)
+
+Tests data collection triggering and resource management.
+
+| Test Function | Description |
+|---------------|-------------|
+| `TestTriggerTargetDataCollection_ResourceReuse` | Verifies SMF subscription reuse (target mapping and ref counting) |
+
 ### 2.3 Notifier Tests
 
 Location: `internal/notifier/notifier_test.go`

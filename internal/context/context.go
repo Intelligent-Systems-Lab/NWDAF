@@ -45,6 +45,10 @@ type NWDAFContext struct {
 	// Traffic data: correlationId → *TrafficDataBucket
 	// Two-layer nested map: bucket contains map[ipAddress]*TrafficData
 	trafficDataStore sync.Map
+
+	// SMF target mapping: targetIdentifier + "@" + smfEndpoint → correlationId
+	// Used to reuse active SMF subscriptions for the same target and endpoint
+	smfTargetMap sync.Map
 }
 
 // Subscription represents an individual event subscription

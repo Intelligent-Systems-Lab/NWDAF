@@ -271,6 +271,32 @@ func (d *TrafficData) EnrichWithSupi(supi string) bool {
 
 // --- NWDAFContext methods for SmfSubscription management ---
 
+// getSmfTargetKey generating unique key for target on specific SMF
+func (c *NWDAFContext) getSmfTargetKey(targetId, smfEndpoint string) string {
+	return targetId + "@" + smfEndpoint
+}
+
+// GetSmfCorrelationId retrieves existing correlation ID for target/endpoint pair
+func (c *NWDAFContext) GetSmfCorrelationId(targetId, smfEndpoint string) (string, bool) {
+	key := c.getSmfTargetKey(targetId, smfEndpoint)
+	if val, ok := c.smfTargetMap.Load(key); ok {
+		return val.(string), true
+	}
+	return "", false
+}
+
+// StoreSmfCorrelationId saves mapping for target/endpoint pair
+func (c *NWDAFContext) StoreSmfCorrelationId(targetId, smfEndpoint, correlationId string) {
+	key := c.getSmfTargetKey(targetId, smfEndpoint)
+	c.smfTargetMap.Store(key, correlationId)
+}
+
+// RemoveSmfCorrelationId removes mapping for target/endpoint pair
+func (c *NWDAFContext) RemoveSmfCorrelationId(targetId, smfEndpoint string) {
+	key := c.getSmfTargetKey(targetId, smfEndpoint)
+	c.smfTargetMap.Delete(key)
+}
+
 // GetOrCreateSmfSubscription gets or creates an SMF subscription
 // Returns (subscription, isNew)
 func (c *NWDAFContext) GetOrCreateSmfSubscription(correlationId, nwdafSubId string) (*SmfSubscription, bool) {
@@ -310,6 +336,14 @@ func (c *NWDAFContext) GetSmfSubscription(correlationId string) *SmfSubscription
 	return nil
 }
 
+// Identifier returns the target identifier string (e.g., "supi=..." or "groupId=...")
+func (s *SmfSubscription) Identifier() string {
+	if s.TargetType == TargetType_GROUP_ID {
+		return "groupId=" + s.GroupId
+	}
+	return "supi=" + s.Supi
+}
+
 // ReleaseSmfSubscription decrements reference and returns true if last reference
 func (c *NWDAFContext) ReleaseSmfSubscription(
 	correlationId, nwdafSubId string,
@@ -325,7 +359,14 @@ func (c *NWDAFContext) ReleaseSmfSubscription(
 
 	if isLast {
 		c.smfSubscriptions.Delete(correlationId)
-		logger.CtxLog.Infof("Deleted SmfSubscription (refCount=0): %s", correlationId)
+
+		// Also cleanup the target mapping
+		// We need to reconstruct the target identifier and endpoint
+		targetId := sub.Identifier()
+		c.RemoveSmfCorrelationId(targetId, sub.SmfEndpoint)
+
+		logger.CtxLog.Infof("Deleted SmfSubscription (refCount=0): %s, target=%s",
+			correlationId, targetId)
 		return true, sub
 	}
 
