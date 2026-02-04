@@ -527,3 +527,63 @@ test/
 | 400 | `UNSUPPORTED_NOTIF_METHOD` | Unknown notificationMethod |
 | 404 | `SUBSCRIPTION_NOT_FOUND` | Subscription does not exist |
 | 501 | `THRESHOLD_NOT_IMPLEMENTED` | THRESHOLD notifMethod not yet implemented |
+
+---
+
+## 10. Group ID Subscription Formats Reference
+
+### 10.1 NWDAF Subscription Request (Consumer -> NWDAF)
+
+When subscribing to NWDAF for a group of UEs, use the `intGroupIds` field within `tgtUe`.
+
+**JSON Payload**:
+```json
+{
+  "eventSubscriptions": [{
+    "event": "UE_COMMUNICATION",
+    "tgtUe": {
+      "intGroupIds": ["group-01", "group-02"]
+    }
+  }],
+  "notificationURI": "http://127.0.0.1:9090/notify",
+  "evtReq": {
+    "notifMethod": "PERIODIC", 
+    "repPeriod": 10
+  }
+}
+```
+
+### 10.2 SMF Subscription Request (NWDAF -> SMF)
+
+NWDAF translates the group subscription and sends a request to the SMF using the `groupId` field.
+
+**JSON Payload**:
+```json
+{
+  "groupId": "group-01",
+  "notifUri": "http://127.0.0.1:8080/collector/notify",
+  "notifId": "4021c603-5ba2-4135-8be0-d51f915c6394",
+  "eventSubs": [
+    {
+      "event": "UPF_EVENT",
+      "upfEvents": [
+        {
+          "type": "USER_DATA_USAGE_MEASURES",
+          "measurementTypes": [
+            "VOLUME_MEASUREMENT",
+            "THROUGHPUT_MEASUREMENT"
+          ],
+          "granularityOfMeasurement": "PER_SESSION"
+        }
+      ],
+      "bundlingAllowed": true,
+      "bundledEventNotifyUri": "http://127.0.0.1:8080/collector/upf-notify"
+    }
+  ],
+  "notifMethod": "PERIODIC",
+  "repPeriod": 10
+}
+```
+
+**Verification**:
+- **Source Code**: `internal/sbi/consumer/models.go` defines `ExtendedNsmfEventExposure` with `json:"groupId"`.
