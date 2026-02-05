@@ -10,10 +10,11 @@ import (
 var consumerLog = logger.ConsLog
 
 // Consumer aggregates all external NF service clients
-// NsmfService is embedded, so its exported methods are automatically
+// NsmfService and NmtlfService are embedded, so their exported methods are automatically
 // promoted to Consumer (no manual wrapper methods needed)
 type Consumer struct {
 	*NsmfService
+	*NmtlfService
 }
 
 // NewConsumer creates a new Consumer with all service clients initialized
@@ -22,6 +23,9 @@ func NewConsumer() (*Consumer, error) {
 
 	// Initialize SMF service with the consumer reference
 	c.NsmfService = NewNsmfService(c)
+
+	// Initialize MTLF service with the consumer reference
+	c.NmtlfService = NewNmtlfService(c)
 
 	consumerLog.Info("Consumer initialized")
 	return c, nil

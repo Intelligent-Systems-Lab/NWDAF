@@ -80,6 +80,11 @@ func NewServer(nwdaf nwdafApp) (*Server, error) {
 	collectorGroup := s.router.Group("/collector")
 	applyRoutes(collectorGroup, collectorRoutes)
 
+	// ML Model Provision callback routes (for MTLF notifications)
+	mlModelRoutes := s.getMlModelRoutes()
+	mlModelGroup := s.router.Group("/mlmodel-notify")
+	applyRoutes(mlModelGroup, mlModelRoutes)
+
 	cfg := nwdaf.Config()
 	bindAddr := fmt.Sprintf("%s:%d",
 		cfg.Configuration.Sbi.BindingIPv4,

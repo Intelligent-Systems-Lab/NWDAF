@@ -334,157 +334,109 @@ test/
     └── test_api.sh          # API integration test script
 ```
 
-## 6. E2E Integration Test (Rule-Based Analytics)
+## 6. E2E Integration Test (ML-Based Analytics)
 
-This test validates the complete NWDAF data collection and analytics flow:
-- NWDAF subscribes to SMF for UPF_EVENT
-- Fake SMF+UPF Server sends periodic UPF notifications
-- NWDAF generates rule-based analytics reports from collected data
-- Consumer receives notifications with real traffic data
+This test validates the complete ML-based analytics flow:
+- NWDAF subscribes to MTLF for ML Model Provisioning
+- MTLF notifies NWDAF with ML model URL
+- NWDAF initializes model with ML Service
+- Analytics use ML prediction (returns 0 confidence when insufficient data)
 
 ### 6.1 Test Architecture
 
 ```
 ┌──────────────────┐                     ┌──────────────────────┐
 │    Consumer      │◄────Notification────│       NWDAF          │
-│  Callback Server │    (UeCommunication)│     :8080            │
-│     :9090        │                     │                      │
+│  Callback Server │    (ML-based)       │     :8080            │
+│     :9091        │                     │                      │
 └──────────────────┘                     └──────────┬───────────┘
                                                     │
-                                         ┌──────────▼───────────┐
-                                         │   Fake SMF+UPF       │
-                                         │      Server          │
-                                         │      :8081           │
-                                         │                      │
-                                         │ - SMF subscription   │
-                                         │ - UPF notifications  │
-                                         │   (every 10s)        │
-                                         └──────────────────────┘
+                              ┌─────────────────────┼─────────────────────┐
+                              │                     │                     │
+                    ┌─────────▼──────────┐ ┌───────▼────────┐ ┌──────────▼─────────┐
+                    │   Fake MTLF        │ │  ML Service    │ │   Fake SMF+UPF     │
+                    │     :8082          │ │    :9090       │ │      :8081         │
+                    │                    │ │                │ │                    │
+                    │ - ML model URL     │ │ - /model/load  │ │ - UPF notifications│
+                    │   notification     │ │ - /predict     │ │   (traffic data)   │
+                    └────────────────────┘ └────────────────┘ └────────────────────┘
 ```
 
-### 6.2 Environment Preparation
+### 6.2 Prerequisites
 
+1. **NWDAF-ML-Service** project available and runnable
+2. Config has MTLF and ML Service enabled:
+   ```yaml
+   dataCollection:
+     mtlf:
+       enabled: true
+       endpoints:
+         - http://127.0.0.1:8082
+       notifUri: http://127.0.0.1:8080/mlmodel-notify
+     mlService:
+       enabled: true
+       endpoint: http://127.0.0.1:9090
+   ```
+
+### 6.3 Start Test (5 Terminals)
+
+#### Terminal 1: Fake MTLF Server
 ```bash
-cd /path/to/NWDAF
-
-# Verify config has SMF data collection enabled
-cat config/nwdafcfg.yaml | grep -A5 "smf:"
-# enabled: true
-# endpoints:
-#   - http://127.0.0.1:8081
-
-# Build NWDAF
-make build
+cd test/fake_mtlf
+uv run fake_mtlf_server.py 8082
 ```
 
-### 6.3 Start Test (4 Terminals)
+#### Terminal 2: ML Inference Service
+```bash
+cd /path/to/NWDAF-ML-Service
+uv run python run.py
+```
 
-#### Terminal 1: Fake SMF+UPF Server
+#### Terminal 3: Fake SMF+UPF Server
 ```bash
 cd test/fake_smf_upf
 uv run fake_smf_upf_server.py 8081
 ```
 
-Expected output:
-```
-╔══════════════════════════════════════════════════════════════╗
-║           Fake SMF+UPF Server for NWDAF Testing              ║
-╠══════════════════════════════════════════════════════════════╣
-║ Listening on: http://127.0.0.1:8081                         ║
-╚══════════════════════════════════════════════════════════════╝
-```
-
-#### Terminal 2: Consumer Callback Server
+#### Terminal 4: Consumer Callback Server
 ```bash
 cd test/callback
-uv run callback_server.py 9090
+uv run callback_server.py 9091
 ```
 
-#### Terminal 3: NWDAF
+#### Terminal 5: NWDAF
 ```bash
 ./bin/nwdaf --config config/nwdafcfg.yaml
 ```
 
-#### Terminal 4: Send Subscription Request
+### 6.4 Send Test Subscription (Group ID)
+
 ```bash
 curl -X POST http://127.0.0.1:8080/nnwdaf-eventssubscription/v1/subscriptions \
   -H "Content-Type: application/json" \
   -d '{
     "eventSubscriptions": [{
       "event": "UE_COMMUNICATION",
-      "tgtUe": {"supis": ["imsi-208930000000001"]}
+      "tgtUe": {"intGroupIds": ["group-test-001"]}
     }],
-    "notificationURI": "http://127.0.0.1:9090/notify",
-    "evtReq": {"notifMethod": "PERIODIC", "repPeriod": 15}
+    "evtReq": {"notifMethod": "PERIODIC", "repPeriod": 10},
+    "notificationURI": "http://127.0.0.1:9091/notify"
   }'
 ```
 
-### 6.4 Verify Rule-Based Analytics
+### 6.5 Verification Checklist
 
-Observe **Terminal 2 (Callback Server)** output. Confidence should increase as data accumulates:
+| Step | Expected Log | Location |
+|------|--------------|----------|
+| MTLF Subscription | `MTLF subscription created` | NWDAF |
+| Model Notification | `Received ML Model Provision notification` | NWDAF |
+| Model Init | `ML model initialized successfully` | NWDAF |
+| Prediction | `Using ML-based analytics` OR `returning 0 confidence` | NWDAF |
+| Notification | `Notification #N sent successfully` | NWDAF |
 
-| Notification | UL Volume | DL Volume | Confidence | Description |
-|--------------|-----------|-----------|------------|-------------|
-| #1 | 1000 KB (mock) | 4.9 MB (mock) | **50%** | No UPF data yet |
-| #2 | ~120 KB | ~670 KB | **65%** | After 1 UPF notification |
-| #3 | ~240 KB | ~1.2 MB | **70%** | After 2 UPF notifications |
+### 6.6 Cleanup
 
-### 6.5 Verify NWDAF Logs
-
-In **Terminal 3** you should see:
-
-```
-INFO SMF subscription created: supi=imsi-208930000000001, subId=fake-smf-sub-xxx
-INFO Received UPF notification, items: 1
-INFO UPF VOLUME: supi=imsi-208930000000001, ulVol=125502, dlVol=690915
-INFO Notification #2 sent successfully to http://127.0.0.1:9090/notify
-```
-
-### 6.6 Verify Fake Server Logs
-
-In **Terminal 1** you should see:
-
-```
-[HH:MM:SS] 📝 Subscription created: fake-smf-sub-xxx
-[HH:MM:SS]    SUPI: imsi-208930000000001
-[HH:MM:SS]    UPF notify URI: http://127.0.0.1:8080/collector/upf-notify
-[HH:MM:SS] 📤 UPF notification #1 sent ... (status: 204)
-```
-
-#### Sample SMF Subscription Request (from NWDAF)
-
-The fake server outputs the JSON request it receives. Example:
-
-```json
-{
-  "supi": "imsi-208930000000001",
-  "notifUri": "http://127.0.0.1:8080/collector/notify",
-  "notifId": "4021c603-5ba2-4135-8be0-d51f915c6394",
-  "eventSubs": [
-    {
-      "event": "UPF_EVENT",
-      "upfEvents": [
-        {
-          "type": "USER_DATA_USAGE_MEASURES",
-          "measurementTypes": [
-            "VOLUME_MEASUREMENT",
-            "THROUGHPUT_MEASUREMENT"
-          ],
-          "granularityOfMeasurement": "PER_SESSION"
-        }
-      ],
-      "bundlingAllowed": true,
-      "bundledEventNotifyUri": "http://127.0.0.1:8080/collector/upf-notify"
-    }
-  ],
-  "notifMethod": "PERIODIC",
-  "repPeriod": 10
-}
-```
-
-### 6.7 Cleanup
-
-Press `Ctrl+C` to stop all services.
+Press `Ctrl+C` to stop all 5 services.
 
 ---
 

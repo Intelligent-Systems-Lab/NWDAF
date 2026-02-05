@@ -29,7 +29,10 @@ func (p *Processor) TriggerDataCollection(
 		eventSub := &eventSubs[i]
 		switch eventSub.Event {
 		case models.NwdafEvent_UE_COMMUNICATION:
+			// Trigger SMF data collection
 			p.triggerUeCommunicationCollection(eventSub, subscriptionId)
+			// Trigger ML Model provisioning (async)
+			go p.triggerMlModelProvisioning(eventSub, subscriptionId)
 		case models.NwdafEvent_ABNORMAL_BEHAVIOUR:
 			// Currently not supported - skip
 			logger.ProcLog.Debugf("ABNORMAL_BEHAVIOUR data collection not implemented")
@@ -210,4 +213,63 @@ func (p *Processor) triggerTargetDataCollection(
 			})
 		}
 	}
+}
+
+// triggerMlModelProvisioning subscribes to MTLF for ML model provisioning
+// Per TS 23.288 §6.2A: NWDAF(AnLF) subscribes to NWDAF(MTLF) for ML models
+func (p *Processor) triggerMlModelProvisioning(
+	eventSub *models.NwdafEventsSubscriptionEventSubscription,
+	subscriptionId string,
+) {
+	// Check if MTLF is enabled in config
+	cfg := factory.NwdafConfig
+	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.DataCollection == nil ||
+		cfg.Configuration.DataCollection.Mtlf == nil || !cfg.Configuration.DataCollection.Mtlf.Enabled {
+		logger.ProcLog.Debugf("MTLF is disabled in config, skipping ML model provisioning")
+		return
+	}
+
+	mtlfConfig := cfg.Configuration.DataCollection.Mtlf
+	if len(mtlfConfig.Endpoints) == 0 {
+		logger.ProcLog.Warnf("MTLF enabled but no endpoints configured")
+		return
+	}
+
+	// Get consumer for MTLF subscription
+	mtlfConsumer := p.nwdaf.Consumer()
+	if mtlfConsumer == nil {
+		logger.ProcLog.Warnf("Consumer not available for MTLF subscription")
+		return
+	}
+
+	ctx := nwdaf_context.GetSelf()
+
+	// Create MlModelInfo to track the model provisioning state
+	mlInfo := nwdaf_context.NewMlModelInfo(eventSub.Event, mtlfConfig.Endpoints[0])
+	ctx.SetMlModelInfo(subscriptionId, mlInfo)
+
+	// Get notification URI from config
+	notifUri := mtlfConfig.NotifUri
+	if notifUri == "" {
+		notifUri = "http://127.0.0.1:8080/mlmodel-notify"
+	}
+
+	// Subscribe to first MTLF endpoint
+	mtlfEndpoint := mtlfConfig.Endpoints[0]
+	opts := consumer.MtlfSubscriptionOptions{
+		NotifUri: notifUri,
+		NotifId:  subscriptionId, // Use NWDAF subscription ID as correlation
+		Event:    eventSub.Event,
+		TgtUe:    eventSub.TgtUe,
+	}
+
+	subId, err := mtlfConsumer.SubscribeToMtlf(mtlfEndpoint, opts)
+	if err != nil {
+		logger.ProcLog.Errorf("Failed to subscribe to MTLF for subscription %s: %v", subscriptionId, err)
+		mlInfo.SetModelFailed(err)
+		return
+	}
+
+	mlInfo.SetMtlfSubscription(subId)
+	logger.ProcLog.Infof("MTLF subscription created for %s: mtlfSubId=%s", subscriptionId, subId)
 }

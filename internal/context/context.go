@@ -49,6 +49,12 @@ type NWDAFContext struct {
 	// SMF target mapping: targetIdentifier + "@" + smfEndpoint → correlationId
 	// Used to reuse active SMF subscriptions for the same target and endpoint
 	smfTargetMap sync.Map
+
+	// --- ML Model Storage ---
+
+	// ML model info: nwdafSubId → *MlModelInfo
+	// Tracks ML model state per subscription for ML-based analytics
+	mlModelInfoStore sync.Map
 }
 
 // Subscription represents an individual event subscription
@@ -147,4 +153,26 @@ func (c *NWDAFContext) SubscriptionCount() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return len(c.subscriptions)
+}
+
+// --- ML Model Info Methods ---
+
+// SetMlModelInfo stores ML model info for a subscription
+func (c *NWDAFContext) SetMlModelInfo(nwdafSubId string, info *MlModelInfo) {
+	c.mlModelInfoStore.Store(nwdafSubId, info)
+	logger.CtxLog.Debugf("Stored ML model info for subscription %s", nwdafSubId)
+}
+
+// GetMlModelInfo retrieves ML model info for a subscription
+func (c *NWDAFContext) GetMlModelInfo(nwdafSubId string) *MlModelInfo {
+	if val, ok := c.mlModelInfoStore.Load(nwdafSubId); ok {
+		return val.(*MlModelInfo)
+	}
+	return nil
+}
+
+// DeleteMlModelInfo removes ML model info for a subscription
+func (c *NWDAFContext) DeleteMlModelInfo(nwdafSubId string) {
+	c.mlModelInfoStore.Delete(nwdafSubId)
+	logger.CtxLog.Debugf("Deleted ML model info for subscription %s", nwdafSubId)
 }

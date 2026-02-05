@@ -6,7 +6,7 @@ Usage:
     uv run callback_server.py [port]
 
 Example:
-    uv run callback_server.py 9090
+    uv run callback_server.py 9091
 """
 
 import json
@@ -164,7 +164,7 @@ class NotificationHandler(BaseHTTPRequestHandler):
 
 
 def main():
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 9090
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 9091
     server = HTTPServer(("", port), NotificationHandler)
     print(f"🚀 Callback server listening on http://localhost:{port}")
     print("Supported events: UE_COMMUNICATION")

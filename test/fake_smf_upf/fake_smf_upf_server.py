@@ -62,9 +62,11 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
         
         # Extract UPF notification URI and reporting period
         upf_notify_uri = None
-        supi = request.get("supi", "unknown")
+        supi = request.get("supi")
+        group_id = request.get("groupId")  # External Group ID support
+        any_ue_ind = request.get("anyUeInd", False)  # Any UE indication
         rep_period = request.get("repPeriod", 10)  # Default 10s if not specified
-        # Per TS 29.508: notifId is used as correlation ID (notifyCorrelationId doesn't exist in SMF)
+        # Per TS 29.508: notifId is used as correlation ID
         notify_correlation_id = request.get("notifId", "")
         
         for event_sub in request.get("eventSubs", []):
@@ -72,18 +74,36 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
                 upf_notify_uri = event_sub.get("bundledEventNotifyUri")
                 break
         
+        # Determine subscription target type
+        target_type = "unknown"
+        target_value = "unknown"
+        if supi:
+            target_type = "supi"
+            target_value = supi
+        elif group_id:
+            target_type = "groupId"
+            target_value = group_id
+        elif any_ue_ind:
+            target_type = "anyUe"
+            target_value = "all"
+        
         # Store subscription
         self.subscriptions[sub_id] = {
             "request": request,
             "upf_notify_uri": upf_notify_uri,
             "supi": supi,
+            "group_id": group_id,
+            "any_ue_ind": any_ue_ind,
+            "target_type": target_type,
+            "target_value": target_value,
             "rep_period": rep_period,
-            "notify_correlation_id": notify_correlation_id,  # Store for notifications
+            "notify_correlation_id": notify_correlation_id,
             "created_at": datetime.now().isoformat(),
         }
         
         self._log(f"📝 Subscription created: {sub_id}")
-        self._log(f"   SUPI: {supi}")
+        self._log(f"   Target Type: {target_type}")
+        self._log(f"   Target Value: {target_value}")
         self._log(f"   UPF notify URI: {upf_notify_uri}")
         self._log(f"   Report Period: {rep_period}s")
         self._log(f"   NotifId (correlationId): {notify_correlation_id}")
@@ -93,16 +113,22 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
         
         # Start UPF notification thread if URI provided
         if upf_notify_uri:
-            self._start_upf_notifier(sub_id, upf_notify_uri, supi, rep_period, notify_correlation_id)
+            self._start_upf_notifier(sub_id, upf_notify_uri, target_type, target_value, rep_period, notify_correlation_id)
         
         # Send 201 Created response
         response = {
             "eventSubs": request.get("eventSubs", []),
             "notifUri": request.get("notifUri"),
             "notifId": request.get("notifId"),
-            "supi": supi,
             "subId": sub_id,
         }
+        # Include target in response based on type
+        if supi:
+            response["supi"] = supi
+        if group_id:
+            response["groupId"] = group_id
+        if any_ue_ind:
+            response["anyUeInd"] = any_ue_ind
         
         self.send_response(201)
         self.send_header("Content-Type", "application/json")
@@ -126,19 +152,19 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
         else:
             self._send_error(404, "Subscription not found")
     
-    def _start_upf_notifier(self, sub_id: str, notify_uri: str, supi: str, rep_period: int, correlation_id: str):
+    def _start_upf_notifier(self, sub_id: str, notify_uri: str, target_type: str, target_value: str, rep_period: int, correlation_id: str):
         """Start background thread to send UPF notifications."""
         thread_data = {"stop": False}
         self.upf_notify_threads[sub_id] = thread_data
         
         thread = threading.Thread(
             target=self._upf_notify_loop,
-            args=(sub_id, notify_uri, supi, rep_period, correlation_id, thread_data),
+            args=(sub_id, notify_uri, target_type, target_value, rep_period, correlation_id, thread_data),
             daemon=True
         )
         thread.start()
     
-    def _upf_notify_loop(self, sub_id: str, notify_uri: str, supi: str, rep_period: int, correlation_id: str, control: dict):
+    def _upf_notify_loop(self, sub_id: str, notify_uri: str, target_type: str, target_value: str, rep_period: int, correlation_id: str, control: dict):
         """Send periodic UPF notifications."""
         import urllib.request
         
@@ -151,8 +177,8 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
                 break
             
             count += 1
-            # Use correlation_id - simulates real UPF behavior (no supi in notification)
-            notification = self._build_upf_notification(correlation_id, count)
+            # Build notification based on target type
+            notification = self._build_upf_notification(correlation_id, target_type, target_value, count)
             
             try:
                 data = json.dumps(notification).encode()
@@ -163,18 +189,50 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
                     method="POST"
                 )
                 with urllib.request.urlopen(req, timeout=5) as resp:
-                    self._log(f"📤 UPF notification #{count} sent (corrId: {correlation_id[:8]}..., status: {resp.status})")
+                    num_items = len(notification.get("notificationItems", []))
+                    self._log(f"📤 UPF notification #{count} sent (target: {target_type}, items: {num_items}, status: {resp.status})")
                     self._log(f"   📋 Notification JSON:")
                     self._log_json(notification)
             except Exception as e:
                 self._log(f"❌ Failed to send UPF notification: {e}")
     
-    def _build_upf_notification(self, correlation_id: str, count: int) -> dict:
+    def _build_upf_notification(self, correlation_id: str, target_type: str, target_value: str, count: int) -> dict:
         """Build UPF USER_DATA_USAGE_MEASURES notification.
         
         Per TS 29.564: UPF notifications may NOT include SUPI.
-        The correlationId is used by NWDAF to resolve the target SUPI.
+        The correlationId is used by NWDAF to resolve the target.
+        
+        For groupId subscriptions, simulate multiple UEs in the group.
         """
+        notification_items = []
+        
+        # Determine how many UEs to simulate
+        if target_type == "groupId":
+            # Simulate 3-5 UEs in the group with different IPs
+            num_ues = random.randint(3, 5)
+            for i in range(num_ues):
+                ip_addr = f"10.60.0.{10 + i}"
+                item = self._build_notification_item(count, ip_address=ip_addr)
+                notification_items.append(item)
+        elif target_type == "anyUe":
+            # Simulate 2-4 random UEs
+            num_ues = random.randint(2, 4)
+            for i in range(num_ues):
+                ip_addr = f"10.60.{random.randint(0, 255)}.{random.randint(1, 254)}"
+                item = self._build_notification_item(count, ip_address=ip_addr)
+                notification_items.append(item)
+        else:
+            # Single UE (supi-based subscription) - original behavior
+            item = self._build_notification_item(count)
+            notification_items.append(item)
+        
+        return {
+            "correlationId": correlation_id,
+            "notificationItems": notification_items,
+        }
+    
+    def _build_notification_item(self, count: int, ip_address: str = None) -> dict:
+        """Build a single notification item with traffic data."""
         # Simulate varying traffic - different patterns for testing
         base_ul = 100000 + random.randint(0, 50000)  # 100KB-150KB
         base_dl = 500000 + random.randint(0, 200000)  # 500KB-700KB
@@ -184,30 +242,30 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
             base_ul *= 10  # ~1MB spike
             base_dl *= 10  # ~5MB spike
         
-        return {
-            "correlationId": correlation_id,  # Use subscription's correlationId
-            "notificationItems": [
+        item = {
+            "eventType": "USER_DATA_USAGE_MEASURES",
+            "dnn": "internet",
+            "timeStamp": datetime.now().astimezone().isoformat(),
+            "userDataUsageMeasurements": [
                 {
-                    "eventType": "USER_DATA_USAGE_MEASURES",
-                    # NOTE: supi intentionally omitted - simulates real UPF behavior
-                    "dnn": "internet",
-                    "timeStamp": datetime.now().astimezone().isoformat(),
-                    "userDataUsageMeasurements": [
-                        {
-                            "volumeMeasurement": {
-                                "ulVolume": base_ul,
-                                "dlVolume": base_dl,
-                                "totalVolume": base_ul + base_dl,
-                            },
-                            "throughputMeasurement": {
-                                "ulThroughput": f"{base_ul * 8 // 1000} kbps",
-                                "dlThroughput": f"{base_dl * 8 // 1000} kbps",
-                            }
-                        }
-                    ]
+                    "volumeMeasurement": {
+                        "ulVolume": base_ul,
+                        "dlVolume": base_dl,
+                        "totalVolume": base_ul + base_dl,
+                    },
+                    "throughputMeasurement": {
+                        "ulThroughput": f"{base_ul * 8 // 1000} kbps",
+                        "dlThroughput": f"{base_dl * 8 // 1000} kbps",
+                    }
                 }
-            ],
+            ]
         }
+        
+        # Add IP address if provided (for group/anyUe subscriptions)
+        if ip_address:
+            item["ueIpAddress"] = ip_address
+        
+        return item
     
     def _send_error(self, code: int, message: str):
         """Send error response."""

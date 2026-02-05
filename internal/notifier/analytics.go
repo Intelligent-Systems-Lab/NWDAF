@@ -2,14 +2,39 @@
 package notifier
 
 import (
+	"fmt"
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
+	"github.com/free5gc/nwdaf/internal/sbi/consumer"
+	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
 
 var notifierLog = logger.NotifierLog
+
+// TrafficCharacterization for ML prediction request
+type TrafficCharacterization = consumer.TrafficCharacterization
+
+// TrafficObservation for ML prediction request
+type TrafficObservation = consumer.TrafficObservation
+
+// getMlServiceClient returns a new ML service client if configured
+func getMlServiceClient() *consumer.MlServiceClient {
+	cfg := factory.NwdafConfig
+	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.DataCollection == nil ||
+		cfg.Configuration.DataCollection.MlService == nil || !cfg.Configuration.DataCollection.MlService.Enabled {
+		return nil
+	}
+
+	endpoint := cfg.Configuration.DataCollection.MlService.Endpoint
+	if endpoint == "" {
+		return nil
+	}
+
+	return consumer.NewMlServiceClient(endpoint)
+}
 
 // generateMockAbnormalBehaviours generates mock DDoS detection analytics data
 // TODO: Replace with real analytics from ML model and data collection
@@ -41,106 +66,90 @@ func generateMockAbnormalBehaviours() []models.AbnormalBehaviour {
 	}
 }
 
-// generateUeCommunicationAnalytics generates UE Communication analytics using rule-based logic
+// generateUeCommunicationAnalytics generates UE Communication analytics
 // Per TS 23.288 §6.7.3: Analytics based on collected UPF traffic data
-// Uses unified query: nwdafSubId → correlationIds → TrafficDataBuckets
+// Uses ML-based prediction if model is ready, returns 0 confidence when insufficient resources
 func generateUeCommunicationAnalytics(nwdafSubId string) models.UeCommunication {
-	now := time.Now()
 	ctx := nwdaf_context.GetSelf()
+	now := time.Now()
 
-	// Default values
-	var ulVol, dlVol int64 = 0, 0
-	var commDur int32 = 60 // Default 1 minute
-	var confidence int32   // Will be calculated based on data
-	dnn := "internet"
-
-	// Track collected data points
-	dataPointCount := 0
-
-	// Get all traffic data for this NWDAF subscription
-	// Unified query: nwdafSubId → correlationIds → buckets → data
-	trafficDataList := ctx.GetTrafficDataByNwdafSubId(nwdafSubId)
-
-	for _, trafficData := range trafficDataList {
-		trafficData.Lock()
-
-		// Aggregate from raw data points
-		for _, dp := range trafficData.RawUpfData {
-			ulVol += dp.UlVolume
-			dlVol += dp.DlVolume
+	// Check if ML model is available for this subscription
+	mlInfo := ctx.GetMlModelInfo(nwdafSubId)
+	if mlInfo != nil && mlInfo.IsReady() {
+		result, err := generateMlBasedUeCommunication(nwdafSubId, mlInfo, ctx)
+		if err == nil {
+			notifierLog.Infof("Using ML-based analytics for subscription %s", nwdafSubId)
+			return result
 		}
-		dataPointCount += len(trafficData.RawUpfData)
-
-		// Calculate communication duration from timestamps
-		if !trafficData.CreatedAt.IsZero() && !trafficData.LastUpdate.IsZero() {
-			duration := int32(trafficData.LastUpdate.Sub(trafficData.CreatedAt).Seconds())
-			if duration > commDur {
-				commDur = duration
-			}
-		}
-
-		// Use DNN from data if available
-		if trafficData.Dnn != "" {
-			dnn = trafficData.Dnn
-		}
-
-		trafficData.Unlock()
-		notifierLog.Debugf("Using collected data (ip=%s): ulVol=%d, dlVol=%d",
-			trafficData.IpAddress, ulVol, dlVol)
+		notifierLog.Warnf("ML prediction failed for %s: %v", nwdafSubId, err)
 	}
 
-	// Rule-based confidence calculation
-	if ulVol == 0 && dlVol == 0 {
-		confidence = 0
-		notifierLog.Debugf("No collected data for nwdafSubId=%s, confidence=0", nwdafSubId)
-	} else {
-		confidence = calculateConfidence(dataPointCount, ulVol, dlVol)
-	}
-
+	// Per TS 23.288: Return 0 confidence when insufficient resources for analytics
+	notifierLog.Debugf("Insufficient resources for ML analytics, returning 0 confidence for %s", nwdafSubId)
 	return models.UeCommunication{
-		CommDur: commDur,
-		Ts:      &now,
-		TrafChar: &models.TrafficCharacterization{
-			Dnn:   dnn,
-			UlVol: ulVol,
-			DlVol: dlVol,
-		},
-		Confidence: confidence,
+		CommDur:    0,
+		Ts:         &now,
+		TrafChar:   &models.TrafficCharacterization{Dnn: "internet"},
+		Confidence: 0,
 	}
 }
 
-// calculateConfidence computes confidence score based on data quality
-// Per TS 23.288 §6.7.3.3: Confidence indicates prediction reliability
-func calculateConfidence(dataPointCount int, ulVol, dlVol int64) int32 {
-	// Base confidence starts at 50
-	confidence := int32(50)
+// generateMlBasedUeCommunication uses ML service for prediction
+func generateMlBasedUeCommunication(
+	nwdafSubId string,
+	mlInfo *nwdaf_context.MlModelInfo,
+	ctx *nwdaf_context.NWDAFContext,
+) (models.UeCommunication, error) {
+	now := time.Now()
 
-	// More data points = higher confidence
-	if dataPointCount >= 5 {
-		confidence += 20
-	} else if dataPointCount >= 2 {
-		confidence += 10
-	} else if dataPointCount >= 1 {
-		confidence += 5
+	// Get ML service client
+	mlClient := getMlServiceClient()
+	if mlClient == nil {
+		return models.UeCommunication{}, fmt.Errorf("ML service client not available")
 	}
 
-	// Having actual traffic data increases confidence
-	if ulVol > 0 || dlVol > 0 {
-		confidence += 10
+	// Prepare historical data for prediction
+	trafficDataList := ctx.GetTrafficDataByNwdafSubId(nwdafSubId)
+	historicalData := []TrafficObservation{}
+	dnn := "internet"
+
+	for _, trafficData := range trafficDataList {
+		trafficData.Lock()
+		for _, dp := range trafficData.RawUpfData {
+			historicalData = append(historicalData, TrafficObservation{
+				Ts: dp.Timestamp.Format(time.RFC3339),
+				TrafChar: TrafficCharacterization{
+					UlVol: dp.UlVolume,
+					DlVol: dp.DlVolume,
+				},
+			})
+		}
+		if trafficData.Dnn != "" {
+			dnn = trafficData.Dnn
+		}
+		trafficData.Unlock()
 	}
 
-	// Significant traffic volume indicates active usage
-	totalVol := ulVol + dlVol
-	if totalVol > 10*1024*1024 { // > 10MB
-		confidence += 10
-	} else if totalVol > 1*1024*1024 { // > 1MB
-		confidence += 5
+	// Call ML service for prediction
+	modelId := mlInfo.GetModelId()
+	resp, err := mlClient.Predict(modelId, historicalData, 1)
+	if err != nil {
+		return models.UeCommunication{}, err
 	}
 
-	// Cap at 100
-	if confidence > 100 {
-		confidence = 100
+	if len(resp.PredictedData) == 0 {
+		return models.UeCommunication{}, fmt.Errorf("no prediction data returned")
 	}
 
-	return confidence
+	pred := resp.PredictedData[0]
+	return models.UeCommunication{
+		CommDur: 60,
+		Ts:      &now,
+		TrafChar: &models.TrafficCharacterization{
+			Dnn:   dnn,
+			UlVol: pred.TrafChar.UlVol,
+			DlVol: pred.TrafChar.DlVol,
+		},
+		Confidence: pred.Confidence,
+	}, nil
 }

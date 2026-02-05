@@ -40,7 +40,22 @@ type Configuration struct {
 
 // DataCollection configuration for data collection from other NFs
 type DataCollection struct {
-	Smf *SmfDataCollection `yaml:"smf,omitempty"`
+	Smf       *SmfDataCollection `yaml:"smf,omitempty"`
+	Mtlf      *MtlfConfig        `yaml:"mtlf,omitempty"`
+	MlService *MlServiceConfig   `yaml:"mlService,omitempty"`
+}
+
+// MtlfConfig configuration for MTLF (ML Model Training Logical Function) integration
+type MtlfConfig struct {
+	Enabled   bool     `yaml:"enabled"`
+	Endpoints []string `yaml:"endpoints,omitempty"`
+	NotifUri  string   `yaml:"notifUri,omitempty"` // Callback URI for ML model notifications
+}
+
+// MlServiceConfig configuration for external ML inference service
+type MlServiceConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Endpoint string `yaml:"endpoint,omitempty"`
 }
 
 // SmfDataCollection configuration for SMF data collection
