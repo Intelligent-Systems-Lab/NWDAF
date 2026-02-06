@@ -30,10 +30,10 @@ func (p *Processor) TriggerDataCollection(
 		eventSub := &eventSubs[i]
 		switch eventSub.Event {
 		case models.NwdafEvent_UE_COMMUNICATION:
-			// Trigger SMF data collection
-			p.triggerUeCommunicationCollection(eventSub, subscriptionId)
-			// Trigger ML Model provisioning (async)
+			// Trigger ML Model provisioning (async - starts first for parallel init)
 			go p.triggerMlModelProvisioning(eventSub, subscriptionId)
+			// Trigger SMF data collection (sync)
+			p.triggerUeCommunicationCollection(eventSub, subscriptionId)
 		case models.NwdafEvent_ABNORMAL_BEHAVIOUR:
 			// Currently not supported - skip
 			logger.ProcLog.Debugf("ABNORMAL_BEHAVIOUR data collection not implemented")
