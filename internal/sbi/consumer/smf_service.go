@@ -42,10 +42,10 @@ func NewNsmfService(c *Consumer) *NsmfService {
 }
 
 // SmfSubscriptionOptions configures SMF event exposure subscription
-// Supports both individual SUPI and Group ID subscriptions
+// Per TS 23.502 §4.15.4.5.2: Group IDs are resolved to SUPIs by NWDAF
+// before subscribing to SMF, so subscriptions are always SUPI-based
 type SmfSubscriptionOptions struct {
-	Supi        string // For individual UE subscription (mutually exclusive with GroupId)
-	GroupId     string // For group subscription (mutually exclusive with Supi)
+	Supi        string // Target SUPI for subscription
 	NotifUri    string
 	NotifId     string // Correlation ID for notification routing
 	EventSubs   []ExtendedEventSubscription
@@ -54,25 +54,18 @@ type SmfSubscriptionOptions struct {
 }
 
 // SubscribeToSmf creates an event exposure subscription to SMF
-// Uses SmfSubscriptionOptions for flexible configuration of different event types
-// Supports both SUPI-based and Group ID subscriptions
+// Per TS 23.502 §4.15.4.5.2: Subscriptions are always SUPI-based
+// (Group IDs are resolved by NWDAF before calling this function)
 func (s *NsmfService) SubscribeToSmf(
 	smfEndpoint string,
 	opts SmfSubscriptionOptions,
 ) (string, error) {
-	// Log target info
-	targetInfo := opts.Supi
-	if opts.GroupId != "" {
-		targetInfo = "groupId=" + opts.GroupId
-	} else if opts.Supi != "" {
-		targetInfo = "supi=" + opts.Supi
-	}
-	consumerLog.Infof("Subscribing to SMF: endpoint=%s, %s, notifId=%s",
-		smfEndpoint, targetInfo, opts.NotifId)
+	// Log subscription info
+	consumerLog.Infof("Subscribing to SMF: endpoint=%s, supi=%s, notifId=%s",
+		smfEndpoint, opts.Supi, opts.NotifId)
 
 	request := ExtendedNsmfEventExposure{
 		Supi:        opts.Supi,
-		GroupId:     opts.GroupId,
 		NotifUri:    opts.NotifUri,
 		NotifId:     opts.NotifId,
 		EventSubs:   opts.EventSubs,

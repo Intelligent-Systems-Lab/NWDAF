@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -88,27 +89,40 @@ func (p *Processor) triggerUeCommunicationCollection(
 	}
 
 	// Fixed SMF report period for data collection
-	var smfRepPeriod int32 = 10 // Fixed: 10s
+	smfRepPeriod := int32(10) // Fixed: 10s
 
 	ctx := nwdaf_context.GetSelf()
 
 	// Build targets from TgtUe
 	var targets []DataCollectionTarget
 
-	// Handle SUPI-based subscriptions
+	// Handle SUPI-based subscriptions (direct)
 	for _, supi := range eventSub.TgtUe.Supis {
 		targets = append(targets, DataCollectionTarget{
-			TargetType: nwdaf_context.TargetType_SUPI,
-			Supi:       supi,
+			Supi: supi,
 		})
 	}
 
-	// Handle Group ID subscriptions
-	for _, groupId := range eventSub.TgtUe.IntGroupIds {
-		targets = append(targets, DataCollectionTarget{
-			TargetType: nwdaf_context.TargetType_GROUP_ID,
-			GroupId:    groupId,
-		})
+	// Handle Group ID subscriptions per TS 23.502 §4.15.4.5.2
+	// NWDAF must resolve Group ID → SUPI list, then subscribe per-SUPI
+	resolver := ctx.GetGroupResolver()
+	if resolver == nil {
+		logger.ProcLog.Warnf("GroupResolver not available, cannot resolve Group IDs")
+	} else {
+		for _, groupId := range eventSub.TgtUe.IntGroupIds {
+			supis, err := resolver.ResolveGroupId(groupId)
+			if err != nil {
+				logger.ProcLog.Warnf("Failed to resolve groupId %s: %v", groupId, err)
+				continue
+			}
+			logger.ProcLog.Infof("Resolved groupId %s to %d SUPIs", groupId, len(supis))
+			for _, supi := range supis {
+				targets = append(targets, DataCollectionTarget{
+					Supi:            supi,
+					OriginalGroupId: groupId, // Track for analytics aggregation
+				})
+			}
+		}
 	}
 
 	if len(targets) > 0 {
@@ -120,22 +134,20 @@ func (p *Processor) triggerUeCommunicationCollection(
 	}
 }
 
-// DataCollectionTarget abstracts SUPI vs Group ID for unified collection
+// DataCollectionTarget represents a SUPI target for SMF subscription
+// Per TS 23.502 §4.15.4.5.2: Group ID is resolved to SUPIs before SMF subscription
 type DataCollectionTarget struct {
-	TargetType nwdaf_context.TargetType
-	Supi       string
-	GroupId    string
+	Supi            string // Target SUPI for SMF subscription
+	OriginalGroupId string // Source Group ID (if resolved from group subscription)
 }
 
-// Identifier returns human-readable target identifier
+// Identifier returns human-readable target identifier for logging/mapping
 func (t DataCollectionTarget) Identifier() string {
-	if t.TargetType == nwdaf_context.TargetType_GROUP_ID {
-		return "groupId=" + t.GroupId
-	}
 	return "supi=" + t.Supi
 }
 
-// triggerTargetDataCollection handles both SUPI and Group ID subscriptions
+// triggerTargetDataCollection handles SUPI-based SMF subscriptions
+// Per TS 23.502 §4.15.4.5.2: Group IDs are already resolved to SUPIs before this function
 func (p *Processor) triggerTargetDataCollection(
 	ctx *nwdaf_context.NWDAFContext,
 	smfConsumer *consumer.Consumer,
@@ -164,7 +176,7 @@ func (p *Processor) triggerTargetDataCollection(
 				logger.ProcLog.Infof("Reusing SMF subscription for %s (refCount=%d)",
 					targetId, refCount)
 			} else {
-				// Build SMF subscription options based on target type
+				// Build SMF subscription options (always SUPI-based)
 				eventSubs := consumer.BuildUpfEventSubs(upfNotifUri, true, true)
 				opts := consumer.SmfSubscriptionOptions{
 					NotifUri:    smfNotifUri,
@@ -172,13 +184,7 @@ func (p *Processor) triggerTargetDataCollection(
 					EventSubs:   eventSubs,
 					NotifMethod: "PERIODIC",
 					RepPeriod:   smfRepPeriod,
-				}
-
-				// Set target (SUPI or GroupId)
-				if target.TargetType == nwdaf_context.TargetType_GROUP_ID {
-					opts.GroupId = target.GroupId
-				} else {
-					opts.Supi = target.Supi
+					Supi:        target.Supi, // Always SUPI after Group ID resolution
 				}
 
 				subId, err := smfConsumer.SubscribeToSmf(smfEndpoint, opts)
@@ -191,25 +197,28 @@ func (p *Processor) triggerTargetDataCollection(
 
 				// Update subscription with details
 				sub.Lock()
-				sub.TargetType = target.TargetType
+				sub.TargetType = nwdaf_context.TargetType_SUPI
 				sub.Supi = target.Supi
-				sub.GroupId = target.GroupId
 				sub.SmfEndpoint = smfEndpoint
 				sub.SmfSubId = subId
 				sub.Unlock()
 
-				logger.ProcLog.Infof("SMF subscription created: %s, subId=%s, corrId=%s",
+				logMsg := fmt.Sprintf("SMF subscription created: %s, subId=%s, corrId=%s",
 					target.Identifier(), subId, correlationId)
+				if target.OriginalGroupId != "" {
+					logMsg += fmt.Sprintf(" (from group=%s)", target.OriginalGroupId)
+				}
+				logger.ProcLog.Info(logMsg)
 			}
 
 			// Store cleanup tracking
 			ctx.AddNwdafSubResource(subscriptionId, nwdaf_context.NwdafSubResource{
-				SmfEndpoint:   smfEndpoint,
-				TargetType:    target.TargetType,
-				Supi:          target.Supi,
-				GroupId:       target.GroupId,
-				CorrelationId: correlationId,
-				CreatedAt:     time.Now(),
+				SmfEndpoint:     smfEndpoint,
+				TargetType:      nwdaf_context.TargetType_SUPI,
+				Supi:            target.Supi,
+				CorrelationId:   correlationId,
+				OriginalGroupId: target.OriginalGroupId,
+				CreatedAt:       time.Now(),
 			})
 		}
 	}

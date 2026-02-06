@@ -30,6 +30,7 @@ type UpfDataPoint struct {
 
 // SmfSubscription is the unified structure for SMF subscription management
 // Combines former SmfSubscriptionResource (reference counting) and SubscriptionMeta (target type)
+// Per TS 23.502 §4.15.4.5.2: Subscriptions are always SUPI-based (Group IDs resolved by NWDAF)
 // Key: correlationId
 type SmfSubscription struct {
 	mu sync.Mutex
@@ -37,10 +38,9 @@ type SmfSubscription struct {
 	// Identity (primary key)
 	CorrelationId string
 
-	// Target identification
-	TargetType TargetType // SUPI, GROUP_ID, or ANY_UE
-	Supi       string     // For SUPI-based subscriptions
-	GroupId    string     // For Group ID subscriptions
+	// Target identification (always SUPI after Group ID resolution)
+	TargetType TargetType // Always TargetType_SUPI after refactoring
+	Supi       string     // Target SUPI
 
 	// SMF subscription info
 	SmfEndpoint string
@@ -336,11 +336,9 @@ func (c *NWDAFContext) GetSmfSubscription(correlationId string) *SmfSubscription
 	return nil
 }
 
-// Identifier returns the target identifier string (e.g., "supi=..." or "groupId=...")
+// Identifier returns the target identifier string for logging and mapping
+// Per TS 23.502: Subscriptions are always SUPI-based
 func (s *SmfSubscription) Identifier() string {
-	if s.TargetType == TargetType_GROUP_ID {
-		return "groupId=" + s.GroupId
-	}
 	return "supi=" + s.Supi
 }
 
@@ -484,17 +482,20 @@ func (c *NWDAFContext) GetTrafficDataByNwdafSubId(nwdafSubId string) []*TrafficD
 	return result
 }
 
-// --- NWDAF Subscription Resource Tracking (for cleanup) ---
+// --- NWDAF Subscription Resource Tracking ---
 
 // NwdafSubResource tracks a single SMF resource used by an NWDAF subscription
-// Used for proper cleanup when subscription is deleted
+// Used for:
+//   - Cleanup: proper resource release when subscription is deleted
+//   - Data query: correlationId lookup to retrieve traffic data
+//   - Group tracking: OriginalGroupId for analytics aggregation
 type NwdafSubResource struct {
-	SmfEndpoint   string     // SMF endpoint URL
-	TargetType    TargetType // SUPI or GROUP_ID
-	Supi          string     // Target SUPI (for SUPI-based subscriptions)
-	GroupId       string     // Target Group ID (for Group ID subscriptions)
-	CorrelationId string     // CorrelationId for this SMF subscription
-	CreatedAt     time.Time  // When resource was added
+	SmfEndpoint     string     // SMF endpoint URL
+	TargetType      TargetType // Always SUPI after Group ID resolution
+	Supi            string     // Target SUPI
+	CorrelationId   string     // CorrelationId for this SMF subscription
+	OriginalGroupId string     // Source Group ID (if resolved from group subscription)
+	CreatedAt       time.Time  // When resource was added
 }
 
 // AddNwdafSubResource adds a resource tracking entry for an NWDAF subscription
@@ -506,9 +507,9 @@ func (c *NWDAFContext) AddNwdafSubResource(nwdafSubId string, resource NwdafSubR
 	resources = append(resources, resource)
 	c.nwdafSubResourcesMap.Store(nwdafSubId, resources)
 
-	if resource.TargetType == TargetType_GROUP_ID {
-		logger.CtxLog.Debugf("Added resource for nwdafSubId=%s: endpoint=%s, groupId=%s",
-			nwdafSubId, resource.SmfEndpoint, resource.GroupId)
+	if resource.OriginalGroupId != "" {
+		logger.CtxLog.Debugf("Added resource for nwdafSubId=%s: endpoint=%s, supi=%s (from group=%s)",
+			nwdafSubId, resource.SmfEndpoint, resource.Supi, resource.OriginalGroupId)
 	} else {
 		logger.CtxLog.Debugf("Added resource for nwdafSubId=%s: endpoint=%s, supi=%s",
 			nwdafSubId, resource.SmfEndpoint, resource.Supi)

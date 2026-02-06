@@ -29,6 +29,14 @@ configuration:
     mlService:
       enabled: true
       endpoint: http://127.0.0.1:9090  # ML inference service
+    # Group ID to SUPI mapping (substitute for UDM per TS 23.502 §4.15.4.5.2)
+    groupMembership:
+      groups:
+        - groupId: "group-test-001"
+          supis:
+            - "imsi-123456789012345"
+            - "imsi-123456789012346"
+            - "imsi-123456789012347"
 
 logger:
   enable: true

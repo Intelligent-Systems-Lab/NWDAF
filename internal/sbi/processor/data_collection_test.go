@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 )
 
@@ -42,8 +41,7 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	targetSupi := "imsi-208930000000003"
 	targets := []DataCollectionTarget{
 		{
-			TargetType: nwdaf_context.TargetType_SUPI,
-			Supi:       targetSupi,
+			Supi: targetSupi,
 		},
 	}
 
@@ -132,5 +130,201 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	_, found4 := ctx.GetSmfCorrelationId("supi="+targetSupi, ts.URL)
 	if found4 {
 		t.Error("Mapping should be removed after last reference removed")
+	}
+}
+
+// =============================================================================
+// DataCollectionTarget Tests
+// =============================================================================
+
+func TestDataCollectionTarget_Identifier(t *testing.T) {
+	tests := []struct {
+		name     string
+		target   DataCollectionTarget
+		expected string
+	}{
+		{
+			name:     "SUPI only",
+			target:   DataCollectionTarget{Supi: "imsi-123456789012345"},
+			expected: "supi=imsi-123456789012345",
+		},
+		{
+			name: "SUPI with OriginalGroupId",
+			target: DataCollectionTarget{
+				Supi:            "imsi-123456789012345",
+				OriginalGroupId: "group-test-001",
+			},
+			expected: "supi=imsi-123456789012345",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.target.Identifier()
+			if got != tt.expected {
+				t.Errorf("Identifier() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestDataCollectionTarget_OriginalGroupIdTracking(t *testing.T) {
+	// When Group ID is resolved to SUPIs, OriginalGroupId should be preserved
+	groupId := "group-enterprise-001"
+	supis := []string{"imsi-001", "imsi-002", "imsi-003"}
+
+	var targets []DataCollectionTarget
+	for _, supi := range supis {
+		targets = append(targets, DataCollectionTarget{
+			Supi:            supi,
+			OriginalGroupId: groupId,
+		})
+	}
+
+	// Verify all targets have correct OriginalGroupId
+	for i, target := range targets {
+		if target.OriginalGroupId != groupId {
+			t.Errorf("Target[%d] OriginalGroupId = %q, want %q",
+				i, target.OriginalGroupId, groupId)
+		}
+		if target.Supi != supis[i] {
+			t.Errorf("Target[%d] Supi = %q, want %q",
+				i, target.Supi, supis[i])
+		}
+	}
+}
+
+func TestTriggerTargetDataCollection_WithOriginalGroupId(t *testing.T) {
+	ctx := setupTestContext()
+	p := newTestProcessor()
+
+	// Mock SMF Server
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		w.Header().Set("Location", r.URL.String()+"/sub-123")
+		if _, err := w.Write([]byte(`{"notifId": "test-notif-id"}`)); err != nil {
+			t.Logf("Failed to write response: %v", err)
+		}
+	}))
+	defer ts.Close()
+
+	smfConsumer, err := consumer.NewConsumer()
+	if err != nil {
+		t.Fatalf("Failed to create consumer: %v", err)
+	}
+
+	// Simulate Group ID resolution: group → multiple SUPIs
+	groupId := "group-test-001"
+	targets := []DataCollectionTarget{
+		{Supi: "imsi-001", OriginalGroupId: groupId},
+		{Supi: "imsi-002", OriginalGroupId: groupId},
+		{Supi: "imsi-003", OriginalGroupId: groupId},
+	}
+
+	nwdafSubId := "nwdaf-sub-group-01"
+
+	p.triggerTargetDataCollection(
+		ctx,
+		smfConsumer,
+		[]string{ts.URL},
+		targets,
+		nwdafSubId,
+		"http://nwdaf/notify",
+		"http://nwdaf/upf-notify",
+		10,
+	)
+
+	// Verify: Each SUPI should have its own SMF subscription
+	for _, target := range targets {
+		correlationId, found := ctx.GetSmfCorrelationId("supi="+target.Supi, ts.URL)
+		if !found {
+			t.Errorf("Expected SMF mapping for supi=%s", target.Supi)
+			continue
+		}
+
+		sub := ctx.GetSmfSubscription(correlationId)
+		if sub == nil {
+			t.Errorf("Expected SmfSubscription for supi=%s", target.Supi)
+			continue
+		}
+
+		if sub.Supi != target.Supi {
+			t.Errorf("SmfSubscription.Supi = %q, want %q", sub.Supi, target.Supi)
+		}
+	}
+
+	// Verify: NwdafSubResource should track OriginalGroupId
+	resources := ctx.GetNwdafSubResources(nwdafSubId)
+	if len(resources) != 3 {
+		t.Fatalf("Expected 3 resources, got %d", len(resources))
+	}
+
+	for _, resource := range resources {
+		if resource.OriginalGroupId != groupId {
+			t.Errorf("Resource.OriginalGroupId = %q, want %q",
+				resource.OriginalGroupId, groupId)
+		}
+	}
+}
+
+func TestTriggerTargetDataCollection_MixedSupiAndGroup(t *testing.T) {
+	ctx := setupTestContext()
+	p := newTestProcessor()
+
+	// Mock SMF Server
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		if _, err := w.Write([]byte(`{"notifId": "test"}`)); err != nil {
+			t.Logf("Failed to write response: %v", err)
+		}
+	}))
+	defer ts.Close()
+
+	smfConsumer, err := consumer.NewConsumer()
+	if err != nil {
+		t.Fatalf("Failed to create consumer: %v", err)
+	}
+
+	// Mix of direct SUPI and Group-resolved SUPIs
+	targets := []DataCollectionTarget{
+		{Supi: "imsi-direct-001", OriginalGroupId: ""},       // Direct SUPI
+		{Supi: "imsi-group-001", OriginalGroupId: "group-A"}, // From Group A
+		{Supi: "imsi-group-002", OriginalGroupId: "group-A"}, // From Group A
+		{Supi: "imsi-group-003", OriginalGroupId: "group-B"}, // From Group B
+	}
+
+	nwdafSubId := "nwdaf-sub-mixed"
+
+	p.triggerTargetDataCollection(
+		ctx,
+		smfConsumer,
+		[]string{ts.URL},
+		targets,
+		nwdafSubId,
+		"http://nwdaf/notify",
+		"http://nwdaf/upf-notify",
+		10,
+	)
+
+	// Verify all 4 subscriptions created
+	resources := ctx.GetNwdafSubResources(nwdafSubId)
+	if len(resources) != 4 {
+		t.Fatalf("Expected 4 resources, got %d", len(resources))
+	}
+
+	// Count by OriginalGroupId
+	groupCounts := make(map[string]int)
+	for _, r := range resources {
+		groupCounts[r.OriginalGroupId]++
+	}
+
+	if groupCounts[""] != 1 {
+		t.Errorf("Expected 1 direct SUPI, got %d", groupCounts[""])
+	}
+	if groupCounts["group-A"] != 2 {
+		t.Errorf("Expected 2 from group-A, got %d", groupCounts["group-A"])
+	}
+	if groupCounts["group-B"] != 1 {
+		t.Errorf("Expected 1 from group-B, got %d", groupCounts["group-B"])
 	}
 }

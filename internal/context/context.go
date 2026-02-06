@@ -32,8 +32,11 @@ type NWDAFContext struct {
 	mu            sync.RWMutex
 	subscriptions map[string]*Subscription
 
-	// Cleanup tracking: nwdafSubId → []NwdafSubResource
-	// Tracks SMF resources used by each NWDAF subscription for proper cleanup
+	// NWDAF subscription resources: nwdafSubId → []NwdafSubResource
+	// Tracks SMF resources per NWDAF subscription for:
+	//   - Cleanup: proper resource release on subscription deletion
+	//   - Data query: correlationId lookup for traffic data retrieval
+	//   - Group tracking: OriginalGroupId for analytics aggregation
 	nwdafSubResourcesMap sync.Map // map[string][]NwdafSubResource
 
 	// --- Unified Storage ---
@@ -55,6 +58,12 @@ type NWDAFContext struct {
 	// ML model info: nwdafSubId → *MlModelInfo
 	// Tracks ML model state per subscription for ML-based analytics
 	mlModelInfoStore sync.Map
+
+	// --- Group Resolution ---
+
+	// GroupResolver for resolving Group ID → SUPI list
+	// Per TS 23.502 §4.15.4.5.2
+	groupResolver *GroupResolver
 }
 
 // Subscription represents an individual event subscription
@@ -175,4 +184,18 @@ func (c *NWDAFContext) GetMlModelInfo(nwdafSubId string) *MlModelInfo {
 func (c *NWDAFContext) DeleteMlModelInfo(nwdafSubId string) {
 	c.mlModelInfoStore.Delete(nwdafSubId)
 	logger.CtxLog.Debugf("Deleted ML model info for subscription %s", nwdafSubId)
+}
+
+// ============================================================================
+// Group Resolver Methods
+// ============================================================================
+
+// SetGroupResolver sets the GroupResolver for Group ID resolution
+func (c *NWDAFContext) SetGroupResolver(resolver *GroupResolver) {
+	c.groupResolver = resolver
+}
+
+// GetGroupResolver returns the GroupResolver
+func (c *NWDAFContext) GetGroupResolver() *GroupResolver {
+	return c.groupResolver
 }

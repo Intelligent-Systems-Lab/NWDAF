@@ -40,9 +40,23 @@ type Configuration struct {
 
 // DataCollection configuration for data collection from other NFs
 type DataCollection struct {
-	Smf       *SmfDataCollection `yaml:"smf,omitempty"`
-	Mtlf      *MtlfConfig        `yaml:"mtlf,omitempty"`
-	MlService *MlServiceConfig   `yaml:"mlService,omitempty"`
+	Smf             *SmfDataCollection     `yaml:"smf,omitempty"`
+	Mtlf            *MtlfConfig            `yaml:"mtlf,omitempty"`
+	MlService       *MlServiceConfig       `yaml:"mlService,omitempty"`
+	GroupMembership *GroupMembershipConfig `yaml:"groupMembership,omitempty"` // Group ID to SUPI mapping
+}
+
+// GroupMembershipConfig maps Group IDs to SUPI lists (substitute for UDM)
+// Per TS 23.502 §4.15.4.5.2: NWDAF should query UDM for group membership
+// This config provides a static mapping when UDM is not available
+type GroupMembershipConfig struct {
+	Groups []GroupDefinition `yaml:"groups"`
+}
+
+// GroupDefinition defines a group and its member SUPIs
+type GroupDefinition struct {
+	GroupId string   `yaml:"groupId"`
+	Supis   []string `yaml:"supis"`
 }
 
 // MtlfConfig configuration for MTLF (ML Model Training Logical Function) integration

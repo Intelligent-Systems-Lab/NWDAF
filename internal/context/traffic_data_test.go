@@ -477,10 +477,11 @@ func TestGetCorrelationIdsByNwdafSubId(t *testing.T) {
 		CorrelationId: "corr-001",
 	})
 	ctx.AddNwdafSubResource(nwdafSubId, NwdafSubResource{
-		SmfEndpoint:   "http://smf:8080",
-		TargetType:    TargetType_GROUP_ID,
-		GroupId:       "group-001",
-		CorrelationId: "corr-002",
+		SmfEndpoint:     "http://smf:8080",
+		TargetType:      TargetType_SUPI,
+		Supi:            "imsi-002",
+		CorrelationId:   "corr-002",
+		OriginalGroupId: "group-001", // Resolved from group
 	})
 
 	ids := ctx.GetCorrelationIdsByNwdafSubId(nwdafSubId)

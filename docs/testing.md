@@ -90,6 +90,10 @@ Tests data collection triggering and resource management.
 | Test Function | Description |
 |---------------|-------------|
 | `TestTriggerTargetDataCollection_ResourceReuse` | Verifies SMF subscription reuse (target mapping and ref counting) |
+| `TestDataCollectionTarget_Identifier` | Identifier() returns correct format |
+| `TestDataCollectionTarget_OriginalGroupIdTracking` | OriginalGroupId preserved after resolution |
+| `TestTriggerTargetDataCollection_WithOriginalGroupId` | Group → multiple SUPI subscriptions with tracking |
+| `TestTriggerTargetDataCollection_MixedSupiAndGroup` | Mixed SUPI and Group-resolved targets |
 
 ### 2.3 Notifier Tests
 
@@ -148,6 +152,23 @@ Location: `internal/context/`
 | `TestGetTrafficDataByNwdafSubId_Empty` | Non-existent → nil |
 | `TestGetTrafficDataByNwdafSubId_MultipleCorrelations` | Multiple correlationIds |
 | `TestGetTrafficDataByNwdafSubId_NoBucket` | Resource exists but no bucket → nil |
+
+#### GroupResolver Tests (`group_resolver_test.go`)
+
+Tests Group ID → SUPI resolution per TS 23.502 §4.15.4.5.2.
+
+| Test Function | Description |
+|---------------|-------------|
+| `TestNewGroupResolver_NilConfig` | Nil config handling |
+| `TestNewGroupResolver_EmptyConfig` | Empty config handling |
+| `TestNewGroupResolver_ValidConfig` | Valid config loading |
+| `TestNewGroupResolver_SkipsEmptyGroupId` | Skip empty GroupId entries |
+| `TestGroupResolver_ResolveGroupId_Success` | Successful Group ID resolution |
+| `TestGroupResolver_ResolveGroupId_NotFound` | Non-existent Group ID error |
+| `TestGroupResolver_ResolveGroupId_EmptyMembers` | Empty member list error |
+| `TestGroupResolver_HasGroup` | Check if Group exists |
+| `TestGroupResolver_GetAllGroups` | Get all registered Group IDs |
+| `TestNWDAFContext_GroupResolver` | Context integration test |
 
 #### Other Context Tests
 
@@ -507,12 +528,24 @@ When subscribing to NWDAF for a group of UEs, use the `intGroupIds` field within
 
 ### 10.2 SMF Subscription Request (NWDAF -> SMF)
 
-NWDAF translates the group subscription and sends a request to the SMF using the `groupId` field.
+Per **TS 23.502 §4.15.4.5.2**: NWDAF resolves Group ID to SUPI list before subscribing to SMF.
+Each SUPI receives its own subscription request.
 
-**JSON Payload**:
+**Group ID Resolution Flow**:
+```
+Consumer Request:       intGroupIds: ["group-01"]
+                              ↓
+NWDAF GroupResolver:    group-01 → [imsi-001, imsi-002, imsi-003]
+                              ↓
+SMF Subscriptions:      POST /subscriptions { supi: "imsi-001" }
+                        POST /subscriptions { supi: "imsi-002" }
+                        POST /subscriptions { supi: "imsi-003" }
+```
+
+**JSON Payload (per SUPI)**:
 ```json
 {
-  "groupId": "group-01",
+  "supi": "imsi-123456789012345",
   "notifUri": "http://127.0.0.1:8080/collector/notify",
   "notifId": "4021c603-5ba2-4135-8be0-d51f915c6394",
   "eventSubs": [
@@ -537,5 +570,11 @@ NWDAF translates the group subscription and sends a request to the SMF using the
 }
 ```
 
+**Key Points**:
+- `supi` field is always present (no `groupId` to SMF)
+- `OriginalGroupId` is tracked internally for analytics aggregation
+- Configuration: `groupMembership` in `config/nwdafcfg.yaml`
+
 **Verification**:
-- **Source Code**: `internal/sbi/consumer/models.go` defines `ExtendedNsmfEventExposure` with `json:"groupId"`.
+- **Source Code**: `internal/sbi/consumer/models.go` defines `ExtendedNsmfEventExposure` (SUPI-only).
+- **GroupResolver**: `internal/context/group_resolver.go` handles Group ID → SUPI resolution.

@@ -51,6 +51,13 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 	nwdaf.nwdafCtx = nwdaf_context.GetSelf()
 	nwdaf.nwdafCtx.NwdafName = cfg.GetNwdafName()
 
+	// Initialize GroupResolver for Group ID → SUPI resolution
+	// Per TS 23.502 §4.15.4.5.2: NWDAF must resolve Group IDs before SMF subscription
+	if cfg.Configuration != nil && cfg.Configuration.DataCollection != nil {
+		groupResolver := nwdaf_context.NewGroupResolver(cfg.Configuration.DataCollection.GroupMembership)
+		nwdaf.nwdafCtx.SetGroupResolver(groupResolver)
+	}
+
 	// Initialize consumer
 	var err error
 	nwdaf.consumer, err = consumer.NewConsumer()

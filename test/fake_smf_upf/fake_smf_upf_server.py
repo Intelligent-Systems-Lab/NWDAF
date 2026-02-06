@@ -222,8 +222,18 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
                 item = self._build_notification_item(count, ip_address=ip_addr)
                 notification_items.append(item)
         else:
-            # Single UE (supi-based subscription) - original behavior
-            item = self._build_notification_item(count)
+            # Single UE (supi-based subscription) - generate IP based on SUPI
+            # Use hash of SUPI to generate consistent IP for same UE
+            if target_value and target_value.startswith("imsi-"):
+                # Extract last 3 digits of IMSI for IP
+                try:
+                    imsi_suffix = int(target_value[-3:]) % 254 + 1
+                except ValueError:
+                    imsi_suffix = random.randint(1, 254)
+                ip_addr = f"10.60.0.{imsi_suffix}"
+            else:
+                ip_addr = f"10.60.0.{random.randint(1, 254)}"
+            item = self._build_notification_item(count, ip_address=ip_addr)
             notification_items.append(item)
         
         return {
@@ -260,10 +270,9 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
                 }
             ]
         }
-        
-        # Add IP address if provided (for group/anyUe subscriptions)
+        # Add IP address if provided (per TS 29.564: ueIpv4Addr)
         if ip_address:
-            item["ueIpAddress"] = ip_address
+            item["ueIpv4Addr"] = ip_address
         
         return item
     
