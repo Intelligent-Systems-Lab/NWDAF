@@ -11,33 +11,37 @@ configuration:
     port: 8080
   # nrfUri: http://127.0.0.10:8000  # Uncomment when NRF is available
 
-  # Data collection from other NFs
-  dataCollection:
-    smf:
-      enabled: true
-      endpoints:
-        - http://127.0.0.1:8081  # Fake SMF+UPF server for testing
-      subscriptionDuration: 3600  # seconds
-      notifUris:
-        smf: http://127.0.0.1:8080/collector/notify
-        upf: http://127.0.0.1:8080/collector/upf-notify
-    mtlf:
-      enabled: false  # Disable MTLF to use static model URL
-      endpoints:
-        - http://127.0.0.1:8082  # Fake MTLF server for testing
-      notifUri: http://127.0.0.1:8080/mlmodel-notify
-      staticModelUrl: file:///app/ml/artifacts/tcn_model.pth # Static path for direct model loading
-    mlService:
-      enabled: true
-      endpoint: http://127.0.0.1:9090  # ML inference service
-    # Group ID to SUPI mapping (substitute for UDM per TS 23.502 §4.15.4.5.2)
-    groupMembership:
-      groups:
-        - groupId: "group-test-001"
-          supis:
-            - "imsi-123456789012345"
-            - "imsi-123456789012346"
-            - "imsi-123456789012347"
+  # SMF Data Collection
+  smf:
+    enabled: true
+    endpoints:
+      - http://127.0.0.1:8081  # Fake SMF+UPF server for testing
+    subscriptionDuration: 3600  # seconds
+    notifUris:
+      smf: http://127.0.0.1:8080/collector/notify
+      upf: http://127.0.0.1:8080/collector/upf-notify
+
+  # MTLF Integration
+  mtlf:
+    enabled: false  # Disable MTLF to use static model URL
+    endpoints:
+      - http://127.0.0.1:8082  # Fake MTLF server for testing
+    notifUri: http://127.0.0.1:8080/mlmodel-notify
+    staticModelUrl: file:///app/ml/artifacts/tcn_model.pth # Static path for direct model loading
+
+  # ML Inference Service
+  mlService:
+    enabled: true
+    endpoint: http://127.0.0.1:9090  # ML inference service
+
+  # Group ID to SUPI mapping (substitute for UDM per TS 23.502 §4.15.4.5.2)
+  groupMembership:
+    groups:
+      - groupId: "group-test-001"
+        supis:
+          - "imsi-123456789012345"
+          - "imsi-123456789012346"
+          - "imsi-123456789012347"
 
 logger:
   enable: true

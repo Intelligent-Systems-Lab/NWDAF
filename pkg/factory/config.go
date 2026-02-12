@@ -31,19 +31,14 @@ type Info struct {
 }
 
 type Configuration struct {
-	NwdafName          string          `yaml:"nwdafName,omitempty"`
-	Sbi                *Sbi            `yaml:"sbi,omitempty"`
-	NrfUri             string          `yaml:"nrfUri,omitempty"`
-	SupportedAnalytics []string        `yaml:"supportedAnalytics,omitempty"`
-	DataCollection     *DataCollection `yaml:"dataCollection,omitempty"`
-}
-
-// DataCollection configuration for data collection from other NFs
-type DataCollection struct {
-	Smf             *SmfDataCollection     `yaml:"smf,omitempty"`
-	Mtlf            *MtlfConfig            `yaml:"mtlf,omitempty"`
-	MlService       *MlServiceConfig       `yaml:"mlService,omitempty"`
-	GroupMembership *GroupMembershipConfig `yaml:"groupMembership,omitempty"` // Group ID to SUPI mapping
+	NwdafName          string                 `yaml:"nwdafName,omitempty"`
+	Sbi                *Sbi                   `yaml:"sbi,omitempty"`
+	NrfUri             string                 `yaml:"nrfUri,omitempty"`
+	SupportedAnalytics []string               `yaml:"supportedAnalytics,omitempty"`
+	Smf                *SmfConfig             `yaml:"smf,omitempty"`
+	Mtlf               *MtlfConfig            `yaml:"mtlf,omitempty"`
+	MlService          *MlServiceConfig       `yaml:"mlService,omitempty"`
+	GroupMembership    *GroupMembershipConfig `yaml:"groupMembership,omitempty"`
 }
 
 // GroupMembershipConfig maps Group IDs to SUPI lists (substitute for UDM)
@@ -73,8 +68,8 @@ type MlServiceConfig struct {
 	Endpoint string `yaml:"endpoint,omitempty"`
 }
 
-// SmfDataCollection configuration for SMF data collection
-type SmfDataCollection struct {
+// SmfConfig configuration for SMF data collection
+type SmfConfig struct {
 	Enabled              bool       `yaml:"enabled"`
 	Endpoints            []string   `yaml:"endpoints,omitempty"`
 	SubscriptionDuration int        `yaml:"subscriptionDuration,omitempty"` // seconds

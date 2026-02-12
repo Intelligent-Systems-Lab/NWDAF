@@ -343,15 +343,13 @@ func TestTriggerMlModelProvisioning_StaticUrl(t *testing.T) {
 	// Create minimal config structure
 	cfg := &factory.Config{
 		Configuration: &factory.Configuration{
-			DataCollection: &factory.DataCollection{
-				Mtlf: &factory.MtlfConfig{
-					Enabled:        false, // MTLF Disabled
-					StaticModelUrl: "file:///test/model.pth",
-				},
-				MlService: &factory.MlServiceConfig{
-					Enabled:  true,
-					Endpoint: "http://ml-service-mock",
-				},
+			Mtlf: &factory.MtlfConfig{
+				Enabled:        false, // MTLF Disabled
+				StaticModelUrl: "file:///test/model.pth",
+			},
+			MlService: &factory.MlServiceConfig{
+				Enabled:  true,
+				Endpoint: "http://ml-service-mock",
 			},
 		},
 	}
@@ -392,11 +390,9 @@ func TestTriggerMlModelProvisioning_MtlfDisabledNoStaticUrl(t *testing.T) {
 	// Setup Config: MTLF disabled, no static URL
 	cfg := &factory.Config{
 		Configuration: &factory.Configuration{
-			DataCollection: &factory.DataCollection{
-				Mtlf: &factory.MtlfConfig{
-					Enabled:        false,
-					StaticModelUrl: "", // Empty
-				},
+			Mtlf: &factory.MtlfConfig{
+				Enabled:        false,
+				StaticModelUrl: "", // Empty
 			},
 		},
 	}

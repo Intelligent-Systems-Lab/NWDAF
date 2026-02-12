@@ -52,13 +52,13 @@ func (p *Processor) triggerUeCommunicationCollection(
 ) {
 	// Check if SMF data collection is enabled in config
 	cfg := factory.NwdafConfig
-	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.DataCollection == nil ||
-		cfg.Configuration.DataCollection.Smf == nil || !cfg.Configuration.DataCollection.Smf.Enabled {
+	if cfg == nil || cfg.Configuration == nil ||
+		cfg.Configuration.Smf == nil || !cfg.Configuration.Smf.Enabled {
 		logger.ProcLog.Debugf("SMF data collection is disabled in config")
 		return
 	}
 
-	smfConfig := cfg.Configuration.DataCollection.Smf
+	smfConfig := cfg.Configuration.Smf
 	if len(smfConfig.Endpoints) == 0 {
 		logger.ProcLog.Warnf("SMF data collection enabled but no endpoints configured")
 		return
@@ -232,13 +232,13 @@ func (p *Processor) triggerMlModelProvisioning(
 ) {
 	// Check if MTLF is enabled in config
 	cfg := factory.NwdafConfig
-	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.DataCollection == nil ||
-		cfg.Configuration.DataCollection.Mtlf == nil {
+	if cfg == nil || cfg.Configuration == nil ||
+		cfg.Configuration.Mtlf == nil {
 		logger.ProcLog.Debugf("MTLF config missing, skipping ML model provisioning")
 		return
 	}
 
-	mtlfConfig := cfg.Configuration.DataCollection.Mtlf
+	mtlfConfig := cfg.Configuration.Mtlf
 	ctx := nwdaf_context.GetSelf()
 
 	// 1. Static Model URL (Direct Initialization)

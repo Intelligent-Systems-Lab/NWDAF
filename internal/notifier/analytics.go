@@ -22,13 +22,14 @@ type TrafficObservation = consumer.TrafficObservation
 
 // getMlServiceClient returns a new ML service client if configured
 func getMlServiceClient() *consumer.MlServiceClient {
+	// Get ML service configuration
 	cfg := factory.NwdafConfig
-	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.DataCollection == nil ||
-		cfg.Configuration.DataCollection.MlService == nil || !cfg.Configuration.DataCollection.MlService.Enabled {
+	if cfg == nil || cfg.Configuration == nil ||
+		cfg.Configuration.MlService == nil || !cfg.Configuration.MlService.Enabled {
 		return nil
 	}
 
-	endpoint := cfg.Configuration.DataCollection.MlService.Endpoint
+	endpoint := cfg.Configuration.MlService.Endpoint
 	if endpoint == "" {
 		return nil
 	}

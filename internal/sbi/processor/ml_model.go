@@ -16,14 +16,14 @@ func (p *Processor) InitializeMlModel(nwdafSubId string, mlInfo *nwdaf_context.M
 
 	// Get ML service configuration
 	cfg := factory.NwdafConfig
-	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.DataCollection == nil ||
-		cfg.Configuration.DataCollection.MlService == nil || !cfg.Configuration.DataCollection.MlService.Enabled {
+	if cfg == nil || cfg.Configuration == nil ||
+		cfg.Configuration.MlService == nil || !cfg.Configuration.MlService.Enabled {
 		logger.ProcLog.Warnf("ML Service not configured, cannot initialize model")
 		mlInfo.SetModelFailed(nil)
 		return
 	}
 
-	mlServiceEndpoint := cfg.Configuration.DataCollection.MlService.Endpoint
+	mlServiceEndpoint := cfg.Configuration.MlService.Endpoint
 	if mlServiceEndpoint == "" {
 		logger.ProcLog.Warnf("ML Service endpoint not configured")
 		mlInfo.SetModelFailed(nil)

@@ -53,8 +53,8 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 
 	// Initialize GroupResolver for Group ID → SUPI resolution
 	// Per TS 23.502 §4.15.4.5.2: NWDAF must resolve Group IDs before SMF subscription
-	if cfg.Configuration != nil && cfg.Configuration.DataCollection != nil {
-		groupResolver := nwdaf_context.NewGroupResolver(cfg.Configuration.DataCollection.GroupMembership)
+	if cfg.Configuration != nil && cfg.Configuration.GroupMembership != nil {
+		groupResolver := nwdaf_context.NewGroupResolver(cfg.Configuration.GroupMembership)
 		nwdaf.nwdafCtx.SetGroupResolver(groupResolver)
 	}
 
