@@ -131,9 +131,14 @@ func generateMlBasedUeCommunication(
 		trafficData.Unlock()
 	}
 
+	// Model expects at most 30 data points (30 × 10s intervals)
+	if len(historicalData) > 30 {
+		historicalData = historicalData[len(historicalData)-30:]
+	}
+
 	// Call ML service for prediction
 	modelId := mlInfo.GetModelId()
-	resp, err := mlClient.Predict(modelId, historicalData, 1)
+	resp, err := mlClient.Predict(modelId, historicalData, 5)
 	if err != nil {
 		return models.UeCommunication{}, err
 	}
@@ -142,15 +147,24 @@ func generateMlBasedUeCommunication(
 		return models.UeCommunication{}, fmt.Errorf("no prediction data returned")
 	}
 
-	pred := resp.PredictedData[0]
+	// Aggregate 5 predicted steps (5 × 10s = 50s prediction window)
+	var totalUl, totalDl int64
+	var totalConfidence int32
+	for _, pred := range resp.PredictedData {
+		totalUl += pred.TrafChar.UlVol
+		totalDl += pred.TrafChar.DlVol
+		totalConfidence += pred.Confidence
+	}
+	avgConfidence := totalConfidence / int32(len(resp.PredictedData))
+
 	return models.UeCommunication{
-		CommDur: 60,
+		CommDur: 50, // 5 × 10s intervals
 		Ts:      &now,
 		TrafChar: &models.TrafficCharacterization{
 			Dnn:   dnn,
-			UlVol: pred.TrafChar.UlVol,
-			DlVol: pred.TrafChar.DlVol,
+			UlVol: totalUl,
+			DlVol: totalDl,
 		},
-		Confidence: pred.Confidence,
+		Confidence: avgConfidence,
 	}, nil
 }
