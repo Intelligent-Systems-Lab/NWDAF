@@ -127,6 +127,9 @@ func (a *NwdafApp) Start() {
 	a.wg.Add(1)
 	go a.listenShutdownEvent()
 
+	// Start MTLF training scheduler (managed by processor)
+	a.processor.StartMtlfTrainingScheduler(&a.wg)
+
 	if err := a.sbiServer.Run(context.Background(), &a.wg); err != nil {
 		logger.InitLog.Fatalf("Run SBI server failed: %+v", err)
 	}

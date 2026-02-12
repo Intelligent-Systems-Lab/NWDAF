@@ -101,7 +101,6 @@ func TestGroupResolver_ResolveGroupId_Success(t *testing.T) {
 	resolver := NewGroupResolver(cfg)
 
 	supis, err := resolver.ResolveGroupId("group-test-001")
-
 	if err != nil {
 		t.Fatalf("ResolveGroupId failed: %v", err)
 	}

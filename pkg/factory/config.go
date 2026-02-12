@@ -39,6 +39,7 @@ type Configuration struct {
 	Mtlf               *MtlfConfig            `yaml:"mtlf,omitempty"`
 	MlService          *MlServiceConfig       `yaml:"mlService,omitempty"`
 	GroupMembership    *GroupMembershipConfig `yaml:"groupMembership,omitempty"`
+	Daisy              *DaisyConfig           `yaml:"daisy,omitempty"`
 }
 
 // GroupMembershipConfig maps Group IDs to SUPI lists (substitute for UDM)
@@ -66,6 +67,14 @@ type MtlfConfig struct {
 type MlServiceConfig struct {
 	Enabled  bool   `yaml:"enabled"`
 	Endpoint string `yaml:"endpoint,omitempty"`
+}
+
+// DaisyConfig configuration for Daisy FL framework integration (MTLF training)
+type DaisyConfig struct {
+	Enabled      bool           `yaml:"enabled"`
+	Endpoint     string         `yaml:"endpoint,omitempty"`     // Master REST API, e.g. http://127.0.0.1:9887
+	TriggerDelay int            `yaml:"triggerDelay,omitempty"` // Seconds after startup to trigger training (default: 30)
+	Task         map[string]any `yaml:"task,omitempty"`         // Task payload (mirrors task.json)
 }
 
 // SmfConfig configuration for SMF data collection

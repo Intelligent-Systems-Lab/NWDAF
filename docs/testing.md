@@ -185,7 +185,9 @@ go test ./internal/... -race -v
 
 ### 2.5 Consumer Tests
 
-Location: `internal/sbi/consumer/consumer_test.go`
+Location: `internal/sbi/consumer/`
+
+#### General Tests (`consumer_test.go`)
 
 | Test Function | Description |
 |---------------|-------------|
@@ -193,6 +195,16 @@ Location: `internal/sbi/consumer/consumer_test.go`
 | `TestConsumerContext` | Context accessor |
 | `TestSmfServiceHTTPClient` | HTTP client caching |
 | `TestExtendedEventSubscription` | UPF event subscription model |
+
+#### DaisyClient Tests (`daisy_service_test.go`)
+
+| Test Function | Description |
+|---------------|-------------|
+| `TestNewDaisyClient` | Client initialization + timeout verification |
+| `TestTriggerTraining_Success` | POST payload correctness + 200 OK handling |
+| `TestTriggerTraining_WithAutoTID` | Auto-generate TID when not provided |
+| `TestTriggerTraining_ServerError` | 500 error handling |
+| `TestTriggerTraining_ConnectionError` | Connection failure handling |
 
 ---
 
@@ -358,8 +370,7 @@ test/
 ## 6. E2E Integration Test (ML-Based Analytics)
 
 This test validates the complete ML-based analytics flow:
-- NWDAF subscribes to MTLF for ML Model Provisioning
-- MTLF notifies NWDAF with ML model URL
+- NWDAF uses static model URL (MTLF disabled) or subscribes to MTLF
 - NWDAF initializes model with ML Service
 - Analytics use ML prediction (returns 0 confidence when insufficient data)
 
@@ -372,60 +383,51 @@ This test validates the complete ML-based analytics flow:
 │     :9091        │                     │                      │
 └──────────────────┘                     └──────────┬───────────┘
                                                     │
-                              ┌─────────────────────┼─────────────────────┐
-                              │                     │                     │
-                    ┌─────────▼──────────┐ ┌───────▼────────┐ ┌──────────▼─────────┐
-                    │   Fake MTLF        │ │  ML Service    │ │   Fake SMF+UPF     │
-                    │     :8082          │ │    :9090       │ │      :8081         │
-                    │                    │ │                │ │                    │
-                    │ - ML model URL     │ │ - /model/load  │ │ - UPF notifications│
-                    │   notification     │ │ - /predict     │ │   (traffic data)   │
-                    └────────────────────┘ └────────────────┘ └────────────────────┘
+                                          ┌─────────┼─────────────────────┐
+                                          │                               │
+                                ┌─────────▼──────────┐       ┌───────────▼───────────┐
+                                │   ML Service        │       │   Fake SMF+UPF        │
+                                │     :9090           │       │      :8081            │
+                                │                     │       │                       │
+                                │  - /model/load      │       │  - UPF notifications  │
+                                │  - /predict          │       │    (traffic data)     │
+                                └─────────────────────┘       └───────────────────────┘
 ```
 
 ### 6.2 Prerequisites
 
 1. **NWDAF-ML-Service** project available and runnable
-2. Config has MTLF and ML Service enabled:
+2. Config uses static model URL (MTLF disabled by default):
    ```yaml
-   dataCollection:
-     mtlf:
-       enabled: true
-       endpoints:
-         - http://127.0.0.1:8082
-       notifUri: http://127.0.0.1:8080/mlmodel-notify
-     mlService:
-       enabled: true
-       endpoint: http://127.0.0.1:9090
+   mtlf:
+     enabled: false
+     staticModelUrl: file:///app/ml/artifacts/tcn_model.pth
+   mlService:
+     enabled: true
+     endpoint: http://127.0.0.1:9090
    ```
 
-### 6.3 Start Test (5 Terminals)
+### 6.3 Start Test (4 Terminals)
 
-#### Terminal 1: Fake MTLF Server
-```bash
-cd test/fake_mtlf
-uv run fake_mtlf_server.py 8082
-```
-
-#### Terminal 2: ML Inference Service
+#### Terminal 1: ML Inference Service
 ```bash
 cd /path/to/NWDAF-ML-Service
 uv run python run.py
 ```
 
-#### Terminal 3: Fake SMF+UPF Server
+#### Terminal 2: Fake SMF+UPF Server
 ```bash
 cd test/fake_smf_upf
 uv run fake_smf_upf_server.py 8081
 ```
 
-#### Terminal 4: Consumer Callback Server
+#### Terminal 3: Consumer Callback Server
 ```bash
 cd test/callback
 uv run callback_server.py 9091
 ```
 
-#### Terminal 5: NWDAF
+#### Terminal 4: NWDAF
 ```bash
 ./bin/nwdaf --config config/nwdafcfg.yaml
 ```
@@ -449,25 +451,109 @@ curl -X POST http://127.0.0.1:8080/nnwdaf-eventssubscription/v1/subscriptions \
 
 | Step | Expected Log | Location |
 |------|--------------|----------|
-| MTLF Subscription | `MTLF subscription created` | NWDAF |
-| Model Notification | `Received ML Model Provision notification` | NWDAF |
-| Model Init | `ML model initialized successfully` | NWDAF |
+| Static Model Init | `ML model initialized successfully` | NWDAF |
 | Prediction | `Using ML-based analytics` OR `returning 0 confidence` | NWDAF |
 | Notification | `Notification #N sent successfully` | NWDAF |
 
 ### 6.6 Cleanup
 
-Press `Ctrl+C` to stop all 5 services.
+Press `Ctrl+C` to stop all 4 services.
 
 ---
 
-## 7. Test Directory Structure
+## 7. E2E Integration Test (MTLF Training via Daisy)
+
+This test validates the MTLF training trigger flow:
+- NWDAF starts with `daisy.enabled: true`
+- After `triggerDelay` seconds, NWDAF POSTs training task to Daisy master
+- Daisy master coordinates federated learning across clients
+- POST blocks until training completes (HTTP 200 = success)
+
+### 7.1 Test Architecture
+
+```
+┌──────────────────────┐
+│       NWDAF          │
+│     :8080            │
+│                      │
+│ (Startup → Delay →   │
+│  POST /publish_task) │
+└──────────┬───────────┘
+           │ HTTP POST (blocks until training completes)
+┌──────────▼───────────┐
+│   Daisy Master       │
+│   gRPC :8887         │
+│   REST :9887         │
+│   (FedAvg strategy)  │
+└──────────┬───────────┘
+     ┌─────┴─────┐
+┌────▼────┐ ┌────▼────┐
+│ Client0 │ │ Client1 │
+│  :10087 │ │  :10088 │
+└─────────┘ └─────────┘
+```
+
+### 7.2 Prerequisites
+
+1. **Daisy FL** framework installed (`.agent/daisy/`)
+2. Config:
+   ```yaml
+   daisy:
+     enabled: true
+     endpoint: http://127.0.0.1:9887
+     triggerDelay: 10
+   ```
+
+### 7.3 Start Test (2 Terminals)
+
+#### Terminal 1: Deploy Daisy
+```bash
+cd .agent/daisy/examples/01_quickstart_pytorch
+python deploy.py --init_model
+```
+
+#### Terminal 2: NWDAF
+```bash
+make build
+./bin/nwdaf --config config/nwdafcfg.yaml
+```
+
+### 7.4 Verification Checklist
+
+| Step | Expected Log | Location |
+|------|--------------|----------|
+| Startup | `MTLF training scheduled in 10 seconds` | NWDAF (MTLF) |
+| Trigger | `Triggering MTLF training via Daisy: endpoint=...` | NWDAF (MTLF) |
+| Training | FL rounds running | Daisy Master |
+| Complete | `MTLF training completed successfully` | NWDAF (MTLF) |
+
+### 7.5 Shutdown Cancellation Test
+
+Start NWDAF and press `Ctrl+C` within `triggerDelay` seconds.
+
+**Expected**: `MTLF training canceled (shutdown)` in NWDAF log.
+
+### 7.6 Cleanup
+
+```bash
+# Stop Daisy nodes
+cd .agent/daisy/examples/01_quickstart_pytorch
+python shutdown.py
+```
+
+---
+
+## 8. Test Directory Structure
 
 ```
 test/
 ├── callback/                 # Consumer notification callback
 │   ├── callback_server.py    # HTTP callback server
 │   ├── pyproject.toml        # uv project configuration
+│   └── README.md
+├── fake_mtlf/               # Fake MTLF server (optional, for dynamic model provisioning)
+│   ├── fake_mtlf_server.py
+│   ├── pyproject.toml
 │   └── README.md
 ├── fake_smf_upf/            # Fake SMF+UPF for E2E testing
 │   ├── fake_smf_upf_server.py
@@ -479,18 +565,20 @@ test/
 
 ---
 
-## 8. Quick Test Commands
+## 9. Quick Test Commands
 
 | Test Type | Command |
 |-----------|---------|
 | Unit Tests | `go test ./internal/... -v` |
+| Daisy Client Tests | `go test ./internal/sbi/consumer/... -v -run Daisy` |
 | Race Detection | `go test ./internal/... -race -v` |
 | API Tests | `./test/scripts/test_api.sh all` |
-| E2E (4 terminals) | See Section 6.3 |
+| E2E ML Analytics (4 terminals) | See Section 6.3 |
+| E2E Daisy Training (2 terminals) | See Section 7.3 |
 
 ---
 
-## 9. Error Code Reference
+## 10. Error Code Reference
 
 | HTTP | Cause | Description |
 |------|-------|-------------|
@@ -503,9 +591,9 @@ test/
 
 ---
 
-## 10. Group ID Subscription Formats Reference
+## 11. Group ID Subscription Formats Reference
 
-### 10.1 NWDAF Subscription Request (Consumer -> NWDAF)
+### 11.1 NWDAF Subscription Request (Consumer -> NWDAF)
 
 When subscribing to NWDAF for a group of UEs, use the `intGroupIds` field within `tgtUe`.
 
@@ -526,7 +614,7 @@ When subscribing to NWDAF for a group of UEs, use the `intGroupIds` field within
 }
 ```
 
-### 10.2 SMF Subscription Request (NWDAF -> SMF)
+### 11.2 SMF Subscription Request (NWDAF -> SMF)
 
 Per **TS 23.502 §4.15.4.5.2**: NWDAF resolves Group ID to SUPI list before subscribing to SMF.
 Each SUPI receives its own subscription request.
