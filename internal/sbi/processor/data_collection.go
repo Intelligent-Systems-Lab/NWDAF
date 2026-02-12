@@ -233,12 +233,34 @@ func (p *Processor) triggerMlModelProvisioning(
 	// Check if MTLF is enabled in config
 	cfg := factory.NwdafConfig
 	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.DataCollection == nil ||
-		cfg.Configuration.DataCollection.Mtlf == nil || !cfg.Configuration.DataCollection.Mtlf.Enabled {
-		logger.ProcLog.Debugf("MTLF is disabled in config, skipping ML model provisioning")
+		cfg.Configuration.DataCollection.Mtlf == nil {
+		logger.ProcLog.Debugf("MTLF config missing, skipping ML model provisioning")
 		return
 	}
 
 	mtlfConfig := cfg.Configuration.DataCollection.Mtlf
+	ctx := nwdaf_context.GetSelf()
+
+	// 1. Static Model URL (Direct Initialization)
+	// If MTLF is disabled and StaticModelUrl is set, bypass MTLF and initialize directly
+	if !mtlfConfig.Enabled {
+		if mtlfConfig.StaticModelUrl != "" {
+			logger.ProcLog.Infof("MTLF disabled, using static ML model URL: %s", mtlfConfig.StaticModelUrl)
+
+			// Create MlModelInfo with static URL
+			mlInfo := nwdaf_context.NewMlModelInfo(eventSub.Event, "static-url")
+			mlInfo.SetModelUrl(mtlfConfig.StaticModelUrl)
+			ctx.SetMlModelInfo(subscriptionId, mlInfo)
+
+			// Initialize directly
+			go p.InitializeMlModel(subscriptionId, mlInfo, mtlfConfig.StaticModelUrl)
+			return
+		}
+		logger.ProcLog.Debugf("MTLF disabled and no StaticModelUrl configured, skipping ML model provisioning")
+		return
+	}
+
+	// 2. Dynamic Model Provisioning (MTLF Subscription)
 	if len(mtlfConfig.Endpoints) == 0 {
 		logger.ProcLog.Warnf("MTLF enabled but no endpoints configured")
 		return
@@ -250,8 +272,6 @@ func (p *Processor) triggerMlModelProvisioning(
 		logger.ProcLog.Warnf("Consumer not available for MTLF subscription")
 		return
 	}
-
-	ctx := nwdaf_context.GetSelf()
 
 	// Create MlModelInfo to track the model provisioning state
 	mlInfo := nwdaf_context.NewMlModelInfo(eventSub.Event, mtlfConfig.Endpoints[0])

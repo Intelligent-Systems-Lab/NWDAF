@@ -7,8 +7,6 @@ import (
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
-	"github.com/free5gc/nwdaf/internal/sbi/consumer"
-	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
 // MlModelAddr represents ML model file address per TS 29.520
@@ -101,42 +99,8 @@ func (s *Server) processMlModelNotification(ctx *nwdaf_context.NWDAFContext, not
 		mlInfo.SetModelUrl(modelUrl)
 
 		// Initialize the model with ML service
-		go s.initializeMlModel(nwdafSubId, mlInfo, modelUrl)
+		go s.Processor().InitializeMlModel(nwdafSubId, mlInfo, modelUrl)
 	}
-}
-
-// initializeMlModel initializes the ML model by calling the ML inference service
-func (s *Server) initializeMlModel(nwdafSubId string, mlInfo *nwdaf_context.MlModelInfo, modelUrl string) {
-	logger.SBILog.Infof("Initializing ML model for subscription %s from %s", nwdafSubId, modelUrl)
-
-	// Get ML service configuration
-	cfg := factory.NwdafConfig
-	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.DataCollection == nil ||
-		cfg.Configuration.DataCollection.MlService == nil || !cfg.Configuration.DataCollection.MlService.Enabled {
-		logger.SBILog.Warnf("ML Service not configured, cannot initialize model")
-		mlInfo.SetModelFailed(nil)
-		return
-	}
-
-	mlServiceEndpoint := cfg.Configuration.DataCollection.MlService.Endpoint
-	if mlServiceEndpoint == "" {
-		logger.SBILog.Warnf("ML Service endpoint not configured")
-		mlInfo.SetModelFailed(nil)
-		return
-	}
-
-	// Create ML service client and initialize model
-	mlClient := consumer.NewMlServiceClient(mlServiceEndpoint)
-	modelId, err := mlClient.InitializeModel(modelUrl)
-	if err != nil {
-		logger.SBILog.Errorf("Failed to initialize ML model: %v", err)
-		mlInfo.SetModelFailed(err)
-		return
-	}
-
-	// Update model info with ready status
-	mlInfo.SetModelReady(modelId)
-	logger.SBILog.Infof("ML model initialized successfully: subscription=%s, modelId=%s", nwdafSubId, modelId)
 }
 
 // getMlModelRoutes returns routes for ML Model Provision callback

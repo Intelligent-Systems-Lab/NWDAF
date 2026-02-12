@@ -61,9 +61,10 @@ type GroupDefinition struct {
 
 // MtlfConfig configuration for MTLF (ML Model Training Logical Function) integration
 type MtlfConfig struct {
-	Enabled   bool     `yaml:"enabled"`
-	Endpoints []string `yaml:"endpoints,omitempty"`
-	NotifUri  string   `yaml:"notifUri,omitempty"` // Callback URI for ML model notifications
+	Enabled        bool     `yaml:"enabled"`
+	Endpoints      []string `yaml:"endpoints,omitempty"`
+	NotifUri       string   `yaml:"notifUri,omitempty"`       // Callback URI for ML model notifications
+	StaticModelUrl string   `yaml:"staticModelUrl,omitempty"` // Static URL for ML model (bypasses MTLF)
 }
 
 // MlServiceConfig configuration for external ML inference service

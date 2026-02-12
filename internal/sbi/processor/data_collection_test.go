@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
+	"github.com/free5gc/nwdaf/pkg/factory"
+	"github.com/free5gc/openapi/models"
 )
 
 // MockRoundTripper for intercepting HTTP requests
@@ -326,5 +328,92 @@ func TestTriggerTargetDataCollection_MixedSupiAndGroup(t *testing.T) {
 	}
 	if groupCounts["group-B"] != 1 {
 		t.Errorf("Expected 1 from group-B, got %d", groupCounts["group-B"])
+	}
+}
+
+// =============================================================================
+// Static ML Model URL Tests
+// =============================================================================
+
+func TestTriggerMlModelProvisioning_StaticUrl(t *testing.T) {
+	ctx := setupTestContext()
+	p := newTestProcessor()
+
+	// 1. Setup Config with Static Model URL
+	// Create minimal config structure
+	cfg := &factory.Config{
+		Configuration: &factory.Configuration{
+			DataCollection: &factory.DataCollection{
+				Mtlf: &factory.MtlfConfig{
+					Enabled:        false, // MTLF Disabled
+					StaticModelUrl: "file:///test/model.pth",
+				},
+				MlService: &factory.MlServiceConfig{
+					Enabled:  true,
+					Endpoint: "http://ml-service-mock",
+				},
+			},
+		},
+	}
+	// Save current config to restore later
+	oldCfg := factory.NwdafConfig
+	factory.NwdafConfig = cfg
+	defer func() { factory.NwdafConfig = oldCfg }()
+
+	// 2. Setup Subscription
+	subId := "test-sub-static-url"
+	eventSub := models.NwdafEventsSubscriptionEventSubscription{
+		Event: models.NwdafEvent_UE_COMMUNICATION,
+	}
+
+	// 3. Trigger
+	p.triggerMlModelProvisioning(&eventSub, subId)
+
+	// 4. Verify logic path
+	// Check if MlModelInfo was created
+	// Since triggerMlModelProvisioning is async (goroutine), we need to wait briefly
+	// However, the creation of MlModelInfo happens synchronously before the goroutine starts
+	// in our implementation of triggerMlModelProvisioning.
+
+	mlInfo := ctx.GetMlModelInfo(subId)
+	if mlInfo == nil {
+		t.Fatal("Expected MlModelInfo to be created")
+	}
+
+	if mlInfo.ModelUrl != "file:///test/model.pth" {
+		t.Errorf("Expected ModelUrl to be %s, got %s", "file:///test/model.pth", mlInfo.ModelUrl)
+	}
+}
+
+func TestTriggerMlModelProvisioning_MtlfDisabledNoStaticUrl(t *testing.T) {
+	ctx := setupTestContext()
+	p := newTestProcessor()
+
+	// Setup Config: MTLF disabled, no static URL
+	cfg := &factory.Config{
+		Configuration: &factory.Configuration{
+			DataCollection: &factory.DataCollection{
+				Mtlf: &factory.MtlfConfig{
+					Enabled:        false,
+					StaticModelUrl: "", // Empty
+				},
+			},
+		},
+	}
+	oldCfg := factory.NwdafConfig
+	factory.NwdafConfig = cfg
+	defer func() { factory.NwdafConfig = oldCfg }()
+
+	subId := "test-sub-no-action"
+	eventSub := models.NwdafEventsSubscriptionEventSubscription{
+		Event: models.NwdafEvent_UE_COMMUNICATION,
+	}
+
+	p.triggerMlModelProvisioning(&eventSub, subId)
+
+	// Verify no MlModelInfo created
+	mlInfo := ctx.GetMlModelInfo(subId)
+	if mlInfo != nil {
+		t.Error("Expected no MlModelInfo to be created")
 	}
 }

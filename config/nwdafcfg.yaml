@@ -22,10 +22,11 @@ configuration:
         smf: http://127.0.0.1:8080/collector/notify
         upf: http://127.0.0.1:8080/collector/upf-notify
     mtlf:
-      enabled: true
+      enabled: false  # Disable MTLF to use static model URL
       endpoints:
         - http://127.0.0.1:8082  # Fake MTLF server for testing
       notifUri: http://127.0.0.1:8080/mlmodel-notify
+      staticModelUrl: file:///app/ml/artifacts/tcn_model.pth # Static path for direct model loading
     mlService:
       enabled: true
       endpoint: http://127.0.0.1:9090  # ML inference service
