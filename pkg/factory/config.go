@@ -71,10 +71,27 @@ type MlServiceConfig struct {
 
 // DaisyConfig configuration for Daisy FL framework integration (MTLF training)
 type DaisyConfig struct {
-	Enabled      bool           `yaml:"enabled"`
-	Endpoint     string         `yaml:"endpoint,omitempty"`     // Master REST API, e.g. http://127.0.0.1:9887
-	TriggerDelay int            `yaml:"triggerDelay,omitempty"` // Seconds after startup to trigger training (default: 30)
-	Task         map[string]any `yaml:"task,omitempty"`         // Task payload (mirrors task.json)
+	Enabled          bool                   `yaml:"enabled"`                    // Master switch for all Daisy FL features
+	Endpoint         string                 `yaml:"endpoint,omitempty"`         // Master REST API
+	TriggerOnStartup bool                   `yaml:"triggerOnStartup,omitempty"` // Trigger training on NWDAF startup
+	TriggerDelay     int                    `yaml:"triggerDelay,omitempty"`     // Startup trigger delay (default: 30)
+	Task             map[string]any         `yaml:"task,omitempty"`             // Task payload (mirrors task.json)
+	AccuracyMonitor  *AccuracyMonitorConfig `yaml:"accuracyMonitor,omitempty"`  // Accuracy monitoring settings
+}
+
+// AccuracyMonitorConfig controls accuracy monitoring behavior
+// Per TS 23.288 §5C: accuracy determined by comparing predictions against ground truth
+type AccuracyMonitorConfig struct {
+	Enabled            bool    `yaml:"enabled"`
+	CheckInterval      int     `yaml:"checkInterval,omitempty"`      // Seconds between checks (default: 60)
+	DeviationThreshold float64 `yaml:"deviationThreshold,omitempty"` // NRMSE retrain threshold (default: 0.3)
+	MinSamples         int     `yaml:"minSamples,omitempty"`         // Min samples before evaluation (default: 5)
+	WarmupDuration     int     `yaml:"warmupDuration,omitempty"`     // Seconds to skip checks after start (default: 120)
+
+	// Trigger strategy: "consecutive" or "ema" (default: "consecutive")
+	TriggerStrategy     string  `yaml:"triggerStrategy,omitempty"`
+	ConsecutiveBreaches int     `yaml:"consecutiveBreaches,omitempty"` // Consecutive checks above threshold (default: 3)
+	EmaAlpha            float64 `yaml:"emaAlpha,omitempty"`            // EMA smoothing factor 0-1 (default: 0.3)
 }
 
 // SmfConfig configuration for SMF data collection

@@ -6,15 +6,23 @@ Simulates:
 - SMF: Receives event subscription requests from NWDAF
 - UPF: Sends periodic USER_DATA_USAGE_MEASURES notifications
 
-Usage:
-    uv run fake_smf_upf_server.py [port]
+Traffic Patterns:
+- stable:   Steady traffic with small gaussian noise
+- periodic: Regular burst cycles on a stable baseline
+- random:   Highly variable traffic
 
-Example:
-    uv run fake_smf_upf_server.py 8081
+Usage:
+    uv run fake_smf_upf_server.py [port] --pattern <pattern> [options]
+
+Examples:
+    uv run fake_smf_upf_server.py 8081 --pattern stable
+    uv run fake_smf_upf_server.py 8081 --pattern periodic --burst-multiplier 10 --burst-period 5
+    uv run fake_smf_upf_server.py 8081 --pattern random --random-min 500 --random-max 5000
 """
 
 import argparse
 import json
+import math
 import random
 import sys
 import threading
@@ -24,12 +32,169 @@ from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 
+# ============================================================================
+# Traffic Generators
+# ============================================================================
+
+class TrafficGenerator:
+    """Base class for traffic pattern generators."""
+
+    def __init__(self, base_ul: int = 2000, base_dl: int = 2000):
+        self.base_ul = base_ul
+        self.base_dl = base_dl
+        self._tick = 0
+
+    def generate(self) -> tuple[int, int]:
+        """Generate (ul_volume, dl_volume) for this tick."""
+        self._tick += 1
+        return self._generate_impl()
+
+    def _generate_impl(self) -> tuple[int, int]:
+        raise NotImplementedError
+
+    @property
+    def tick(self) -> int:
+        return self._tick
+
+    def describe(self) -> str:
+        return "base"
+
+
+class StableTrafficGenerator(TrafficGenerator):
+    """Very steady traffic with small gaussian noise.
+
+    Each tick produces base ± jitter%, where jitter controls the noise level.
+    Example: base_ul=100000, jitter_pct=5 → 95000-105000
+
+    Args:
+        base_ul:     UL baseline volume (bytes)
+        base_dl:     DL baseline volume (bytes)
+        jitter_pct:  Max percentage deviation (default: 5 → ±5%)
+    """
+
+    def __init__(self, base_ul: int = 2000, base_dl: int = 2000,
+                 jitter_pct: float = 5.0):
+        super().__init__(base_ul, base_dl)
+        self.jitter_pct = jitter_pct
+
+    def _generate_impl(self) -> tuple[int, int]:
+        # Gaussian noise: 95% of values within ±jitter_pct
+        ul_noise = random.gauss(0, self.jitter_pct / 2) / 100
+        dl_noise = random.gauss(0, self.jitter_pct / 2) / 100
+        ul = max(0, int(self.base_ul * (1 + ul_noise)))
+        dl = max(0, int(self.base_dl * (1 + dl_noise)))
+        return ul, dl
+
+    def describe(self) -> str:
+        return f"stable (base_ul={self.base_ul}, base_dl={self.base_dl}, jitter=±{self.jitter_pct}%)"
+
+
+class PeriodicTrafficGenerator(TrafficGenerator):
+    """Periodic burst patterns on a stable baseline.
+
+    Every burst_period ticks, traffic spikes by burst_multiplier.
+    The burst lasts burst_duration ticks, then returns to baseline.
+    Baseline has small jitter for realism.
+
+    Args:
+        base_ul:           UL baseline volume (bytes)
+        base_dl:           DL baseline volume (bytes)
+        burst_period:      Ticks between bursts (default: 5)
+        burst_multiplier:  Multiplier during burst (default: 10)
+        burst_duration:    How many ticks the burst lasts (default: 1)
+        baseline_jitter:   Baseline noise ±% (default: 3)
+    """
+
+    def __init__(self, base_ul: int = 2000, base_dl: int = 2000,
+                 burst_period: int = 5, burst_multiplier: float = 10.0,
+                 burst_duration: int = 1, baseline_jitter: float = 3.0):
+        super().__init__(base_ul, base_dl)
+        self.burst_period = burst_period
+        self.burst_multiplier = burst_multiplier
+        self.burst_duration = burst_duration
+        self.baseline_jitter = baseline_jitter
+
+    def _generate_impl(self) -> tuple[int, int]:
+        # Check if we're in a burst window
+        cycle_pos = self.tick % self.burst_period
+        in_burst = cycle_pos > 0 and cycle_pos <= self.burst_duration
+
+        if in_burst:
+            multiplier = self.burst_multiplier
+        else:
+            multiplier = 1.0
+
+        # Small baseline jitter
+        ul_noise = random.gauss(0, self.baseline_jitter / 2) / 100
+        dl_noise = random.gauss(0, self.baseline_jitter / 2) / 100
+
+        ul = max(0, int(self.base_ul * multiplier * (1 + ul_noise)))
+        dl = max(0, int(self.base_dl * multiplier * (1 + dl_noise)))
+        return ul, dl
+
+    def describe(self) -> str:
+        return (f"periodic (base_ul={self.base_ul}, base_dl={self.base_dl}, "
+                f"burst every {self.burst_period} ticks ×{self.burst_multiplier}, "
+                f"duration={self.burst_duration}, jitter=±{self.baseline_jitter}%)")
+
+
+class RandomTrafficGenerator(TrafficGenerator):
+    """Highly variable random traffic.
+
+    Each tick produces a uniformly distributed volume in [min, max].
+    Optional smoothing factor blends with previous value for less chaotic output.
+
+    Args:
+        random_min_ul:  Min UL volume (bytes)
+        random_max_ul:  Max UL volume (bytes)
+        random_min_dl:  Min DL volume (bytes)
+        random_max_dl:  Max DL volume (bytes)
+        smoothing:      Blend factor with previous: 0=fully random, 0.9=very smooth (default: 0)
+    """
+
+    def __init__(self, random_min_ul: int = 500, random_max_ul: int = 5000,
+                 random_min_dl: int = 500, random_max_dl: int = 5000,
+                 smoothing: float = 0.0):
+        super().__init__(0, 0)
+        self.random_min_ul = random_min_ul
+        self.random_max_ul = random_max_ul
+        self.random_min_dl = random_min_dl
+        self.random_max_dl = random_max_dl
+        self.smoothing = max(0.0, min(smoothing, 0.99))
+        self._prev_ul = (random_min_ul + random_max_ul) // 2
+        self._prev_dl = (random_min_dl + random_max_dl) // 2
+
+    def _generate_impl(self) -> tuple[int, int]:
+        raw_ul = random.randint(self.random_min_ul, self.random_max_ul)
+        raw_dl = random.randint(self.random_min_dl, self.random_max_dl)
+
+        if self.smoothing > 0:
+            ul = int(self.smoothing * self._prev_ul + (1 - self.smoothing) * raw_ul)
+            dl = int(self.smoothing * self._prev_dl + (1 - self.smoothing) * raw_dl)
+        else:
+            ul, dl = raw_ul, raw_dl
+
+        self._prev_ul = ul
+        self._prev_dl = dl
+        return ul, dl
+
+    def describe(self) -> str:
+        return (f"random (UL=[{self.random_min_ul}, {self.random_max_ul}], "
+                f"DL=[{self.random_min_dl}, {self.random_max_dl}], "
+                f"smoothing={self.smoothing})")
+
+
+# ============================================================================
+# HTTP Handler
+# ============================================================================
+
 class FakeSmfUpfHandler(BaseHTTPRequestHandler):
     """Handler for SMF subscription requests."""
     
     # Class-level storage for subscriptions
     subscriptions: dict = {}
     upf_notify_threads: dict = {}
+    traffic_generator: TrafficGenerator = None  # Set from main()
     
     def do_POST(self):
         """Handle SMF subscription creation."""
@@ -242,16 +407,10 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
         }
     
     def _build_notification_item(self, count: int, ip_address: str = None) -> dict:
-        """Build a single notification item with traffic data."""
-        # Simulate varying traffic - different patterns for testing
-        base_ul = 100000 + random.randint(0, 50000)  # 100KB-150KB
-        base_dl = 500000 + random.randint(0, 200000)  # 500KB-700KB
-        
-        # Occasionally generate high traffic to test rule variations
-        if count % 5 == 0:
-            base_ul *= 10  # ~1MB spike
-            base_dl *= 10  # ~5MB spike
-        
+        """Build a single notification item with traffic data from the generator."""
+        gen = self.__class__.traffic_generator
+        ul, dl = gen.generate()
+
         item = {
             "eventType": "USER_DATA_USAGE_MEASURES",
             "dnn": "internet",
@@ -259,13 +418,13 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
             "userDataUsageMeasurements": [
                 {
                     "volumeMeasurement": {
-                        "ulVolume": base_ul,
-                        "dlVolume": base_dl,
-                        "totalVolume": base_ul + base_dl,
+                        "ulVolume": ul,
+                        "dlVolume": dl,
+                        "totalVolume": ul + dl,
                     },
                     "throughputMeasurement": {
-                        "ulThroughput": f"{base_ul * 8 // 1000} kbps",
-                        "dlThroughput": f"{base_dl * 8 // 1000} kbps",
+                        "ulThroughput": f"{ul * 8 // 1000} kbps",
+                        "dlThroughput": f"{dl * 8 // 1000} kbps",
                     }
                 }
             ]
@@ -299,11 +458,95 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
         pass
 
 
+# ============================================================================
+# CLI & Main
+# ============================================================================
+
+def build_traffic_generator(args) -> TrafficGenerator:
+    """Create a traffic generator from CLI arguments."""
+    pattern = args.pattern
+
+    if pattern == "stable":
+        return StableTrafficGenerator(
+            base_ul=args.base_ul,
+            base_dl=args.base_dl,
+            jitter_pct=args.jitter,
+        )
+    elif pattern == "periodic":
+        return PeriodicTrafficGenerator(
+            base_ul=args.base_ul,
+            base_dl=args.base_dl,
+            burst_period=args.burst_period,
+            burst_multiplier=args.burst_multiplier,
+            burst_duration=args.burst_duration,
+            baseline_jitter=args.jitter,
+        )
+    elif pattern == "random":
+        return RandomTrafficGenerator(
+            random_min_ul=args.random_min,
+            random_max_ul=args.random_max,
+            random_min_dl=args.random_min * 5,
+            random_max_dl=args.random_max * 5,
+            smoothing=args.smoothing,
+        )
+    else:
+        print(f"Unknown pattern: {pattern}, using stable", file=sys.stderr)
+        return StableTrafficGenerator(base_ul=args.base_ul, base_dl=args.base_dl)
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Fake SMF+UPF Server for NWDAF testing")
-    parser.add_argument("port", nargs="?", type=int, default=8081, help="Port to listen on")
+    parser = argparse.ArgumentParser(
+        description="Fake SMF+UPF Server for NWDAF testing",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Traffic Pattern Examples:
+  Stable:    --pattern stable --base-ul 100000 --jitter 5
+  Periodic:  --pattern periodic --burst-period 5 --burst-multiplier 10
+  Random:    --pattern random --random-min 10000 --random-max 2000000
+        """,
+    )
+    parser.add_argument("port", nargs="?", type=int, default=8081,
+                        help="Port to listen on (default: 8081)")
+
+    # Traffic pattern selection
+    pattern_group = parser.add_argument_group("Traffic Pattern")
+    pattern_group.add_argument("--pattern", type=str, default="stable",
+                               choices=["stable", "periodic", "random"],
+                               help="Traffic pattern (default: stable)")
+
+    # Common parameters
+    common_group = parser.add_argument_group("Common Parameters")
+    common_group.add_argument("--base-ul", type=int, default=2000,
+                              help="Baseline UL volume in bytes (default: 2000)")
+    common_group.add_argument("--base-dl", type=int, default=2000,
+                              help="Baseline DL volume in bytes (default: 2000)")
+    common_group.add_argument("--jitter", type=float, default=5.0,
+                              help="Baseline jitter ±%% (default: 5.0)")
+
+    # Periodic-specific
+    periodic_group = parser.add_argument_group("Periodic Pattern")
+    periodic_group.add_argument("--burst-period", type=int, default=5,
+                                help="Ticks between bursts (default: 5)")
+    periodic_group.add_argument("--burst-multiplier", type=float, default=10.0,
+                                help="Volume multiplier during burst (default: 10.0)")
+    periodic_group.add_argument("--burst-duration", type=int, default=1,
+                                help="Burst duration in ticks (default: 1)")
+
+    # Random-specific
+    random_group = parser.add_argument_group("Random Pattern")
+    random_group.add_argument("--random-min", type=int, default=500,
+                              help="Min UL volume in bytes (default: 500)")
+    random_group.add_argument("--random-max", type=int, default=5000,
+                              help="Max UL volume in bytes (default: 5000)")
+    random_group.add_argument("--smoothing", type=float, default=0.0,
+                              help="Random smoothing 0-0.99: 0=chaotic, 0.9=smooth (default: 0)")
+
     args = parser.parse_args()
-    
+
+    # Build traffic generator
+    generator = build_traffic_generator(args)
+    FakeSmfUpfHandler.traffic_generator = generator
+
     server = HTTPServer(("", args.port), FakeSmfUpfHandler)
     
     print(f"""
@@ -316,10 +559,7 @@ def main():
 ║   POST   /nsmf-event-exposure/v1/subscriptions               ║
 ║   DELETE /nsmf-event-exposure/v1/subscriptions/{{subId}}       ║
 ║                                                              ║
-║ Behavior:                                                    ║
-║   - Accepts SMF event subscriptions                          ║
-║   - Sends UPF notifications every 10s to bundledEventNotify  ║
-║   - Simulates varying traffic (occasional high-traffic spks) ║
+║ Traffic Pattern: {generator.describe():<42}║
 ╚══════════════════════════════════════════════════════════════╝
 Press Ctrl+C to stop
 """)

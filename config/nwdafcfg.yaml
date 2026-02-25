@@ -45,9 +45,19 @@ configuration:
 
   # Daisy FL Framework (MTLF Training)
   daisy:
-    enabled: true  # Set to true to enable training trigger
+    enabled: true               # Master switch for all Daisy FL features
     endpoint: http://127.0.0.1:9887
-    triggerDelay: 10  # seconds after NWDAF startup
+    triggerOnStartup: false      # Trigger training once after NWDAF startup
+    triggerDelay: 10            # seconds to wait before startup trigger
+    accuracyMonitor:
+      enabled: true            # Trigger retraining on accuracy degradation
+      checkInterval: 50         # seconds between accuracy checks
+      deviationThreshold: 0.3   # NRMSE > 0.3 triggers retraining
+      minSamples: 5             # min ground truth samples before evaluation
+      warmupDuration: 50       # seconds to skip checks after start (model cold-start)
+      triggerStrategy: consecutive  # "consecutive" or "ema"
+      consecutiveBreaches: 3    # required consecutive checks (for consecutive)
+      emaAlpha: 0.3             # EMA smoothing factor 0-1 (for ema)
     task:
       TID: "nwdaf_fl_training"
       NUM_ROUNDS: 2

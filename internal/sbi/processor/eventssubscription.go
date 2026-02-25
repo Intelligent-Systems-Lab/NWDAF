@@ -258,6 +258,24 @@ func (p *Processor) HandleDeleteSubscription(subscriptionId string) *models.Prob
 	// Cleanup SMF subscriptions and data collection resources
 	p.cleanupDataCollection(subscriptionId)
 
+	// Cleanup ML model: registry + accuracy monitor
+	if mlInfo := ctx.GetMlModelInfo(subscriptionId); mlInfo != nil {
+		modelUrl := mlInfo.ModelUrl
+
+		// Layer 1: Registry — remove subscriber
+		if shared := ctx.GetSharedModel(modelUrl); shared != nil {
+			remaining := shared.RemoveSubscriber(subscriptionId)
+			if remaining == 0 {
+				ctx.DeleteSharedModel(modelUrl)
+			}
+		}
+
+		// Layer 2: Accuracy monitor — stop if no subscribers remain
+		p.StopAccuracyMonitorForModel(modelUrl)
+
+		ctx.DeleteMlModelInfo(subscriptionId)
+	}
+
 	ctx.DeleteSubscription(subscriptionId)
 	logger.ProcLog.Infof("Subscription deleted: %s", subscriptionId)
 	return nil

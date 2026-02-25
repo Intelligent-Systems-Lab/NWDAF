@@ -7,12 +7,13 @@ import (
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
-// InitializeMlModel initializes the ML model directly using the ML Service
-// Can be called by:
-// 1. triggerMlModelProvisioning (when using static URL)
-// 2. processMlModelNotification (when receiving model URL from MTLF)
-func (p *Processor) InitializeMlModel(nwdafSubId string, mlInfo *nwdaf_context.MlModelInfo, modelUrl string) {
-	logger.ProcLog.Infof("Initializing ML model for subscription %s from %s", nwdafSubId, modelUrl)
+// InitializeMlModel initializes the ML model directly using the ML Service.
+// Deduplicates model loading: if modelUrl is already loaded by another
+// subscription, reuses the existing modelId from SharedModelRegistry.
+func (p *Processor) InitializeMlModel(
+	nwdafSubId string, mlInfo *nwdaf_context.MlModelInfo, modelUrl string,
+) {
+	logger.ProcLog.Infof("Initializing ML model: sub=%s, url=%s", nwdafSubId, modelUrl)
 
 	// Get ML service configuration
 	cfg := factory.NwdafConfig
@@ -30,7 +31,24 @@ func (p *Processor) InitializeMlModel(nwdafSubId string, mlInfo *nwdaf_context.M
 		return
 	}
 
-	// Create ML service client and initialize model
+	ctx := nwdaf_context.GetSelf()
+
+	// Layer 1: Registry — check if model already loaded
+	shared, isNew := ctx.GetOrCreateSharedModel(modelUrl, mlInfo.Event)
+	shared.AddSubscriber(nwdafSubId)
+
+	if !isNew {
+		existingModelId := shared.GetModelId()
+		if existingModelId != "" {
+			// Reuse existing model — skip ML service call
+			mlInfo.SetModelReady(existingModelId)
+			logger.ProcLog.Infof("Reusing ML model: sub=%s, modelId=%s (already loaded)",
+				nwdafSubId, existingModelId)
+			return
+		}
+	}
+
+	// First subscriber — init via ML service
 	mlClient := consumer.NewMlServiceClient(mlServiceEndpoint)
 	modelId, err := mlClient.InitializeModel(modelUrl)
 	if err != nil {
@@ -39,7 +57,12 @@ func (p *Processor) InitializeMlModel(nwdafSubId string, mlInfo *nwdaf_context.M
 		return
 	}
 
-	// Update model info with ready status
+	shared.SetModelId(modelId)
 	mlInfo.SetModelReady(modelId)
-	logger.ProcLog.Infof("ML model initialized successfully: subscription=%s, modelId=%s", nwdafSubId, modelId)
+	logger.ProcLog.Infof("ML model initialized: sub=%s, modelId=%s", nwdafSubId, modelId)
+
+	// Layer 2: Start accuracy monitor (optional, per-model)
+	if p.wg != nil {
+		p.StartAccuracyMonitorForModel(modelUrl, p.wg)
+	}
 }

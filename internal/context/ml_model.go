@@ -96,3 +96,64 @@ func (m *MlModelInfo) GetStatus() MlModelStatus {
 	defer m.RUnlock()
 	return m.Status
 }
+
+// ============================================================================
+// SharedModelInfo — per-modelUrl shared model state
+// ============================================================================
+
+// SharedModelInfo tracks a loaded ML model shared across subscriptions.
+// One SharedModelInfo per unique modelUrl. Multiple subscriptions can share
+// the same model, avoiding duplicate ML service initialization.
+type SharedModelInfo struct {
+	sync.RWMutex
+	ModelUrl    string
+	ModelId     string              // From ML service (set once on first init)
+	Event       models.NwdafEvent   // Analytics event type
+	Subscribers map[string]struct{} // nwdafSubId set
+}
+
+// NewSharedModelInfo creates a new SharedModelInfo
+func NewSharedModelInfo(modelUrl string, event models.NwdafEvent) *SharedModelInfo {
+	return &SharedModelInfo{
+		ModelUrl:    modelUrl,
+		Event:       event,
+		Subscribers: make(map[string]struct{}),
+	}
+}
+
+// AddSubscriber adds a subscriber, returns current count
+func (s *SharedModelInfo) AddSubscriber(nwdafSubId string) int {
+	s.Lock()
+	defer s.Unlock()
+	s.Subscribers[nwdafSubId] = struct{}{}
+	return len(s.Subscribers)
+}
+
+// RemoveSubscriber removes a subscriber, returns remaining count
+func (s *SharedModelInfo) RemoveSubscriber(nwdafSubId string) int {
+	s.Lock()
+	defer s.Unlock()
+	delete(s.Subscribers, nwdafSubId)
+	return len(s.Subscribers)
+}
+
+// SubscriberCount returns the number of active subscribers
+func (s *SharedModelInfo) SubscriberCount() int {
+	s.RLock()
+	defer s.RUnlock()
+	return len(s.Subscribers)
+}
+
+// GetModelId returns the shared model ID
+func (s *SharedModelInfo) GetModelId() string {
+	s.RLock()
+	defer s.RUnlock()
+	return s.ModelId
+}
+
+// SetModelId stores the ML service model ID (set once on first init)
+func (s *SharedModelInfo) SetModelId(modelId string) {
+	s.Lock()
+	defer s.Unlock()
+	s.ModelId = modelId
+}

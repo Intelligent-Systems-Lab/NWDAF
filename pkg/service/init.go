@@ -127,6 +127,9 @@ func (a *NwdafApp) Start() {
 	a.wg.Add(1)
 	go a.listenShutdownEvent()
 
+	// Set WaitGroup for processor goroutine lifecycle management
+	a.processor.SetWaitGroup(&a.wg)
+
 	// Start MTLF training scheduler (managed by processor)
 	a.processor.StartMtlfTrainingScheduler(&a.wg)
 

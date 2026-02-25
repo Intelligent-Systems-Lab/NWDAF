@@ -2,6 +2,7 @@ package processor
 
 import (
 	"context"
+	"sync"
 
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
@@ -14,6 +15,7 @@ type NwdafApp interface {
 
 type Processor struct {
 	nwdaf NwdafApp
+	wg    *sync.WaitGroup
 }
 
 func NewProcessor(nwdaf NwdafApp) *Processor {
@@ -22,4 +24,9 @@ func NewProcessor(nwdaf NwdafApp) *Processor {
 	}
 	logger.ProcLog.Info("Processor initialized")
 	return p
+}
+
+// SetWaitGroup stores the application WaitGroup for goroutine lifecycle management
+func (p *Processor) SetWaitGroup(wg *sync.WaitGroup) {
+	p.wg = wg
 }

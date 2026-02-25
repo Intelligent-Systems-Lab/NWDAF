@@ -17,7 +17,8 @@ var mtlfLog = logger.MtlfLog
 func (p *Processor) StartMtlfTrainingScheduler(wg *sync.WaitGroup) {
 	cfg := factory.NwdafConfig
 	if cfg == nil || cfg.Configuration == nil ||
-		cfg.Configuration.Daisy == nil || !cfg.Configuration.Daisy.Enabled {
+		cfg.Configuration.Daisy == nil || !cfg.Configuration.Daisy.Enabled ||
+		!cfg.Configuration.Daisy.TriggerOnStartup {
 		return
 	}
 
@@ -49,17 +50,20 @@ func (p *Processor) runDelayedTraining(delaySec int, daisyCfg *factory.DaisyConf
 
 	mtlfLog.Infof("Triggering MTLF training via Daisy: endpoint=%s", daisyCfg.Endpoint)
 
-	client := consumer.NewDaisyClient(daisyCfg.Endpoint)
-	task := daisyCfg.Task
-	if task == nil {
-		task = map[string]any{}
-	}
-
-	// POST blocks until training completes
-	if err := client.TriggerTraining(task); err != nil {
+	if err := p.triggerTraining(daisyCfg); err != nil {
 		mtlfLog.Errorf("MTLF training failed: %v", err)
 		return
 	}
 
 	mtlfLog.Info("MTLF training completed successfully")
+}
+
+// triggerTraining sends training task to Daisy (shared by delay + accuracy triggers)
+func (p *Processor) triggerTraining(daisyCfg *factory.DaisyConfig) error {
+	client := consumer.NewDaisyClient(daisyCfg.Endpoint)
+	task := daisyCfg.Task
+	if task == nil {
+		task = map[string]any{}
+	}
+	return client.TriggerTraining(task)
 }

@@ -150,10 +150,26 @@ func generateMlBasedUeCommunication(
 	// Aggregate 5 predicted steps (5 × 10s = 50s prediction window)
 	var totalUl, totalDl int64
 	var totalConfidence int32
-	for _, pred := range resp.PredictedData {
+	for i, pred := range resp.PredictedData {
 		totalUl += pred.TrafChar.UlVol
 		totalDl += pred.TrafChar.DlVol
 		totalConfidence += pred.Confidence
+
+		// Record individual predictions for accuracy monitoring
+		// Per TS 23.288 §5C: store predictions for ground truth comparison
+		if isAccuracyMonitorEnabled() {
+			store := ctx.GetModelAccuracyStore(mlInfo.ModelUrl)
+			if store != nil {
+				store.AddPrediction(nwdaf_context.PredictionRecord{
+					ModelUrl:    mlInfo.ModelUrl,
+					PredictedAt: now,
+					TargetTime:  now.Add(time.Duration(i*10) * time.Second),
+					PredUlVol:   pred.TrafChar.UlVol,
+					PredDlVol:   pred.TrafChar.DlVol,
+					NwdafSubId:  nwdafSubId,
+				})
+			}
+		}
 	}
 	avgConfidence := totalConfidence / int32(len(resp.PredictedData))
 
@@ -167,4 +183,12 @@ func generateMlBasedUeCommunication(
 		},
 		Confidence: avgConfidence,
 	}, nil
+}
+
+// isAccuracyMonitorEnabled checks if accuracy monitoring is configured and enabled
+func isAccuracyMonitorEnabled() bool {
+	cfg := factory.NwdafConfig
+	return cfg != nil && cfg.Configuration != nil &&
+		cfg.Configuration.Daisy != nil && cfg.Configuration.Daisy.Enabled &&
+		cfg.Configuration.Daisy.AccuracyMonitor != nil && cfg.Configuration.Daisy.AccuracyMonitor.Enabled
 }
