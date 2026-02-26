@@ -31,6 +31,7 @@ type Info struct {
 }
 
 type Configuration struct {
+	Mongodb            *Mongodb               `yaml:"mongodb,omitempty"`
 	NwdafName          string                 `yaml:"nwdafName,omitempty"`
 	Sbi                *Sbi                   `yaml:"sbi,omitempty"`
 	NrfUri             string                 `yaml:"nrfUri,omitempty"`
@@ -106,6 +107,11 @@ type SmfConfig struct {
 type NotifUris struct {
 	Smf string `yaml:"smf,omitempty"` // Callback URI for SMF notifications
 	Upf string `yaml:"upf,omitempty"` // Callback URI for UPF notifications
+}
+
+type Mongodb struct {
+	Name string `yaml:"name"`
+	Url  string `yaml:"url"`
 }
 
 type Sbi struct {

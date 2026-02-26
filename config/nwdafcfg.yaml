@@ -3,6 +3,9 @@ info:
   description: NWDAF initial configuration
 
 configuration:
+  mongodb:
+    name: free5gc
+    url: mongodb://127.0.0.1:27017
   nwdafName: NWDAF
   sbi:
     scheme: http

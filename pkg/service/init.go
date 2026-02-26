@@ -16,6 +16,7 @@ import (
 	"github.com/free5gc/nwdaf/internal/sbi/processor"
 	"github.com/free5gc/nwdaf/pkg/app"
 	"github.com/free5gc/nwdaf/pkg/factory"
+	"github.com/free5gc/util/mongoapi"
 )
 
 var _ app.App = &NwdafApp{}
@@ -123,6 +124,16 @@ func (a *NwdafApp) SetReportCaller(reportCaller bool) {
 
 func (a *NwdafApp) Start() {
 	logger.InitLog.Infoln("NWDAF Server started")
+
+	// Connect to MongoDB
+	if a.cfg.Configuration != nil && a.cfg.Configuration.Mongodb != nil {
+		mongodb := a.cfg.Configuration.Mongodb
+		if err := mongoapi.SetMongoDB(mongodb.Name, mongodb.Url); err != nil {
+			logger.InitLog.Errorf("Fail to connect to MongoDB: %+v", err)
+		} else {
+			logger.InitLog.Infof("Successfully connected to MongoDB (%s)", mongodb.Url)
+		}
+	}
 
 	a.wg.Add(1)
 	go a.listenShutdownEvent()

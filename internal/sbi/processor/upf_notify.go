@@ -3,9 +3,12 @@ package processor
 import (
 	"time"
 
+	"go.mongodb.org/mongo-driver/bson"
+
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/openapi/models"
+	"github.com/free5gc/util/mongoapi"
 )
 
 // UPF Event Types based on TS 29.564
@@ -128,15 +131,29 @@ func (p *Processor) processUpfNotificationItemUnified(
 		data.RatType = item.RatType
 	}
 
-	// Process measurements
+	// Get GroupId if available from the original subscription resource tracking
+	groupId := ctx.GetGroupIdByCorrelationId(bucket.CorrelationId)
+
+	// Process Measurements and save to MongoDB
 	for _, usage := range item.UserDataUsageMeasurements {
 		dataPoint := nwdaf_context.UpfDataPoint{
 			Timestamp: item.TimeStamp,
 		}
 
+		record := nwdaf_context.UpfTrafficRecord{
+			CorrelationId: bucket.CorrelationId,
+			IpAddr:        ipAddr,
+			Supi:          item.Supi,
+			GroupId:       groupId,
+			Dnn:           item.Dnn,
+			Timestamp:     item.TimeStamp,
+		}
+
 		if usage.VolumeMeasurement != nil {
 			dataPoint.UlVolume = usage.VolumeMeasurement.UlVolume
 			dataPoint.DlVolume = usage.VolumeMeasurement.DlVolume
+			record.UlVolume = usage.VolumeMeasurement.UlVolume
+			record.DlVolume = usage.VolumeMeasurement.DlVolume
 			logger.ProcLog.Infof("UPF VOLUME: ip=%s, ulVol=%d, dlVol=%d",
 				ipAddr, usage.VolumeMeasurement.UlVolume, usage.VolumeMeasurement.DlVolume)
 		}
@@ -144,11 +161,38 @@ func (p *Processor) processUpfNotificationItemUnified(
 		if usage.ThroughputMeasurement != nil {
 			dataPoint.UlThroughput = usage.ThroughputMeasurement.UlThroughput
 			dataPoint.DlThroughput = usage.ThroughputMeasurement.DlThroughput
+			record.UlThroughput = usage.ThroughputMeasurement.UlThroughput
+			record.DlThroughput = usage.ThroughputMeasurement.DlThroughput
 			logger.ProcLog.Infof("UPF THROUGHPUT: ip=%s, ulTput=%s, dlTput=%s",
 				ipAddr, usage.ThroughputMeasurement.UlThroughput, usage.ThroughputMeasurement.DlThroughput)
 		}
 
 		data.RawUpfData = append(data.RawUpfData, dataPoint)
+
+		// Save to MongoDB
+		// Define a unique filter to avoid overwriting the same document
+		filter := bson.M{
+			"correlationId": record.CorrelationId,
+			"ipAddr":        record.IpAddr,
+			"timestamp":     record.Timestamp,
+		}
+
+		putData := bson.M{
+			"correlationId": record.CorrelationId,
+			"ipAddr":        record.IpAddr,
+			"supi":          record.Supi,
+			"groupId":       record.GroupId,
+			"dnn":           record.Dnn,
+			"timestamp":     record.Timestamp,
+			"ulVolume":      record.UlVolume,
+			"dlVolume":      record.DlVolume,
+			"ulThroughput":  record.UlThroughput,
+			"dlThroughput":  record.DlThroughput,
+		}
+
+		if _, err := mongoapi.RestfulAPIPost(nwdaf_context.UpfTrafficDataColl, filter, putData); err != nil {
+			logger.ProcLog.Errorf("Failed to save UPF data to MongoDB: %v", err)
+		}
 	}
 
 	data.LastUpdate = item.TimeStamp

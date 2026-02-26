@@ -537,3 +537,26 @@ func (c *NWDAFContext) ClearNwdafSubResourcesMap() {
 		return true
 	})
 }
+
+// GetGroupIdByCorrelationId finds the original Group ID associated with a Correlation ID
+// Optimized: uses the SmfSubscription's known NWDAF subscribers instead of scanning all resources
+func (c *NWDAFContext) GetGroupIdByCorrelationId(correlationId string) string {
+	sub := c.GetSmfSubscription(correlationId)
+	if sub == nil {
+		return ""
+	}
+
+	sub.Lock()
+	defer sub.Unlock()
+
+	for nwdafSubId := range sub.NwdafSubIds {
+		resources := c.GetNwdafSubResources(nwdafSubId)
+		for _, r := range resources {
+			if r.CorrelationId == correlationId && r.OriginalGroupId != "" {
+				return r.OriginalGroupId
+			}
+		}
+	}
+
+	return ""
+}
