@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/sirupsen/logrus"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
@@ -132,6 +133,24 @@ func (a *NwdafApp) Start() {
 			logger.InitLog.Errorf("Fail to connect to MongoDB: %+v", err)
 		} else {
 			logger.InitLog.Infof("Successfully connected to MongoDB (%s)", mongodb.Url)
+
+			// Initialize Time Series Collection for UPF Traffic Data
+			opts := options.CreateCollection().SetTimeSeriesOptions(
+				options.TimeSeries().
+					SetTimeField("timestamp").
+					SetMetaField("metadata"),
+			)
+			collErr := mongoapi.Client.Database(mongodb.Name).CreateCollection(
+				context.Background(),
+				nwdaf_context.UpfTrafficDataColl,
+				opts,
+			)
+			if collErr != nil {
+				// It's normal if the collection already exists
+				logger.InitLog.Debugf("MongoDB TimeSeries collection creation note: %v", collErr)
+			} else {
+				logger.InitLog.Infof("Created MongoDB TimeSeries collection: %s", nwdaf_context.UpfTrafficDataColl)
+			}
 		}
 	}
 

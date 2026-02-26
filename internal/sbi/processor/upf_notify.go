@@ -1,12 +1,12 @@
 package processor
 
 import (
+	"context"
 	"time"
-
-	"go.mongodb.org/mongo-driver/bson"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
+	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 	"github.com/free5gc/util/mongoapi"
 )
@@ -141,12 +141,14 @@ func (p *Processor) processUpfNotificationItemUnified(
 		}
 
 		record := nwdaf_context.UpfTrafficRecord{
-			CorrelationId: bucket.CorrelationId,
-			IpAddr:        ipAddr,
-			Supi:          item.Supi,
-			GroupId:       groupId,
-			Dnn:           item.Dnn,
-			Timestamp:     item.TimeStamp,
+			Metadata: nwdaf_context.UpfTrafficMetaData{
+				IpAddr:        ipAddr,
+				CorrelationId: bucket.CorrelationId,
+				Supi:          item.Supi,
+				GroupId:       groupId,
+				Dnn:           item.Dnn,
+			},
+			Timestamp: item.TimeStamp,
 		}
 
 		if usage.VolumeMeasurement != nil {
@@ -169,29 +171,13 @@ func (p *Processor) processUpfNotificationItemUnified(
 
 		data.RawUpfData = append(data.RawUpfData, dataPoint)
 
-		// Save to MongoDB
-		// Define a unique filter to avoid overwriting the same document
-		filter := bson.M{
-			"correlationId": record.CorrelationId,
-			"ipAddr":        record.IpAddr,
-			"timestamp":     record.Timestamp,
-		}
-
-		putData := bson.M{
-			"correlationId": record.CorrelationId,
-			"ipAddr":        record.IpAddr,
-			"supi":          record.Supi,
-			"groupId":       record.GroupId,
-			"dnn":           record.Dnn,
-			"timestamp":     record.Timestamp,
-			"ulVolume":      record.UlVolume,
-			"dlVolume":      record.DlVolume,
-			"ulThroughput":  record.UlThroughput,
-			"dlThroughput":  record.DlThroughput,
-		}
-
-		if _, err := mongoapi.RestfulAPIPost(nwdaf_context.UpfTrafficDataColl, filter, putData); err != nil {
-			logger.ProcLog.Errorf("Failed to save UPF data to MongoDB: %v", err)
+		// Save to MongoDB natively using mongo-driver (if configured and connected)
+		if factory.NwdafConfig != nil && factory.NwdafConfig.Configuration != nil && factory.NwdafConfig.Configuration.Mongodb != nil && mongoapi.Client != nil {
+			dbName := factory.NwdafConfig.Configuration.Mongodb.Name
+			coll := mongoapi.Client.Database(dbName).Collection(nwdaf_context.UpfTrafficDataColl)
+			if _, err := coll.InsertOne(context.Background(), record); err != nil {
+				logger.ProcLog.Errorf("Failed to save UPF TimeSeries data: %v", err)
+			}
 		}
 	}
 
