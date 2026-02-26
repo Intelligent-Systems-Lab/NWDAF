@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
-
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
@@ -163,7 +161,7 @@ func (p *Processor) triggerTargetDataCollection(
 			correlationId, found := ctx.GetSmfCorrelationId(targetId, smfEndpoint)
 
 			if !found {
-				correlationId = uuid.New().String()
+				correlationId = ctx.NewCorrelationId()
 				// Store mapping optimistically so other threads might use it
 				ctx.StoreSmfCorrelationId(targetId, smfEndpoint, correlationId)
 			}

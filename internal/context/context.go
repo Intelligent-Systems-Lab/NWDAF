@@ -1,7 +1,9 @@
 package context
 
 import (
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -74,6 +76,9 @@ type NWDAFContext struct {
 	// Per-model accuracy stores: modelUrl → *ModelAccuracyStore
 	// Only used when accuracy monitoring is enabled
 	modelAccuracyStores sync.Map
+
+	// Sequential correlation ID counter
+	correlationIdCounter atomic.Int64
 }
 
 // Subscription represents an individual event subscription
@@ -268,4 +273,10 @@ func (c *NWDAFContext) DeleteModelAccuracyStore(modelUrl string) {
 		val.(*ModelAccuracyStore).StopMonitor()
 	}
 	logger.CtxLog.Debugf("Deleted accuracy store: %s", modelUrl)
+}
+
+// NewCorrelationId returns a sequential, predictable correlation ID (corr-1, corr-2, ...)
+func (c *NWDAFContext) NewCorrelationId() string {
+	n := c.correlationIdCounter.Add(1)
+	return fmt.Sprintf("corr-%d", n)
 }
