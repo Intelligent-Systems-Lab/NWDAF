@@ -18,6 +18,11 @@ const (
 	TargetType_ANY_UE   TargetType = "ANY_UE"
 )
 
+// maxInMemoryDataPoints is the ring-buffer size for RawUpfData.
+// When MongoDB is available this acts as a short-term cache (fallback).
+// 50 points × 10 s/point ≈ 8.3 min of recent data kept in memory.
+const maxInMemoryDataPoints = 50
+
 // UpfDataPoint represents a single UPF measurement with timestamp
 // Used for storing raw data instead of pre-aggregating
 type UpfDataPoint struct {
@@ -250,11 +255,16 @@ func (d *TrafficData) Lock() { d.mu.Lock() }
 // Unlock releases the mutex
 func (d *TrafficData) Unlock() { d.mu.Unlock() }
 
-// AppendDataPoint appends a new data point
+// AppendDataPoint appends a new data point, enforcing a ring-buffer cap.
 func (d *TrafficData) AppendDataPoint(point UpfDataPoint) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.RawUpfData = append(d.RawUpfData, point)
+	// Ring-buffer: drop oldest entries when over the cap
+	if len(d.RawUpfData) > maxInMemoryDataPoints {
+		drop := len(d.RawUpfData) - maxInMemoryDataPoints
+		d.RawUpfData = d.RawUpfData[drop:]
+	}
 	d.LastUpdate = point.Timestamp
 }
 

@@ -86,8 +86,14 @@ func (p *Processor) triggerUeCommunicationCollection(
 		}
 	}
 
-	// Fixed SMF report period for data collection
-	smfRepPeriod := int32(10) // Fixed: 10s
+	// SMF report period: driven by analytics model config (default: 10s)
+	smfRepPeriod := int32(10)
+	if cfg.Configuration.Analytics != nil &&
+		cfg.Configuration.Analytics.UeCommunication != nil {
+		smfRepPeriod = int32(
+			cfg.Configuration.Analytics.UeCommunication.SamplingIntervalOrDefault(),
+		)
+	}
 
 	ctx := nwdaf_context.GetSelf()
 

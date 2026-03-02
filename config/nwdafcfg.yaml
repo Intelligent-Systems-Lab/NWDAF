@@ -24,6 +24,14 @@ configuration:
       smf: http://127.0.0.1:8080/collector/notify
       upf: http://127.0.0.1:8080/collector/upf-notify
 
+  # Analytics model parameters per event type
+  analytics:
+    ueCommunication:
+      samplingInterval: 10  # UPF report period (seconds); governs smf repPeriod
+      inputWindow: 30       # data points fed to ML model (30 × 10s = 5 min history)
+      outputWindow: 5       # prediction steps (5 × 10s = 50s ahead)
+      # queryLookback = samplingInterval × inputWindow = 300s (auto-computed)
+
   # External MTLF Integration
   externalMtlf:
     enabled: false  # Disable MTLF to use static model URL

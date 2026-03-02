@@ -109,36 +109,17 @@ func generateMlBasedUeCommunication(
 		return models.UeCommunication{}, fmt.Errorf("ML service client not available")
 	}
 
-	// Prepare historical data for prediction
-	trafficDataList := ctx.GetTrafficDataByNwdafSubId(nwdafSubId)
-	historicalData := []TrafficObservation{}
-	dnn := "internet"
+	// Resolve model params (with defaults)
+	params := getUeCommunicationModelParams()
+	outputWindow := params.OutputWindowOrDefault()
+	samplingInterval := params.SamplingIntervalOrDefault()
 
-	for _, trafficData := range trafficDataList {
-		trafficData.Lock()
-		for _, dp := range trafficData.RawUpfData {
-			historicalData = append(historicalData, TrafficObservation{
-				Ts: dp.Timestamp.Format(time.RFC3339),
-				TrafChar: TrafficCharacterization{
-					UlVol: dp.UlVolume,
-					DlVol: dp.DlVolume,
-				},
-			})
-		}
-		if trafficData.Dnn != "" {
-			dnn = trafficData.Dnn
-		}
-		trafficData.Unlock()
-	}
-
-	// Model expects at most 30 data points (30 × 10s intervals)
-	if len(historicalData) > 30 {
-		historicalData = historicalData[len(historicalData)-30:]
-	}
+	// Fetch historical data — prefer MongoDB, fall back to in-memory
+	historicalData, dnn := fetchHistoricalData(nwdafSubId, ctx, params)
 
 	// Call ML service for prediction
 	modelId := mlInfo.GetModelId()
-	resp, err := mlClient.Predict(modelId, historicalData, 5)
+	resp, err := mlClient.Predict(modelId, historicalData, outputWindow)
 	if err != nil {
 		return models.UeCommunication{}, err
 	}
@@ -147,7 +128,7 @@ func generateMlBasedUeCommunication(
 		return models.UeCommunication{}, fmt.Errorf("no prediction data returned")
 	}
 
-	// Aggregate 5 predicted steps (5 × 10s = 50s prediction window)
+	// Aggregate predicted steps
 	var totalUl, totalDl int64
 	var totalConfidence int32
 	for i, pred := range resp.PredictedData {
@@ -163,18 +144,22 @@ func generateMlBasedUeCommunication(
 				store.AddPrediction(nwdaf_context.PredictionRecord{
 					ModelUrl:    mlInfo.ModelUrl,
 					PredictedAt: now,
-					TargetTime:  now.Add(time.Duration(i*10) * time.Second),
-					PredUlVol:   pred.TrafChar.UlVol,
-					PredDlVol:   pred.TrafChar.DlVol,
-					NwdafSubId:  nwdafSubId,
+					// Target: i-th step ahead in sampling-interval increments
+					TargetTime: now.Add(time.Duration((i+1)*samplingInterval) * time.Second),
+					PredUlVol:  pred.TrafChar.UlVol,
+					PredDlVol:  pred.TrafChar.DlVol,
+					NwdafSubId: nwdafSubId,
 				})
 			}
 		}
 	}
 	avgConfidence := totalConfidence / int32(len(resp.PredictedData))
 
+	// commDur = total prediction horizon in seconds
+	commDur := int32(outputWindow * samplingInterval)
+
 	return models.UeCommunication{
-		CommDur: 50, // 5 × 10s intervals
+		CommDur: commDur,
 		Ts:      &now,
 		TrafChar: &models.TrafficCharacterization{
 			Dnn:   dnn,
@@ -183,6 +168,113 @@ func generateMlBasedUeCommunication(
 		},
 		Confidence: avgConfidence,
 	}, nil
+}
+
+// getUeCommunicationModelParams returns the configured ModelParams for UE_COMMUNICATION.
+// Returns a zero-value ModelParams (all defaults) when not configured.
+func getUeCommunicationModelParams() *factory.ModelParams {
+	cfg := factory.NwdafConfig
+	if cfg != nil && cfg.Configuration != nil &&
+		cfg.Configuration.Analytics != nil &&
+		cfg.Configuration.Analytics.UeCommunication != nil {
+		return cfg.Configuration.Analytics.UeCommunication
+	}
+	return &factory.ModelParams{} // zero value → all helpers return defaults
+}
+
+// fetchHistoricalData retrieves recent UPF traffic data for ML prediction.
+// Primary source: MongoDB time-series collection (time-aligned, bounded query).
+// Fallback: in-memory RawUpfData (available even when MongoDB is not configured).
+func fetchHistoricalData(
+	nwdafSubId string,
+	ctx *nwdaf_context.NWDAFContext,
+	params *factory.ModelParams,
+) ([]TrafficObservation, string) {
+	cfg := factory.NwdafConfig
+	dbName := ""
+	if cfg != nil && cfg.Configuration != nil && cfg.Configuration.Mongodb != nil {
+		dbName = cfg.Configuration.Mongodb.Name
+	}
+
+	inputWindow := params.InputWindowOrDefault()
+	queryLookback := time.Duration(params.QueryLookback()) * time.Second
+
+	// --- Primary: MongoDB ---
+	if dbName != "" && nwdaf_context.IsMongoAvailable() {
+		corrIds := ctx.GetCorrelationIdsByNwdafSubId(nwdafSubId)
+		if len(corrIds) > 0 {
+			since := time.Now().Add(-queryLookback)
+			records, err := nwdaf_context.QueryTrafficByMultipleCorrelationIds(
+				dbName, corrIds, since, inputWindow,
+			)
+			if err == nil && len(records) > 0 {
+				notifierLog.Debugf("Using %d MongoDB records for ML prediction (nwdafSubId=%s)",
+					len(records), nwdafSubId)
+				return upfRecordsToObservations(records)
+			}
+			if err != nil {
+				notifierLog.Warnf(
+					"MongoDB query failed for ML prediction, falling back to in-memory: %v", err)
+			}
+		}
+	}
+
+	// --- Fallback: in-memory ---
+	notifierLog.Debugf("Using in-memory data for ML prediction (nwdafSubId=%s)", nwdafSubId)
+	return inMemoryToObservations(ctx, nwdafSubId, inputWindow)
+}
+
+// upfRecordsToObservations converts MongoDB UpfTrafficRecord slice to ML input format.
+func upfRecordsToObservations(records []nwdaf_context.UpfTrafficRecord) ([]TrafficObservation, string) {
+	obs := make([]TrafficObservation, 0, len(records))
+	dnn := "internet"
+	for _, r := range records {
+		obs = append(obs, TrafficObservation{
+			Ts: r.Timestamp.Format(time.RFC3339),
+			TrafChar: TrafficCharacterization{
+				UlVol: r.UlVolume,
+				DlVol: r.DlVolume,
+			},
+		})
+		if r.Metadata.Dnn != "" {
+			dnn = r.Metadata.Dnn
+		}
+	}
+	return obs, dnn
+}
+
+// inMemoryToObservations reads from in-memory store (fallback when MongoDB unavailable).
+func inMemoryToObservations(
+	ctx *nwdaf_context.NWDAFContext,
+	nwdafSubId string,
+	inputWindow int,
+) ([]TrafficObservation, string) {
+	trafficDataList := ctx.GetTrafficDataByNwdafSubId(nwdafSubId)
+	obs := make([]TrafficObservation, 0)
+	dnn := "internet"
+
+	for _, trafficData := range trafficDataList {
+		trafficData.Lock()
+		for _, dp := range trafficData.RawUpfData {
+			obs = append(obs, TrafficObservation{
+				Ts: dp.Timestamp.Format(time.RFC3339),
+				TrafChar: TrafficCharacterization{
+					UlVol: dp.UlVolume,
+					DlVol: dp.DlVolume,
+				},
+			})
+		}
+		if trafficData.Dnn != "" {
+			dnn = trafficData.Dnn
+		}
+		trafficData.Unlock()
+	}
+
+	// Trim to inputWindow (most recent points)
+	if len(obs) > inputWindow {
+		obs = obs[len(obs)-inputWindow:]
+	}
+	return obs, dnn
 }
 
 // isAccuracyMonitorEnabled checks if accuracy monitoring is configured and enabled

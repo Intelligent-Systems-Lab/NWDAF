@@ -244,17 +244,54 @@ type groundTruth struct {
 	ulVol, dlVol int64
 }
 
-// lookupGroundTruth finds actual UPF traffic data matching a prediction
+// lookupGroundTruth finds actual UPF traffic data matching a prediction.
+// Primary source: MongoDB (precise time-range query).
+// Fallback: in-memory scan (when MongoDB is unavailable or returns nothing).
 func (p *Processor) lookupGroundTruth(
 	ctx *nwdaf_context.NWDAFContext,
 	pred nwdaf_context.PredictionRecord,
 ) *groundTruth {
+	// --- Resolve cfg and sampling interval ---
+	cfg := factory.NwdafConfig
+	from := pred.TargetTime
+	// Ground-truth window = one sampling interval (matches UPF report period)
+	samplingInterval := 10
+	if cfg != nil && cfg.Configuration != nil &&
+		cfg.Configuration.Analytics != nil &&
+		cfg.Configuration.Analytics.UeCommunication != nil {
+		samplingInterval = cfg.Configuration.Analytics.UeCommunication.SamplingIntervalOrDefault()
+	}
+	to := pred.TargetTime.Add(time.Duration(samplingInterval) * time.Second)
+
+	// --- Primary: MongoDB time-range query ---
+	if cfg != nil && cfg.Configuration != nil && cfg.Configuration.Mongodb != nil &&
+		nwdaf_context.IsMongoAvailable() {
+		dbName := cfg.Configuration.Mongodb.Name
+		corrIds := ctx.GetCorrelationIdsByNwdafSubId(pred.NwdafSubId)
+		if len(corrIds) > 0 {
+			records, err := nwdaf_context.QueryTrafficInTimeRange(dbName, corrIds, from, to)
+			if err == nil && len(records) > 0 {
+				// Aggregate all records in the window (may be multiple IPs)
+				var ulVol, dlVol int64
+				for _, r := range records {
+					ulVol += r.UlVolume
+					dlVol += r.DlVolume
+				}
+				return &groundTruth{ulVol: ulVol, dlVol: dlVol}
+			}
+			if err != nil {
+				mtlfLog.Debugf("MongoDB ground truth query failed, falling back to in-memory: %v", err)
+			}
+		}
+	}
+
+	// --- Fallback: in-memory scan ---
 	dataList := ctx.GetTrafficDataByNwdafSubId(pred.NwdafSubId)
 	if len(dataList) == 0 {
 		return nil
 	}
 
-	window := 10 * time.Second
+	window := time.Duration(samplingInterval) * time.Second
 	for _, td := range dataList {
 		td.Lock()
 		for _, dp := range td.RawUpfData {

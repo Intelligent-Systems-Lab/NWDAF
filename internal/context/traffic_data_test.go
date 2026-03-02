@@ -624,3 +624,80 @@ func TestGetTrafficDataByNwdafSubId_NoBucket(t *testing.T) {
 		t.Errorf("GetTrafficDataByNwdafSubId with no bucket should return nil, got %v", data)
 	}
 }
+
+// =============================================================================
+// Ring Buffer Tests (maxInMemoryDataPoints)
+// =============================================================================
+
+func TestAppendDataPoint_RingBuffer_ExactCap(t *testing.T) {
+	data := &TrafficData{RawUpfData: make([]UpfDataPoint, 0)}
+
+	// Fill exactly to cap
+	base := time.Now()
+	for i := 0; i < maxInMemoryDataPoints; i++ {
+		data.AppendDataPoint(UpfDataPoint{
+			Timestamp: base.Add(time.Duration(i) * time.Second),
+			UlVolume:  int64(i + 1),
+		})
+	}
+
+	if len(data.RawUpfData) != maxInMemoryDataPoints {
+		t.Errorf("length = %d, want %d (exactly at cap)",
+			len(data.RawUpfData), maxInMemoryDataPoints)
+	}
+	// First element should still be the very first one added
+	if data.RawUpfData[0].UlVolume != 1 {
+		t.Errorf("RawUpfData[0].UlVolume = %d, want 1 (oldest not yet dropped)",
+			data.RawUpfData[0].UlVolume)
+	}
+}
+
+func TestAppendDataPoint_RingBuffer_OverCap(t *testing.T) {
+	data := &TrafficData{RawUpfData: make([]UpfDataPoint, 0)}
+
+	base := time.Now()
+	total := maxInMemoryDataPoints + 10
+	for i := 0; i < total; i++ {
+		data.AppendDataPoint(UpfDataPoint{
+			Timestamp: base.Add(time.Duration(i) * time.Second),
+			UlVolume:  int64(i + 1), // values 1..total
+		})
+	}
+
+	// Length must be capped
+	if len(data.RawUpfData) != maxInMemoryDataPoints {
+		t.Errorf("length = %d, want %d (capped)", len(data.RawUpfData), maxInMemoryDataPoints)
+	}
+
+	// Oldest 10 entries must have been dropped; first remaining = 11
+	wantFirst := int64(11)
+	if data.RawUpfData[0].UlVolume != wantFirst {
+		t.Errorf("RawUpfData[0].UlVolume = %d, want %d (oldest dropped)",
+			data.RawUpfData[0].UlVolume, wantFirst)
+	}
+
+	// Last element = most recently added
+	wantLast := int64(total)
+	if data.RawUpfData[maxInMemoryDataPoints-1].UlVolume != wantLast {
+		t.Errorf("RawUpfData[last].UlVolume = %d, want %d (newest)",
+			data.RawUpfData[maxInMemoryDataPoints-1].UlVolume, wantLast)
+	}
+}
+
+func TestAppendDataPoint_RingBuffer_LastUpdate(t *testing.T) {
+	data := &TrafficData{RawUpfData: make([]UpfDataPoint, 0)}
+
+	base := time.Now()
+	lastTs := base.Add(99 * time.Second)
+
+	for i := 0; i < 100; i++ {
+		data.AppendDataPoint(UpfDataPoint{
+			Timestamp: base.Add(time.Duration(i) * time.Second),
+		})
+	}
+
+	// LastUpdate should always track the most recent data point's timestamp
+	if !data.LastUpdate.Equal(lastTs) {
+		t.Errorf("LastUpdate = %v, want %v", data.LastUpdate, lastTs)
+	}
+}

@@ -41,6 +41,7 @@ type Configuration struct {
 	MlService          *MlServiceConfig       `yaml:"mlService,omitempty"`
 	GroupMembership    *GroupMembershipConfig `yaml:"groupMembership,omitempty"`
 	Mtlf               *MtlfConfig            `yaml:"mtlf,omitempty"`
+	Analytics          *AnalyticsConfig       `yaml:"analytics,omitempty"`
 }
 
 // GroupMembershipConfig maps Group IDs to SUPI lists (substitute for UDM)
@@ -61,6 +62,65 @@ type ExternalMtlfConfig struct {
 	Enabled   bool     `yaml:"enabled"`
 	Endpoints []string `yaml:"endpoints,omitempty"`
 	NotifUri  string   `yaml:"notifUri,omitempty"` // Callback URI for ML model notifications
+}
+
+// AnalyticsConfig holds per-analytics-type model parameters
+type AnalyticsConfig struct {
+	UeCommunication *ModelParams `yaml:"ueCommunication,omitempty"`
+	// Future: AbnormalBehaviour *ModelParams `yaml:"abnormalBehaviour,omitempty"`
+}
+
+// ModelParams defines the ML model input/output window and data collection parameters
+// for a specific analytics type.
+type ModelParams struct {
+	// SamplingInterval is the UPF report period in seconds.
+	// Must match smf.subscriptionDuration / report-period (default: 10).
+	SamplingInterval int `yaml:"samplingInterval,omitempty"`
+
+	// InputWindow is the number of data points fed to the ML model as history.
+	InputWindow int `yaml:"inputWindow,omitempty"`
+
+	// OutputWindow is the number of future steps the ML model predicts.
+	OutputWindow int `yaml:"outputWindow,omitempty"`
+}
+
+// QueryLookback returns the computed time window to query from MongoDB:
+// SamplingInterval × InputWindow (seconds).
+// This ensures we always request exactly InputWindow valid data points.
+func (m *ModelParams) QueryLookback() int {
+	si := m.SamplingInterval
+	if si <= 0 {
+		si = 10 // default: 10s
+	}
+	iw := m.InputWindow
+	if iw <= 0 {
+		iw = 30 // default: 30 points
+	}
+	return si * iw
+}
+
+// SamplingIntervalOrDefault returns SamplingInterval with a fallback to 10s.
+func (m *ModelParams) SamplingIntervalOrDefault() int {
+	if m.SamplingInterval > 0 {
+		return m.SamplingInterval
+	}
+	return 10
+}
+
+// InputWindowOrDefault returns InputWindow with a fallback to 30.
+func (m *ModelParams) InputWindowOrDefault() int {
+	if m.InputWindow > 0 {
+		return m.InputWindow
+	}
+	return 30
+}
+
+// OutputWindowOrDefault returns OutputWindow with a fallback to 5.
+func (m *ModelParams) OutputWindowOrDefault() int {
+	if m.OutputWindow > 0 {
+		return m.OutputWindow
+	}
+	return 5
 }
 
 // MlServiceConfig configuration for external ML inference service

@@ -126,6 +126,9 @@ Location: `internal/context/`
 |---------------|-------------|
 | `TestTrafficData_EnrichWithSupi` | SUPI enrichment (first wins) |
 | `TestTrafficData_AppendDataPoint` | Append RawUpfData with timestamp |
+| `TestAppendDataPoint_RingBuffer_ExactCap` | 50 pts at cap — oldest not dropped |
+| `TestAppendDataPoint_RingBuffer_OverCap` | 60 pts — oldest 10 dropped, newest 50 kept |
+| `TestAppendDataPoint_RingBuffer_LastUpdate` | LastUpdate tracks most recent timestamp |
 
 **NWDAFContext TrafficBucket Tests**
 | Test Function | Description |
@@ -152,6 +155,20 @@ Location: `internal/context/`
 | `TestGetTrafficDataByNwdafSubId_Empty` | Non-existent → nil |
 | `TestGetTrafficDataByNwdafSubId_MultipleCorrelations` | Multiple correlationIds |
 | `TestGetTrafficDataByNwdafSubId_NoBucket` | Resource exists but no bucket → nil |
+
+**MongoDB Query Tests (`db_query_test.go`)**
+| Test Function | Description |
+|---------------|-------------|
+| `TestReverseRecords_Empty` | Reverse of empty slice — no panic |
+| `TestReverseRecords_Single` | Single element unchanged |
+| `TestReverseRecords_Multiple` | DESC→ASC reverse correctness (timestamps + values) |
+| `TestReverseRecords_Even` | Even-length slice fully reversed |
+| `TestIsMongoAvailable_ReturnsFalseWithoutClient` | Returns false when `mongoapi.Client` is nil |
+| `TestQueryTrafficByCorrelationId_NoMongo` | Returns `nil, nil` when MongoDB unavailable |
+| `TestQueryTrafficByMultipleCorrelationIds_NoMongo` | Returns `nil, nil` when MongoDB unavailable |
+| `TestQueryTrafficByMultipleCorrelationIds_EmptyIds` | Returns `nil, nil` for empty ID slice |
+| `TestQueryTrafficInTimeRange_NoMongo` | Returns `nil, nil` when MongoDB unavailable |
+| `TestQueryTrafficInTimeRange_EmptyIds` | Returns `nil, nil` for empty ID slice |
 
 #### GroupResolver Tests (`group_resolver_test.go`)
 
@@ -183,7 +200,23 @@ Run tests with race detector to verify concurrent access:
 go test ./internal/... -race -v
 ```
 
-### 2.5 Consumer Tests
+### 2.5 Factory Tests
+
+Location: `pkg/factory/`
+
+**ModelParams Tests (`model_params_test.go`)**
+| Test Function | Description |
+|---------------|-------------|
+| `TestModelParams_Defaults` | Zero-value returns default si=10/iw=30/ow=5 |
+| `TestModelParams_ExplicitValues` | Explicit values returned as-is |
+| `TestModelParams_QueryLookback_Defaults` | 0-value → 10s × 30pts = 300s |
+| `TestModelParams_QueryLookback_Custom` | 5s × 20pts = 100s |
+| `TestModelParams_QueryLookback_ZeroInterval` | Zero interval falls back to 10s |
+| `TestModelParams_QueryLookback_ZeroInputWindow` | Zero inputWindow falls back to 30pts |
+| `TestModelParams_NegativeValues_UseDefaults` | Negative values fall through to defaults |
+| `TestAnalyticsConfig_NilUeCommunication` | nil UeCommunication field safe |
+
+### 2.6 Consumer Tests
 
 Location: `internal/sbi/consumer/`
 
@@ -367,7 +400,94 @@ test/
     └── test_api.sh          # API integration test script
 ```
 
-## 6. E2E Integration Test (ML-Based Analytics)
+## 6. E2E Integration Test (MongoDB Data Layer)
+
+Verifies that analytics read from MongoDB Time Series Collection instead of in-memory store.
+
+### 6.1 Prerequisites
+
+- MongoDB running and accessible (URI configured in `nwdafcfg.yaml`)
+- Fake SMF+UPF server providing traffic data
+
+### 6.2 Config (`config/nwdafcfg.yaml`)
+
+```yaml
+mongodb:
+  name: free5gc
+  url: mongodb://localhost:27017
+
+analytics:
+  ueCommunication:
+    samplingInterval: 10   # UPF report period (s)
+    inputWindow: 30        # Points fed to ML model
+    outputWindow: 5        # Prediction steps
+```
+
+### 6.3 Start Test
+
+```bash
+# T1: Fake SMF+UPF
+cd test/fake_smf_upf && uv run fake_smf_upf_server.py
+
+# T2: NWDAF (debug log to see data source)
+./bin/nwdaf --config config/nwdafcfg.yaml
+
+# T3: Consumer callback
+cd test/callback && uv run callback_server.py 9091
+```
+
+### 6.4 Create Subscription
+
+```bash
+curl -s -X POST http://127.0.0.1:8080/nnwdaf-eventssubscription/v1/subscriptions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "notificationURI": "http://127.0.0.1:9091/notify",
+    "eventSubscriptions": [{"event": "UE_COMMUNICATION",
+      "tgtUe": {"supis": ["imsi-208930000000001"]}}],
+    "evtReq": {"notifMethod": "PERIODIC", "repPeriod": 30}
+  }'
+```
+
+### 6.5 Verify MongoDB Data
+
+```bash
+# Wait ~30s for UPF data to accumulate, then:
+mongosh --eval "
+use free5gc;
+db['nwdaf.upfTrafficData'].find().sort({timestamp:-1}).limit(3).pretty()
+"
+```
+
+### 6.6 Verification Checklist
+
+| Step | Expected Log (level=debug) | What It Confirms |
+|------|---------------------------|------------------|
+| UPF data write | `InsertOne` to `nwdaf.upfTrafficData` | Data stored in MongoDB |
+| ML prediction | `Using X MongoDB records for ML prediction` | Analytics reads from DB |
+| Fallback (no MongoDB) | `Using in-memory data for ML prediction` | Fallback works |
+
+### 6.7 Database Maintenance
+
+```bash
+# Count records in collection
+mongosh --eval "use free5gc; db['nwdaf.upfTrafficData'].countDocuments()"
+
+# Clear UPF data only (recommended between test runs)
+mongosh --eval "use free5gc; db['nwdaf.upfTrafficData'].drop()"
+
+# Clear entire database
+mongosh --eval "use free5gc; db.dropDatabase()"
+```
+
+> [!NOTE]
+> After NWDAF restart without clearing the database, **new subscriptions get new correlationIds**
+> (sequential: `corr-1`, `corr-2`, ...) which reset to `corr-1` on restart. Old data with the same
+> correlationId will be picked up again in tests — this is expected behaviour in test environments.
+
+---
+
+## 7. E2E Integration Test (ML-Based Analytics)
 
 This test validates the complete ML-based analytics flow:
 - NWDAF uses static model URL (MTLF disabled) or subscribes to MTLF
@@ -569,12 +689,15 @@ test/
 
 | Test Type | Command |
 |-----------|---------|
-| Unit Tests | `go test ./internal/... -v` |
-| Daisy Client Tests | `go test ./internal/sbi/consumer/... -v -run Daisy` |
+| Unit Tests | `go test ./internal/... ./pkg/factory/... -v` |
+| Ring Buffer Tests | `go test ./internal/context/... -v -run RingBuffer` |
+| DB Query Tests | `go test ./internal/context/... -v -run Query\|Reverse\|Mongo` |
+| ModelParams Tests | `go test ./pkg/factory/... -v -run ModelParams` |
 | Race Detection | `go test ./internal/... -race -v` |
 | API Tests | `./test/scripts/test_api.sh all` |
-| E2E ML Analytics (4 terminals) | See Section 6.3 |
-| E2E Daisy Training (2 terminals) | See Section 7.3 |
+| E2E MongoDB Data Layer (3 terminals) | See Section 6.3 |
+| E2E ML Analytics (4 terminals) | See Section 7.3 |
+| E2E Daisy Training (2 terminals) | See Section 8.3 |
 
 ---
 
