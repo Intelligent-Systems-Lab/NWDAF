@@ -172,7 +172,8 @@ func (p *Processor) processUpfNotificationItemUnified(
 		data.RawUpfData = append(data.RawUpfData, dataPoint)
 
 		// Save to MongoDB natively using mongo-driver (if configured and connected)
-		if factory.NwdafConfig != nil && factory.NwdafConfig.Configuration != nil && factory.NwdafConfig.Configuration.Mongodb != nil && mongoapi.Client != nil {
+		if factory.NwdafConfig != nil && factory.NwdafConfig.Configuration != nil &&
+			factory.NwdafConfig.Configuration.Mongodb != nil && mongoapi.Client != nil {
 			dbName := factory.NwdafConfig.Configuration.Mongodb.Name
 			coll := mongoapi.Client.Database(dbName).Collection(nwdaf_context.UpfTrafficDataColl)
 			if _, err := coll.InsertOne(context.Background(), record); err != nil {
