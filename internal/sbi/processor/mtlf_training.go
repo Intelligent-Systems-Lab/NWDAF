@@ -17,13 +17,13 @@ var mtlfLog = logger.MtlfLog
 func (p *Processor) StartMtlfTrainingScheduler(wg *sync.WaitGroup) {
 	cfg := factory.NwdafConfig
 	if cfg == nil || cfg.Configuration == nil ||
-		cfg.Configuration.Daisy == nil || !cfg.Configuration.Daisy.Enabled ||
-		!cfg.Configuration.Daisy.TriggerOnStartup {
+		cfg.Configuration.Mtlf == nil || !cfg.Configuration.Mtlf.Enabled ||
+		!cfg.Configuration.Mtlf.TriggerOnStartup {
 		return
 	}
 
-	daisyCfg := cfg.Configuration.Daisy
-	delay := daisyCfg.TriggerDelay
+	mtlfCfg := cfg.Configuration.Mtlf
+	delay := mtlfCfg.TriggerDelay
 	if delay <= 0 {
 		delay = 30
 	}
@@ -31,13 +31,13 @@ func (p *Processor) StartMtlfTrainingScheduler(wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		p.runDelayedTraining(delay, daisyCfg)
+		p.runDelayedTraining(delay, mtlfCfg)
 	}()
 }
 
 // runDelayedTraining waits for a delay then triggers training via Daisy
 // The POST to Daisy blocks until training completes (HTTP 200 = success)
-func (p *Processor) runDelayedTraining(delaySec int, daisyCfg *factory.DaisyConfig) {
+func (p *Processor) runDelayedTraining(delaySec int, mtlfCfg *factory.MtlfConfig) {
 	mtlfLog.Infof("MTLF training scheduled in %d seconds", delaySec)
 
 	select {
@@ -48,9 +48,9 @@ func (p *Processor) runDelayedTraining(delaySec int, daisyCfg *factory.DaisyConf
 		return
 	}
 
-	mtlfLog.Infof("Triggering MTLF training via Daisy: endpoint=%s", daisyCfg.Endpoint)
+	mtlfLog.Infof("Triggering MTLF training via Daisy: endpoint=%s", mtlfCfg.Endpoint)
 
-	if err := p.triggerTraining(daisyCfg); err != nil {
+	if err := p.triggerTraining(mtlfCfg); err != nil {
 		mtlfLog.Errorf("MTLF training failed: %v", err)
 		return
 	}
@@ -59,9 +59,9 @@ func (p *Processor) runDelayedTraining(delaySec int, daisyCfg *factory.DaisyConf
 }
 
 // triggerTraining sends training task to Daisy (shared by delay + accuracy triggers)
-func (p *Processor) triggerTraining(daisyCfg *factory.DaisyConfig) error {
-	client := consumer.NewDaisyClient(daisyCfg.Endpoint)
-	task := daisyCfg.Task
+func (p *Processor) triggerTraining(mtlfCfg *factory.MtlfConfig) error {
+	client := consumer.NewDaisyClient(mtlfCfg.Endpoint)
+	task := mtlfCfg.Task
 	if task == nil {
 		task = map[string]any{}
 	}

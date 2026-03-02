@@ -189,6 +189,6 @@ func generateMlBasedUeCommunication(
 func isAccuracyMonitorEnabled() bool {
 	cfg := factory.NwdafConfig
 	return cfg != nil && cfg.Configuration != nil &&
-		cfg.Configuration.Daisy != nil && cfg.Configuration.Daisy.Enabled &&
-		cfg.Configuration.Daisy.AccuracyMonitor != nil && cfg.Configuration.Daisy.AccuracyMonitor.Enabled
+		cfg.Configuration.Mtlf != nil && cfg.Configuration.Mtlf.Enabled &&
+		cfg.Configuration.Mtlf.AccuracyMonitor != nil && cfg.Configuration.Mtlf.AccuracyMonitor.Enabled
 }

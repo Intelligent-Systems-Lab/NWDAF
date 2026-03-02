@@ -18,9 +18,9 @@ func (p *Processor) StartAccuracyMonitorForModel(
 ) {
 	cfg := factory.NwdafConfig
 	if cfg == nil || cfg.Configuration == nil ||
-		cfg.Configuration.Daisy == nil || !cfg.Configuration.Daisy.Enabled ||
-		cfg.Configuration.Daisy.AccuracyMonitor == nil ||
-		!cfg.Configuration.Daisy.AccuracyMonitor.Enabled {
+		cfg.Configuration.Mtlf == nil || !cfg.Configuration.Mtlf.Enabled ||
+		cfg.Configuration.Mtlf.AccuracyMonitor == nil ||
+		!cfg.Configuration.Mtlf.AccuracyMonitor.Enabled {
 		return
 	}
 
@@ -32,7 +32,7 @@ func (p *Processor) StartAccuracyMonitorForModel(
 		return
 	}
 
-	accCfg := cfg.Configuration.Daisy.AccuracyMonitor
+	accCfg := cfg.Configuration.Mtlf.AccuracyMonitor
 	interval := accCfg.CheckInterval
 	if interval <= 0 {
 		interval = 60
@@ -56,9 +56,9 @@ func (p *Processor) StartAccuracyMonitorForModel(
 func (p *Processor) StopAccuracyMonitorForModel(modelUrl string) {
 	cfg := factory.NwdafConfig
 	if cfg == nil || cfg.Configuration == nil ||
-		cfg.Configuration.Daisy == nil ||
-		cfg.Configuration.Daisy.AccuracyMonitor == nil ||
-		!cfg.Configuration.Daisy.AccuracyMonitor.Enabled {
+		cfg.Configuration.Mtlf == nil ||
+		cfg.Configuration.Mtlf.AccuracyMonitor == nil ||
+		!cfg.Configuration.Mtlf.AccuracyMonitor.Enabled {
 		return
 	}
 
@@ -309,15 +309,15 @@ func computeNRMSE(pairs []matchedPair) float64 {
 // triggerRetraining initiates Daisy FL retraining
 func (p *Processor) triggerRetraining() {
 	cfg := factory.NwdafConfig
-	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.Daisy == nil {
+	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.Mtlf == nil {
 		return
 	}
-	daisyCfg := cfg.Configuration.Daisy
+	mtlfCfg := cfg.Configuration.Mtlf
 
 	mtlfLog.Info("Triggering retraining due to accuracy degradation")
 
 	go func() {
-		if err := p.triggerTraining(daisyCfg); err != nil {
+		if err := p.triggerTraining(mtlfCfg); err != nil {
 			mtlfLog.Errorf("Accuracy-triggered retraining failed: %v", err)
 			return
 		}

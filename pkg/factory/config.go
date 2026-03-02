@@ -37,10 +37,10 @@ type Configuration struct {
 	NrfUri             string                 `yaml:"nrfUri,omitempty"`
 	SupportedAnalytics []string               `yaml:"supportedAnalytics,omitempty"`
 	Smf                *SmfConfig             `yaml:"smf,omitempty"`
-	Mtlf               *MtlfConfig            `yaml:"mtlf,omitempty"`
+	ExternalMtlf       *ExternalMtlfConfig    `yaml:"externalMtlf,omitempty"`
 	MlService          *MlServiceConfig       `yaml:"mlService,omitempty"`
 	GroupMembership    *GroupMembershipConfig `yaml:"groupMembership,omitempty"`
-	Daisy              *DaisyConfig           `yaml:"daisy,omitempty"`
+	Mtlf               *MtlfConfig            `yaml:"mtlf,omitempty"`
 }
 
 // GroupMembershipConfig maps Group IDs to SUPI lists (substitute for UDM)
@@ -56,12 +56,11 @@ type GroupDefinition struct {
 	Supis   []string `yaml:"supis"`
 }
 
-// MtlfConfig configuration for MTLF (ML Model Training Logical Function) integration
-type MtlfConfig struct {
-	Enabled        bool     `yaml:"enabled"`
-	Endpoints      []string `yaml:"endpoints,omitempty"`
-	NotifUri       string   `yaml:"notifUri,omitempty"`       // Callback URI for ML model notifications
-	StaticModelUrl string   `yaml:"staticModelUrl,omitempty"` // Static URL for ML model (bypasses MTLF)
+// ExternalMtlfConfig configuration for External MTLF (ML Model Training Logical Function) integration
+type ExternalMtlfConfig struct {
+	Enabled   bool     `yaml:"enabled"`
+	Endpoints []string `yaml:"endpoints,omitempty"`
+	NotifUri  string   `yaml:"notifUri,omitempty"` // Callback URI for ML model notifications
 }
 
 // MlServiceConfig configuration for external ML inference service
@@ -70,12 +69,13 @@ type MlServiceConfig struct {
 	Endpoint string `yaml:"endpoint,omitempty"`
 }
 
-// DaisyConfig configuration for Daisy FL framework integration (MTLF training)
-type DaisyConfig struct {
+// MtlfConfig configuration for 1st-party MTLF / Daisy FL framework integration
+type MtlfConfig struct {
 	Enabled          bool                   `yaml:"enabled"`                    // Master switch for all Daisy FL features
 	Endpoint         string                 `yaml:"endpoint,omitempty"`         // Master REST API
 	TriggerOnStartup bool                   `yaml:"triggerOnStartup,omitempty"` // Trigger training on NWDAF startup
 	TriggerDelay     int                    `yaml:"triggerDelay,omitempty"`     // Startup trigger delay (default: 30)
+	StaticModelUrl   string                 `yaml:"staticModelUrl,omitempty"`   // Static URL for ML model
 	Task             map[string]any         `yaml:"task,omitempty"`             // Task payload (mirrors task.json)
 	AccuracyMonitor  *AccuracyMonitorConfig `yaml:"accuracyMonitor,omitempty"`  // Accuracy monitoring settings
 }

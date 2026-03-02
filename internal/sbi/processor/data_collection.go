@@ -228,39 +228,37 @@ func (p *Processor) triggerMlModelProvisioning(
 	eventSub *models.NwdafEventsSubscriptionEventSubscription,
 	subscriptionId string,
 ) {
-	// Check if MTLF is enabled in config
 	cfg := factory.NwdafConfig
-	if cfg == nil || cfg.Configuration == nil ||
-		cfg.Configuration.Mtlf == nil {
-		logger.ProcLog.Debugf("MTLF config missing, skipping ML model provisioning")
+	if cfg == nil || cfg.Configuration == nil {
+		logger.ProcLog.Debugf("Configuration missing, skipping ML model provisioning")
 		return
 	}
 
-	mtlfConfig := cfg.Configuration.Mtlf
 	ctx := nwdaf_context.GetSelf()
 
 	// 1. Static Model URL (Direct Initialization)
-	// If MTLF is disabled and StaticModelUrl is set, bypass MTLF and initialize directly
-	if !mtlfConfig.Enabled {
-		if mtlfConfig.StaticModelUrl != "" {
-			logger.ProcLog.Infof("MTLF disabled, using static ML model URL: %s", mtlfConfig.StaticModelUrl)
+	// StaticModelUrl is under mtlf (Daisy/1st-party MTLF) config
+	mtlfCfg := cfg.Configuration.Mtlf
+	if mtlfCfg != nil && mtlfCfg.StaticModelUrl != "" {
+		logger.ProcLog.Infof("Using static ML model URL: %s", mtlfCfg.StaticModelUrl)
 
-			// Create MlModelInfo with static URL
-			mlInfo := nwdaf_context.NewMlModelInfo(eventSub.Event, "static-url")
-			mlInfo.SetModelUrl(mtlfConfig.StaticModelUrl)
-			ctx.SetMlModelInfo(subscriptionId, mlInfo)
+		mlInfo := nwdaf_context.NewMlModelInfo(eventSub.Event, "static-url")
+		mlInfo.SetModelUrl(mtlfCfg.StaticModelUrl)
+		ctx.SetMlModelInfo(subscriptionId, mlInfo)
 
-			// Initialize directly
-			go p.InitializeMlModel(subscriptionId, mlInfo, mtlfConfig.StaticModelUrl)
-			return
-		}
-		logger.ProcLog.Debugf("MTLF disabled and no StaticModelUrl configured, skipping ML model provisioning")
+		go p.InitializeMlModel(subscriptionId, mlInfo, mtlfCfg.StaticModelUrl)
 		return
 	}
 
-	// 2. Dynamic Model Provisioning (MTLF Subscription)
-	if len(mtlfConfig.Endpoints) == 0 {
-		logger.ProcLog.Warnf("MTLF enabled but no endpoints configured")
+	// 2. Dynamic Model Provisioning (External MTLF Subscription)
+	externalMtlf := cfg.Configuration.ExternalMtlf
+	if externalMtlf == nil || !externalMtlf.Enabled {
+		logger.ProcLog.Debugf("External MTLF not configured or disabled, skipping ML model provisioning")
+		return
+	}
+
+	if len(externalMtlf.Endpoints) == 0 {
+		logger.ProcLog.Warnf("External MTLF enabled but no endpoints configured")
 		return
 	}
 
@@ -272,17 +270,17 @@ func (p *Processor) triggerMlModelProvisioning(
 	}
 
 	// Create MlModelInfo to track the model provisioning state
-	mlInfo := nwdaf_context.NewMlModelInfo(eventSub.Event, mtlfConfig.Endpoints[0])
+	mlInfo := nwdaf_context.NewMlModelInfo(eventSub.Event, externalMtlf.Endpoints[0])
 	ctx.SetMlModelInfo(subscriptionId, mlInfo)
 
 	// Get notification URI from config
-	notifUri := mtlfConfig.NotifUri
+	notifUri := externalMtlf.NotifUri
 	if notifUri == "" {
 		notifUri = "http://127.0.0.1:8080/mlmodel-notify"
 	}
 
-	// Subscribe to first MTLF endpoint
-	mtlfEndpoint := mtlfConfig.Endpoints[0]
+	// Subscribe to first External MTLF endpoint
+	mtlfEndpoint := externalMtlf.Endpoints[0]
 	opts := consumer.MtlfSubscriptionOptions{
 		NotifUri: notifUri,
 		NotifId:  subscriptionId, // Use NWDAF subscription ID as correlation
@@ -292,11 +290,11 @@ func (p *Processor) triggerMlModelProvisioning(
 
 	subId, err := mtlfConsumer.SubscribeToMtlf(mtlfEndpoint, opts)
 	if err != nil {
-		logger.ProcLog.Errorf("Failed to subscribe to MTLF for subscription %s: %v", subscriptionId, err)
+		logger.ProcLog.Errorf("Failed to subscribe to External MTLF for subscription %s: %v", subscriptionId, err)
 		mlInfo.SetModelFailed(err)
 		return
 	}
 
 	mlInfo.SetMtlfSubscription(subId)
-	logger.ProcLog.Infof("MTLF subscription created for %s: mtlfSubId=%s", subscriptionId, subId)
+	logger.ProcLog.Infof("External MTLF subscription created for %s: mtlfSubId=%s", subscriptionId, subId)
 }
