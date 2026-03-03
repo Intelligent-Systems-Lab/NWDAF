@@ -471,13 +471,13 @@ db['nwdaf.upfTrafficData'].find().sort({timestamp:-1}).limit(3).pretty()
 
 ```bash
 # Count records in collection
-mongosh --eval "use free5gc; db['nwdaf.upfTrafficData'].countDocuments()"
+mongosh --quiet --eval "db.getSiblingDB('free5gc').getCollection('nwdaf.upfTrafficData').countDocuments({})"
 
 # Clear UPF data only (recommended between test runs)
-mongosh --eval "use free5gc; db['nwdaf.upfTrafficData'].drop()"
+mongosh --quiet --eval "db.getSiblingDB('free5gc').getCollection('nwdaf.upfTrafficData').drop()"
 
 # Clear entire database
-mongosh --eval "use free5gc; db.dropDatabase()"
+mongosh --quiet --eval "db.getSiblingDB('free5gc').dropDatabase()"
 ```
 
 > [!NOTE]

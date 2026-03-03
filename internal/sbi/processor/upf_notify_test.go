@@ -332,10 +332,135 @@ func TestHandleUpfNotification_ThroughputMeasurement(t *testing.T) {
 	}
 
 	point := data.RawUpfData[0]
-	if point.UlThroughput != "1.5 Mbps" {
-		t.Errorf("UlThroughput = %q, want '1.5 Mbps'", point.UlThroughput)
+	if point.UlThroughput != 1500000.0 {
+		t.Errorf("UlThroughput = %f, want 1500000.0 (parsed from '1.5 Mbps')", point.UlThroughput)
 	}
-	if point.DlThroughput != "10.2 Mbps" {
-		t.Errorf("DlThroughput = %q, want '10.2 Mbps'", point.DlThroughput)
+	if point.DlThroughput != 10200000.0 {
+		t.Errorf("DlThroughput = %f, want 10200000.0 (parsed from '10.2 Mbps')", point.DlThroughput)
+	}
+}
+
+func TestHandleUpfNotification_FullVolumeMeasurement(t *testing.T) {
+	ctx := setupTestContext()
+	p := newTestProcessor()
+
+	correlationId := testCorsId
+	ts := time.Now()
+
+	notif := &UpfNotificationData{
+		CorrelationId: correlationId,
+		NotificationItems: []UpfNotificationItem{
+			{
+				EventType:  UpfEventType_USER_DATA_USAGE_MEASURES,
+				UeIpv4Addr: "10.0.0.1",
+				TimeStamp:  ts,
+				UserDataUsageMeasurements: []UserDataUsageMeasurements{
+					{
+						VolumeMeasurement: &VolumeMeasurement{
+							TotalVolume:      3000,
+							UlVolume:         1000,
+							DlVolume:         2000,
+							TotalNbOfPackets: 300,
+							UlNbOfPackets:    100,
+							DlNbOfPackets:    200,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := p.HandleUpfNotification(notif); err != nil {
+		t.Fatalf("HandleUpfNotification failed: %v", err)
+	}
+
+	bucket := ctx.GetTrafficBucket(correlationId)
+	if bucket == nil {
+		t.Fatal("Traffic bucket should be created")
+	}
+	data := bucket.Get("10.0.0.1")
+	if data == nil {
+		t.Fatal("Traffic data should be stored for IP")
+	}
+	if len(data.RawUpfData) != 1 {
+		t.Fatalf("RawUpfData length = %d, want 1", len(data.RawUpfData))
+	}
+
+	point := data.RawUpfData[0]
+	if point.TotalVolume != 3000 {
+		t.Errorf("TotalVolume = %d, want 3000", point.TotalVolume)
+	}
+	if point.UlVolume != 1000 {
+		t.Errorf("UlVolume = %d, want 1000", point.UlVolume)
+	}
+	if point.DlVolume != 2000 {
+		t.Errorf("DlVolume = %d, want 2000", point.DlVolume)
+	}
+	if point.TotalNbOfPackets != 300 {
+		t.Errorf("TotalNbOfPackets = %d, want 300", point.TotalNbOfPackets)
+	}
+	if point.UlNbOfPackets != 100 {
+		t.Errorf("UlNbOfPackets = %d, want 100", point.UlNbOfPackets)
+	}
+	if point.DlNbOfPackets != 200 {
+		t.Errorf("DlNbOfPackets = %d, want 200", point.DlNbOfPackets)
+	}
+}
+
+func TestHandleUpfNotification_PacketThroughput(t *testing.T) {
+	ctx := setupTestContext()
+	p := newTestProcessor()
+
+	correlationId := testCorsId
+
+	notif := &UpfNotificationData{
+		CorrelationId: correlationId,
+		NotificationItems: []UpfNotificationItem{
+			{
+				EventType:  UpfEventType_USER_DATA_USAGE_MEASURES,
+				UeIpv4Addr: "10.0.0.2",
+				TimeStamp:  time.Now(),
+				UserDataUsageMeasurements: []UserDataUsageMeasurements{
+					{
+						ThroughputMeasurement: &ThroughputMeasurement{
+							UlThroughput:       "5 Mbps",
+							DlThroughput:       "20 Mbps",
+							UlPacketThroughput: "500 pps",
+							DlPacketThroughput: "2000 pps",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := p.HandleUpfNotification(notif); err != nil {
+		t.Fatalf("HandleUpfNotification failed: %v", err)
+	}
+
+	bucket := ctx.GetTrafficBucket(correlationId)
+	if bucket == nil {
+		t.Fatal("Traffic bucket should be created")
+	}
+	data := bucket.Get("10.0.0.2")
+	if data == nil {
+		t.Fatal("Traffic data should be stored for IP")
+	}
+	if len(data.RawUpfData) != 1 {
+		t.Fatalf("RawUpfData length = %d, want 1", len(data.RawUpfData))
+	}
+
+	point := data.RawUpfData[0]
+	if point.UlThroughput != 5000000.0 {
+		t.Errorf("UlThroughput = %f, want 5000000.0 (parsed from '5 Mbps')", point.UlThroughput)
+	}
+	if point.DlThroughput != 20000000.0 {
+		t.Errorf("DlThroughput = %f, want 20000000.0 (parsed from '20 Mbps')", point.DlThroughput)
+	}
+	if point.UlPacketThroughput != 500.0 {
+		t.Errorf("UlPacketThroughput = %f, want 500.0 (parsed from '500 pps')", point.UlPacketThroughput)
+	}
+	if point.DlPacketThroughput != 2000.0 {
+		t.Errorf("DlPacketThroughput = %f, want 2000.0 (parsed from '2000 pps')", point.DlPacketThroughput)
 	}
 }

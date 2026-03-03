@@ -2,6 +2,8 @@ package processor
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
@@ -46,17 +48,91 @@ type UserDataUsageMeasurements struct {
 	ThroughputMeasurement *ThroughputMeasurement `json:"throughputMeasurement,omitempty"`
 }
 
-// VolumeMeasurement contains UL/DL volume information
+// VolumeMeasurement contains volume information per TS 29.564
 type VolumeMeasurement struct {
-	TotalVolume int64 `json:"totalVolume,omitempty"`
-	UlVolume    int64 `json:"ulVolume,omitempty"`
-	DlVolume    int64 `json:"dlVolume,omitempty"`
+	TotalVolume      int64  `json:"totalVolume,omitempty"`
+	UlVolume         int64  `json:"ulVolume,omitempty"`
+	DlVolume         int64  `json:"dlVolume,omitempty"`
+	TotalNbOfPackets uint64 `json:"totalNbOfPackets,omitempty"`
+	UlNbOfPackets    uint64 `json:"ulNbOfPackets,omitempty"`
+	DlNbOfPackets    uint64 `json:"dlNbOfPackets,omitempty"`
 }
 
-// ThroughputMeasurement contains throughput information
+// ThroughputMeasurement contains throughput information per TS 29.564
+// BitRate and PacketRate are both string types per TS29571 CommonData
 type ThroughputMeasurement struct {
-	UlThroughput string `json:"ulThroughput,omitempty"`
-	DlThroughput string `json:"dlThroughput,omitempty"`
+	UlThroughput       string `json:"ulThroughput,omitempty"`
+	DlThroughput       string `json:"dlThroughput,omitempty"`
+	UlPacketThroughput string `json:"ulPacketThroughput,omitempty"`
+	DlPacketThroughput string `json:"dlPacketThroughput,omitempty"`
+}
+
+// parsePacketRate parses a TS29571 PacketRate string into pps (base unit).
+// Pattern: '<number> (pps|kpps|Mpps|Gpps|Tpps)'
+// k = ×1000, M = ×1000², G = ×1000³, T = ×1000⁴
+// Returns 0 on empty input or parse error.
+func parsePacketRate(s string) float64 {
+	if s == "" {
+		return 0
+	}
+	parts := strings.SplitN(s, " ", 2)
+	v, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil {
+		logger.ProcLog.Warnf("Failed to parse PacketRate value %q: %v", s, err)
+		return 0
+	}
+	if len(parts) < 2 {
+		return v
+	}
+	switch parts[1] {
+	case "pps":
+		return v
+	case "kpps":
+		return v * 1e3
+	case "Mpps":
+		return v * 1e6
+	case "Gpps":
+		return v * 1e9
+	case "Tpps":
+		return v * 1e12
+	default:
+		logger.ProcLog.Warnf("Unknown PacketRate unit in %q, treating as pps", s)
+		return v
+	}
+}
+
+// parseBitRate parses a TS29571 BitRate string into bps (base unit).
+// Pattern: '<number> (bps|Kbps|Mbps|Gbps|Tbps)'
+// K = ×1000 (note: spec uses uppercase K, unlike SI kilo)
+// Returns 0 on empty input or parse error.
+func parseBitRate(s string) float64 {
+	if s == "" {
+		return 0
+	}
+	parts := strings.SplitN(s, " ", 2)
+	v, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil {
+		logger.ProcLog.Warnf("Failed to parse BitRate value %q: %v", s, err)
+		return 0
+	}
+	if len(parts) < 2 {
+		return v
+	}
+	switch parts[1] {
+	case "bps":
+		return v
+	case "Kbps":
+		return v * 1e3
+	case "Mbps":
+		return v * 1e6
+	case "Gbps":
+		return v * 1e9
+	case "Tbps":
+		return v * 1e12
+	default:
+		logger.ProcLog.Warnf("Unknown BitRate unit in %q, treating as bps", s)
+		return v
+	}
 }
 
 // HandleUpfNotification processes UPF event exposure notifications
@@ -152,21 +228,39 @@ func (p *Processor) processUpfNotificationItemUnified(
 		}
 
 		if usage.VolumeMeasurement != nil {
-			dataPoint.UlVolume = usage.VolumeMeasurement.UlVolume
-			dataPoint.DlVolume = usage.VolumeMeasurement.DlVolume
-			record.UlVolume = usage.VolumeMeasurement.UlVolume
-			record.DlVolume = usage.VolumeMeasurement.DlVolume
-			logger.ProcLog.Infof("UPF VOLUME: ip=%s, ulVol=%d, dlVol=%d",
-				ipAddr, usage.VolumeMeasurement.UlVolume, usage.VolumeMeasurement.DlVolume)
+			v := usage.VolumeMeasurement
+			dataPoint.TotalVolume = v.TotalVolume
+			dataPoint.UlVolume = v.UlVolume
+			dataPoint.DlVolume = v.DlVolume
+			dataPoint.TotalNbOfPackets = v.TotalNbOfPackets
+			dataPoint.UlNbOfPackets = v.UlNbOfPackets
+			dataPoint.DlNbOfPackets = v.DlNbOfPackets
+			record.TotalVolume = v.TotalVolume
+			record.UlVolume = v.UlVolume
+			record.DlVolume = v.DlVolume
+			record.TotalNbOfPackets = v.TotalNbOfPackets
+			record.UlNbOfPackets = v.UlNbOfPackets
+			record.DlNbOfPackets = v.DlNbOfPackets
+			logger.ProcLog.Infof("UPF VOLUME: ip=%s, total=%d, ul=%d, dl=%d, totalPkts=%d, ulPkts=%d, dlPkts=%d",
+				ipAddr, v.TotalVolume, v.UlVolume, v.DlVolume,
+				v.TotalNbOfPackets, v.UlNbOfPackets, v.DlNbOfPackets)
 		}
 
 		if usage.ThroughputMeasurement != nil {
-			dataPoint.UlThroughput = usage.ThroughputMeasurement.UlThroughput
-			dataPoint.DlThroughput = usage.ThroughputMeasurement.DlThroughput
-			record.UlThroughput = usage.ThroughputMeasurement.UlThroughput
-			record.DlThroughput = usage.ThroughputMeasurement.DlThroughput
-			logger.ProcLog.Infof("UPF THROUGHPUT: ip=%s, ulTput=%s, dlTput=%s",
-				ipAddr, usage.ThroughputMeasurement.UlThroughput, usage.ThroughputMeasurement.DlThroughput)
+			t := usage.ThroughputMeasurement
+			dataPoint.UlThroughput = parseBitRate(t.UlThroughput)
+			dataPoint.DlThroughput = parseBitRate(t.DlThroughput)
+			dataPoint.UlPacketThroughput = parsePacketRate(t.UlPacketThroughput)
+			dataPoint.DlPacketThroughput = parsePacketRate(t.DlPacketThroughput)
+			record.UlThroughput = parseBitRate(t.UlThroughput)
+			record.DlThroughput = parseBitRate(t.DlThroughput)
+			record.UlPacketThroughput = parsePacketRate(t.UlPacketThroughput)
+			record.DlPacketThroughput = parsePacketRate(t.DlPacketThroughput)
+			logger.ProcLog.Infof("UPF THROUGHPUT: ip=%s, ul=%s(%.0fbps), dl=%s(%.0fbps)",
+				ipAddr, t.UlThroughput, dataPoint.UlThroughput, t.DlThroughput, dataPoint.DlThroughput)
+			logger.ProcLog.Infof("UPF THROUGHPUT: ip=%s, ulPktRate=%s(%.2fpps), dlPktRate=%s(%.2fpps)",
+				ipAddr, t.UlPacketThroughput, dataPoint.UlPacketThroughput,
+				t.DlPacketThroughput, dataPoint.DlPacketThroughput)
 		}
 
 		data.RawUpfData = append(data.RawUpfData, dataPoint)

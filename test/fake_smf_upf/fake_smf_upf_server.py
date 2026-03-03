@@ -33,6 +33,14 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 
 # ============================================================================
+# Constants
+# ============================================================================
+
+# Assumed average Ethernet payload size for packet count estimation.
+# Real UPF reports actual counts; this is only for fake traffic simulation.
+AVG_PACKET_BYTES = 1400
+
+# ============================================================================
 # Traffic Generators
 # ============================================================================
 
@@ -343,7 +351,7 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
             
             count += 1
             # Build notification based on target type
-            notification = self._build_upf_notification(correlation_id, target_type, target_value, count)
+            notification = self._build_upf_notification(correlation_id, target_type, target_value, count, interval)
             
             try:
                 data = json.dumps(notification).encode()
@@ -361,30 +369,30 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._log(f"❌ Failed to send UPF notification: {e}")
     
-    def _build_upf_notification(self, correlation_id: str, target_type: str, target_value: str, count: int) -> dict:
+    def _build_upf_notification(self, correlation_id: str, target_type: str, target_value: str, count: int, rep_period: int = 10) -> dict:
         """Build UPF USER_DATA_USAGE_MEASURES notification.
-        
+
         Per TS 29.564: UPF notifications may NOT include SUPI.
         The correlationId is used by NWDAF to resolve the target.
-        
+
         For groupId subscriptions, simulate multiple UEs in the group.
         """
         notification_items = []
-        
+
         # Determine how many UEs to simulate
         if target_type == "groupId":
             # Simulate 3-5 UEs in the group with different IPs
             num_ues = random.randint(3, 5)
             for i in range(num_ues):
                 ip_addr = f"10.60.0.{10 + i}"
-                item = self._build_notification_item(count, ip_address=ip_addr)
+                item = self._build_notification_item(count, rep_period, ip_address=ip_addr)
                 notification_items.append(item)
         elif target_type == "anyUe":
             # Simulate 2-4 random UEs
             num_ues = random.randint(2, 4)
             for i in range(num_ues):
                 ip_addr = f"10.60.{random.randint(0, 255)}.{random.randint(1, 254)}"
-                item = self._build_notification_item(count, ip_address=ip_addr)
+                item = self._build_notification_item(count, rep_period, ip_address=ip_addr)
                 notification_items.append(item)
         else:
             # Single UE (supi-based subscription) - generate IP based on SUPI
@@ -398,18 +406,47 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
                 ip_addr = f"10.60.0.{imsi_suffix}"
             else:
                 ip_addr = f"10.60.0.{random.randint(1, 254)}"
-            item = self._build_notification_item(count, ip_address=ip_addr)
+            item = self._build_notification_item(count, rep_period, ip_address=ip_addr)
             notification_items.append(item)
-        
+
         return {
             "correlationId": correlation_id,
             "notificationItems": notification_items,
         }
-    
-    def _build_notification_item(self, count: int, ip_address: str = None) -> dict:
-        """Build a single notification item with traffic data from the generator."""
+
+    def _format_packet_rate(self, pps: float) -> str:
+        """Format a packet-per-second value as a TS29571 PacketRate string.
+
+        Pattern: '<number> (pps|kpps|Mpps|Gpps|Tpps)'
+        """
+        if pps >= 1_000_000_000_000:
+            return f"{pps / 1_000_000_000_000:.3f} Tpps"
+        elif pps >= 1_000_000_000:
+            return f"{pps / 1_000_000_000:.3f} Gpps"
+        elif pps >= 1_000_000:
+            return f"{pps / 1_000_000:.3f} Mpps"
+        elif pps >= 1000:
+            return f"{pps / 1000:.3f} kpps"
+        else:
+            return f"{pps:.3f} pps"
+
+    def _build_notification_item(self, count: int, rep_period: int = 10, ip_address: str = None) -> dict:
+        """Build a single notification item with traffic data from the generator.
+
+        Packet counts are estimated from volume using AVG_PACKET_BYTES.
+        Packet throughput is computed as packets / rep_period, formatted per TS29571.
+        """
         gen = self.__class__.traffic_generator
         ul, dl = gen.generate()
+
+        # Estimate packet counts (integers)
+        ul_pkts = max(1, ul // AVG_PACKET_BYTES)
+        dl_pkts = max(1, dl // AVG_PACKET_BYTES)
+        total_pkts = ul_pkts + dl_pkts
+
+        # Packet throughput = packets per second over the reporting interval
+        ul_pps = ul_pkts / rep_period if rep_period > 0 else 0.0
+        dl_pps = dl_pkts / rep_period if rep_period > 0 else 0.0
 
         item = {
             "eventType": "USER_DATA_USAGE_MEASURES",
@@ -418,13 +455,18 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
             "userDataUsageMeasurements": [
                 {
                     "volumeMeasurement": {
+                        "totalVolume": ul + dl,
                         "ulVolume": ul,
                         "dlVolume": dl,
-                        "totalVolume": ul + dl,
+                        "totalNbOfPackets": total_pkts,
+                        "ulNbOfPackets": ul_pkts,
+                        "dlNbOfPackets": dl_pkts,
                     },
                     "throughputMeasurement": {
-                        "ulThroughput": f"{ul * 8 // 1000} kbps",
-                        "dlThroughput": f"{dl * 8 // 1000} kbps",
+                        "ulThroughput": f"{ul * 8 // 1000} Kbps",
+                        "dlThroughput": f"{dl * 8 // 1000} Kbps",
+                        "ulPacketThroughput": self._format_packet_rate(ul_pps),
+                        "dlPacketThroughput": self._format_packet_rate(dl_pps),
                     }
                 }
             ]
@@ -432,7 +474,7 @@ class FakeSmfUpfHandler(BaseHTTPRequestHandler):
         # Add IP address if provided (per TS 29.564: ueIpv4Addr)
         if ip_address:
             item["ueIpv4Addr"] = ip_address
-        
+
         return item
     
     def _send_error(self, code: int, message: str):

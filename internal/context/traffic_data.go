@@ -26,11 +26,22 @@ const maxInMemoryDataPoints = 50
 // UpfDataPoint represents a single UPF measurement with timestamp
 // Used for storing raw data instead of pre-aggregating
 type UpfDataPoint struct {
-	Timestamp    time.Time
-	UlVolume     int64
-	DlVolume     int64
-	UlThroughput string
-	DlThroughput string
+	Timestamp time.Time
+
+	// Volume measurements (TS 29.564 VolumeMeasurement)
+	TotalVolume      int64
+	UlVolume         int64
+	DlVolume         int64
+	TotalNbOfPackets uint64
+	UlNbOfPackets    uint64
+	DlNbOfPackets    uint64
+
+	// Throughput measurements (TS 29.564 ThroughputMeasurement)
+	// Received as TS29571 string (e.g. "16 Kbps"), stored as base units after parsing
+	UlThroughput       float64 // bps
+	DlThroughput       float64 // bps
+	UlPacketThroughput float64 // pps
+	DlPacketThroughput float64 // pps
 }
 
 // SmfSubscription is the unified structure for SMF subscription management
