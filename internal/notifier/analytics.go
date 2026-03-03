@@ -14,9 +14,6 @@ import (
 
 var notifierLog = logger.NotifierLog
 
-// TrafficCharacterization for ML prediction request
-type TrafficCharacterization = consumer.TrafficCharacterization
-
 // TrafficObservation for ML prediction request
 type TrafficObservation = consumer.TrafficObservation
 
@@ -119,7 +116,7 @@ func generateMlBasedUeCommunication(
 
 	// Call ML service for prediction
 	modelId := mlInfo.GetModelId()
-	resp, err := mlClient.Predict(modelId, historicalData, outputWindow)
+	resp, err := mlClient.Predict(modelId, historicalData)
 	if err != nil {
 		return models.UeCommunication{}, err
 	}
@@ -225,16 +222,23 @@ func fetchHistoricalData(
 }
 
 // upfRecordsToObservations converts MongoDB UpfTrafficRecord slice to ML input format.
+// All 10 features are filled; missing fields default to 0.
 func upfRecordsToObservations(records []nwdaf_context.UpfTrafficRecord) ([]TrafficObservation, string) {
 	obs := make([]TrafficObservation, 0, len(records))
 	dnn := "internet"
 	for _, r := range records {
 		obs = append(obs, TrafficObservation{
-			Ts: r.Timestamp.Format(time.RFC3339),
-			TrafChar: TrafficCharacterization{
-				UlVol: r.UlVolume,
-				DlVol: r.DlVolume,
-			},
+			Ts:          r.Timestamp.Format(time.RFC3339),
+			TotalVol:    float64(r.TotalVolume),
+			UlVol:       float64(r.UlVolume),
+			DlVol:       float64(r.DlVolume),
+			TotalNbPkts: float64(r.TotalNbOfPackets),
+			UlNbPkts:    float64(r.UlNbOfPackets),
+			DlNbPkts:    float64(r.DlNbOfPackets),
+			UlThr:       r.UlThroughput,
+			DlThr:       r.DlThroughput,
+			UlPktThr:    r.UlPacketThroughput,
+			DlPktThr:    r.DlPacketThroughput,
 		})
 		if r.Metadata.Dnn != "" {
 			dnn = r.Metadata.Dnn
@@ -244,6 +248,7 @@ func upfRecordsToObservations(records []nwdaf_context.UpfTrafficRecord) ([]Traff
 }
 
 // inMemoryToObservations reads from in-memory store (fallback when MongoDB unavailable).
+// All 10 features are filled; missing fields default to 0.
 func inMemoryToObservations(
 	ctx *nwdaf_context.NWDAFContext,
 	nwdafSubId string,
@@ -257,11 +262,17 @@ func inMemoryToObservations(
 		trafficData.Lock()
 		for _, dp := range trafficData.RawUpfData {
 			obs = append(obs, TrafficObservation{
-				Ts: dp.Timestamp.Format(time.RFC3339),
-				TrafChar: TrafficCharacterization{
-					UlVol: dp.UlVolume,
-					DlVol: dp.DlVolume,
-				},
+				Ts:          dp.Timestamp.Format(time.RFC3339),
+				TotalVol:    float64(dp.TotalVolume),
+				UlVol:       float64(dp.UlVolume),
+				DlVol:       float64(dp.DlVolume),
+				TotalNbPkts: float64(dp.TotalNbOfPackets),
+				UlNbPkts:    float64(dp.UlNbOfPackets),
+				DlNbPkts:    float64(dp.DlNbOfPackets),
+				UlThr:       dp.UlThroughput,
+				DlThr:       dp.DlThroughput,
+				UlPktThr:    dp.UlPacketThroughput,
+				DlPktThr:    dp.DlPacketThroughput,
 			})
 		}
 		if trafficData.Dnn != "" {

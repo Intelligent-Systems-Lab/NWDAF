@@ -82,7 +82,6 @@ func TestMlServiceClient_Predict(t *testing.T) {
 		serverResponse func(w http.ResponseWriter, r *http.Request)
 		modelId        string
 		trafficData    []TrafficObservation
-		steps          int
 		wantCount      int
 		wantErr        bool
 	}{
@@ -119,9 +118,13 @@ func TestMlServiceClient_Predict(t *testing.T) {
 			},
 			modelId: "model-123",
 			trafficData: []TrafficObservation{
-				{Ts: "2024-12-31T23:59:00Z", TrafChar: TrafficCharacterization{UlVol: 500, DlVol: 1000}},
+				{
+					Ts:       "2024-12-31T23:59:00Z",
+					UlVol:    500,
+					DlVol:    1000,
+					TotalVol: 1500,
+				},
 			},
-			steps:     1,
 			wantCount: 1,
 			wantErr:   false,
 		},
@@ -134,7 +137,6 @@ func TestMlServiceClient_Predict(t *testing.T) {
 			},
 			modelId:     "invalid-model",
 			trafficData: []TrafficObservation{},
-			steps:       1,
 			wantCount:   0,
 			wantErr:     true,
 		},
@@ -146,7 +148,7 @@ func TestMlServiceClient_Predict(t *testing.T) {
 			defer server.Close()
 
 			client := NewMlServiceClient(server.URL)
-			resp, err := client.Predict(tt.modelId, tt.trafficData, tt.steps)
+			resp, err := client.Predict(tt.modelId, tt.trafficData)
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Predict() error = %v, wantErr %v", err, tt.wantErr)

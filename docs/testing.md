@@ -562,7 +562,7 @@ curl -X POST http://127.0.0.1:8080/nnwdaf-eventssubscription/v1/subscriptions \
       "event": "UE_COMMUNICATION",
       "tgtUe": {"intGroupIds": ["group-test-001"]}
     }],
-    "evtReq": {"notifMethod": "PERIODIC", "repPeriod": 10},
+    "evtReq": {"notifMethod": "PERIODIC", "repPeriod": 5},
     "notificationURI": "http://127.0.0.1:9091/notify"
   }'
 ```

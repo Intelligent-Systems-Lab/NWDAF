@@ -46,23 +46,32 @@ type LoadModelResponse struct {
 	ModelId string `json:"model_id"`
 }
 
-// TrafficCharacterization represents traffic volume data
+// TrafficCharacterization represents predicted traffic volume data (used in response)
 type TrafficCharacterization struct {
 	UlVol int64 `json:"ul_vol"`
 	DlVol int64 `json:"dl_vol"`
 }
 
-// TrafficObservation represents a single traffic observation point
+// TrafficObservation represents a single traffic observation point for ML prediction.
+// Fields match the ML service feature extraction order (10 features).
 type TrafficObservation struct {
-	Ts       string                  `json:"ts"`
-	TrafChar TrafficCharacterization `json:"traf_char"`
+	Ts          string  `json:"ts"`
+	TotalVol    float64 `json:"total_vol"`
+	UlVol       float64 `json:"ul_vol"`
+	DlVol       float64 `json:"dl_vol"`
+	TotalNbPkts float64 `json:"total_nb_pkts"`
+	UlNbPkts    float64 `json:"ul_nb_pkts"`
+	DlNbPkts    float64 `json:"dl_nb_pkts"`
+	UlThr       float64 `json:"ul_thr"`     // uplink throughput (bps)
+	DlThr       float64 `json:"dl_thr"`     // downlink throughput (bps)
+	UlPktThr    float64 `json:"ul_pkt_thr"` // uplink packet throughput (pps)
+	DlPktThr    float64 `json:"dl_pkt_thr"` // downlink packet throughput (pps)
 }
 
 // PredictRequest represents the prediction request
 type PredictRequest struct {
-	ModelId         string               `json:"model_id"`
-	HistoricalData  []TrafficObservation `json:"historical_data"`
-	PredictionSteps int                  `json:"prediction_steps"`
+	ModelId        string               `json:"model_id"`
+	HistoricalData []TrafficObservation `json:"historical_data"`
 }
 
 // UeCommunicationPrediction represents predicted UE communication data
@@ -136,19 +145,14 @@ func (c *MlServiceClient) InitializeModel(modelUrl string) (string, error) {
 // Predict calls the ML service to get traffic predictions
 // Calls POST /predict on the ML service
 func (c *MlServiceClient) Predict(
-	modelId string, trafficData []TrafficObservation, steps int,
+	modelId string, trafficData []TrafficObservation,
 ) (*PredictResponse, error) {
-	consumerLog.Debugf("Calling ML prediction: modelId=%s, dataPoints=%d, steps=%d",
-		modelId, len(trafficData), steps)
-
-	if steps <= 0 {
-		steps = 1
-	}
+	consumerLog.Debugf("Calling ML prediction: modelId=%s, dataPoints=%d",
+		modelId, len(trafficData))
 
 	request := PredictRequest{
-		ModelId:         modelId,
-		HistoricalData:  trafficData,
-		PredictionSteps: steps,
+		ModelId:        modelId,
+		HistoricalData: trafficData,
 	}
 
 	jsonData, err := json.Marshal(request)

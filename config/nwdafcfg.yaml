@@ -27,10 +27,10 @@ configuration:
   # Analytics model parameters per event type
   analytics:
     ueCommunication:
-      samplingInterval: 10  # UPF report period (seconds); governs smf repPeriod
-      inputWindow: 30       # data points fed to ML model (30 × 10s = 5 min history)
-      outputWindow: 5       # prediction steps (5 × 10s = 50s ahead)
-      # queryLookback = samplingInterval × inputWindow = 300s (auto-computed)
+      samplingInterval: 5   # UPF report period (seconds); governs smf repPeriod
+      inputWindow: 30       # data points fed to ML model (30 × 5s = 2.5 min history)
+      outputWindow: 1       # ML service predicts 1 step ahead
+      # queryLookback = samplingInterval × inputWindow = 150s (auto-computed)
 
   # External MTLF Integration
   externalMtlf:
@@ -59,7 +59,7 @@ configuration:
     endpoint: http://127.0.0.1:9887
     triggerOnStartup: false      # Trigger training once after NWDAF startup
     triggerDelay: 10            # seconds to wait before startup trigger
-    staticModelUrl: file:///app/ml/artifacts/tcn_model.pth  # Static path for direct model loading
+    staticModelUrl: nwdaf_ml_service/ml/artifacts/model_new.npy  # Static path for direct model loading
     accuracyMonitor:
       enabled: true            # Trigger retraining on accuracy degradation
       checkInterval: 50         # seconds between accuracy checks
