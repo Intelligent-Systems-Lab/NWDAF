@@ -65,7 +65,7 @@ configuration:
       checkInterval: 50         # seconds between accuracy checks
       deviationThreshold: 0.3   # NRMSE > 0.3 triggers retraining
       minSamples: 5             # min ground truth samples before evaluation
-      warmupDuration: 50       # seconds to skip checks after start (model cold-start)
+      warmupDuration: 155       # seconds to skip checks after start (model cold-start)
       triggerStrategy: consecutive  # "consecutive" or "ema"
       consecutiveBreaches: 3    # required consecutive checks (for consecutive)
       emaAlpha: 0.3             # EMA smoothing factor 0-1 (for ema)

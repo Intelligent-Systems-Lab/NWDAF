@@ -3,6 +3,7 @@ package notifier
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
@@ -182,6 +183,9 @@ func getUeCommunicationModelParams() *factory.ModelParams {
 // fetchHistoricalData retrieves recent UPF traffic data for ML prediction.
 // Primary source: MongoDB time-series collection (time-aligned, bounded query).
 // Fallback: in-memory RawUpfData (available even when MongoDB is not configured).
+//
+// For group subscriptions (multiple corrIds), raw per-SUPI records are aggregated
+// into a single group-level time series before returning.
 func fetchHistoricalData(
 	nwdafSubId string,
 	ctx *nwdaf_context.NWDAFContext,
@@ -194,20 +198,26 @@ func fetchHistoricalData(
 	}
 
 	inputWindow := params.InputWindowOrDefault()
+	samplingInterval := params.SamplingIntervalOrDefault()
 	queryLookback := time.Duration(params.QueryLookback()) * time.Second
+
+	var obs []TrafficObservation
+	var dnn string
 
 	// --- Primary: MongoDB ---
 	if dbName != "" && nwdaf_context.IsMongoAvailable() {
 		corrIds := ctx.GetCorrelationIdsByNwdafSubId(nwdafSubId)
 		if len(corrIds) > 0 {
 			since := time.Now().Add(-queryLookback)
+			// Multiply limit by number of corrIds so each stream can contribute inputWindow records.
+			limit := inputWindow * len(corrIds)
 			records, err := nwdaf_context.QueryTrafficByMultipleCorrelationIds(
-				dbName, corrIds, since, inputWindow,
+				dbName, corrIds, since, limit,
 			)
 			if err == nil && len(records) > 0 {
 				notifierLog.Debugf("Using %d MongoDB records for ML prediction (nwdafSubId=%s)",
 					len(records), nwdafSubId)
-				return upfRecordsToObservations(records)
+				obs, dnn = upfRecordsToObservations(records)
 			}
 			if err != nil {
 				notifierLog.Warnf(
@@ -217,8 +227,96 @@ func fetchHistoricalData(
 	}
 
 	// --- Fallback: in-memory ---
-	notifierLog.Debugf("Using in-memory data for ML prediction (nwdafSubId=%s)", nwdafSubId)
-	return inMemoryToObservations(ctx, nwdafSubId, inputWindow)
+	if obs == nil {
+		notifierLog.Debugf("Using in-memory data for ML prediction (nwdafSubId=%s)", nwdafSubId)
+		obs, dnn = inMemoryToObservations(ctx, nwdafSubId)
+	}
+
+	// Aggregate per-SUPI streams into a single group-level time series by summing
+	// all metrics within each samplingInterval-aligned time bucket.
+	obs = aggregateObservationsByTimeBucket(obs, samplingInterval)
+
+	// Trim to inputWindow (most recent buckets)
+	if len(obs) > inputWindow {
+		obs = obs[len(obs)-inputWindow:]
+	}
+
+	return obs, dnn
+}
+
+// aggregateObservationsByTimeBucket groups observations by time bucket
+// (timestamp truncated to samplingInterval seconds) and sums all numeric metrics
+// within each bucket. This merges per-SUPI streams into a single group-level series.
+func aggregateObservationsByTimeBucket(obs []TrafficObservation, samplingInterval int) []TrafficObservation {
+	if len(obs) == 0 || samplingInterval <= 0 {
+		return obs
+	}
+
+	type bucket struct {
+		ts          int64 // Unix timestamp of bucket start
+		TotalVol    float64
+		UlVol       float64
+		DlVol       float64
+		TotalNbPkts float64
+		UlNbPkts    float64
+		DlNbPkts    float64
+		UlThr       float64
+		DlThr       float64
+		UlPktThr    float64
+		DlPktThr    float64
+	}
+
+	bucketMap := make(map[int64]*bucket)
+	si := int64(samplingInterval)
+
+	for _, o := range obs {
+		t, err := time.Parse(time.RFC3339, o.Ts)
+		if err != nil {
+			continue
+		}
+		bucketTs := (t.Unix() / si) * si
+
+		b, ok := bucketMap[bucketTs]
+		if !ok {
+			b = &bucket{ts: bucketTs}
+			bucketMap[bucketTs] = b
+		}
+		b.TotalVol += o.TotalVol
+		b.UlVol += o.UlVol
+		b.DlVol += o.DlVol
+		b.TotalNbPkts += o.TotalNbPkts
+		b.UlNbPkts += o.UlNbPkts
+		b.DlNbPkts += o.DlNbPkts
+		b.UlThr += o.UlThr
+		b.DlThr += o.DlThr
+		b.UlPktThr += o.UlPktThr
+		b.DlPktThr += o.DlPktThr
+	}
+
+	keys := make([]int64, 0, len(bucketMap))
+	for k := range bucketMap {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+
+	result := make([]TrafficObservation, 0, len(keys))
+	for _, k := range keys {
+		b := bucketMap[k]
+		result = append(result, TrafficObservation{
+			Ts:          time.Unix(b.ts, 0).UTC().Format(time.RFC3339),
+			TotalVol:    b.TotalVol,
+			UlVol:       b.UlVol,
+			DlVol:       b.DlVol,
+			TotalNbPkts: b.TotalNbPkts,
+			UlNbPkts:    b.UlNbPkts,
+			DlNbPkts:    b.DlNbPkts,
+			UlThr:       b.UlThr,
+			DlThr:       b.DlThr,
+			UlPktThr:    b.UlPktThr,
+			DlPktThr:    b.DlPktThr,
+		})
+	}
+	return result
 }
 
 // upfRecordsToObservations converts MongoDB UpfTrafficRecord slice to ML input format.
@@ -249,10 +347,11 @@ func upfRecordsToObservations(records []nwdaf_context.UpfTrafficRecord) ([]Traff
 
 // inMemoryToObservations reads from in-memory store (fallback when MongoDB unavailable).
 // All 10 features are filled; missing fields default to 0.
+// Returns all available data points across all corrIds; trimming is done by the caller
+// after aggregation.
 func inMemoryToObservations(
 	ctx *nwdaf_context.NWDAFContext,
 	nwdafSubId string,
-	inputWindow int,
 ) ([]TrafficObservation, string) {
 	trafficDataList := ctx.GetTrafficDataByNwdafSubId(nwdafSubId)
 	obs := make([]TrafficObservation, 0)
@@ -281,10 +380,6 @@ func inMemoryToObservations(
 		trafficData.Unlock()
 	}
 
-	// Trim to inputWindow (most recent points)
-	if len(obs) > inputWindow {
-		obs = obs[len(obs)-inputWindow:]
-	}
 	return obs, dnn
 }
 
