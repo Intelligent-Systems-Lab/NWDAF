@@ -146,12 +146,12 @@ func (p *Processor) checkModelAccuracy(
 		return
 	}
 
-	// Compute NRMSE
-	deviation := computeNRMSE(pairs)
+	// Compute sMAPE
+	deviation := computeSMAPE(pairs)
 	inferenceNum := store.GetAndResetInferenceNum()
 	store.UpdateDeviation(deviation)
 
-	pseudoAccuracy := int(math.Max(0, 100-deviation*100))
+	pseudoAccuracy := int(math.Max(0, 100-deviation*50))
 
 	mtlfLog.Infof("Accuracy [%s]: deviation=%.4f, accuracy=%d%%, samples=%d, inferences=%d",
 		modelUrl, deviation, pseudoAccuracy, len(pairs), inferenceNum)
@@ -291,56 +291,56 @@ func (p *Processor) lookupGroundTruth(
 		return nil
 	}
 
+	// Aggregate across all SUPIs in the group for the target time window
+	var ulVol, dlVol int64
 	window := time.Duration(samplingInterval) * time.Second
 	for _, td := range dataList {
 		td.Lock()
 		for _, dp := range td.RawUpfData {
 			diff := dp.Timestamp.Sub(pred.TargetTime)
 			if diff >= 0 && diff < window {
-				gt := &groundTruth{ulVol: dp.UlVolume, dlVol: dp.DlVolume}
-				td.Unlock()
-				return gt
+				ulVol += dp.UlVolume
+				dlVol += dp.DlVolume
 			}
 		}
 		td.Unlock()
 	}
-	return nil
+	if ulVol == 0 && dlVol == 0 {
+		return nil
+	}
+	return &groundTruth{ulVol: ulVol, dlVol: dlVol}
 }
 
-// matchedPair holds a prediction-truth pair for NRMSE computation
+// matchedPair holds a prediction-truth pair for sMAPE computation
 type matchedPair struct {
 	predUl, predDl     int64
 	actualUl, actualDl int64
 }
 
-// computeNRMSE calculates Normalized Root Mean Square Error
-func computeNRMSE(pairs []matchedPair) float64 {
+// computeSMAPE calculates Symmetric Mean Absolute Percentage Error.
+// Each UL and DL channel is treated as an independent sample.
+// Result is in [0, 2]; when both actual and pred are zero the sample contributes 0.
+func computeSMAPE(pairs []matchedPair) float64 {
 	if len(pairs) == 0 {
 		return 0
 	}
 
-	var sumSquaredError float64
-	var sumActual float64
+	var sumSMAPE float64
 	n := float64(len(pairs) * 2)
 
 	for _, p := range pairs {
-		errUl := float64(p.predUl - p.actualUl)
-		errDl := float64(p.predDl - p.actualDl)
-		sumSquaredError += errUl*errUl + errDl*errDl
-		sumActual += math.Abs(float64(p.actualUl)) + math.Abs(float64(p.actualDl))
-	}
+		ulDenom := math.Abs(float64(p.actualUl)) + math.Abs(float64(p.predUl))
+		dlDenom := math.Abs(float64(p.actualDl)) + math.Abs(float64(p.predDl))
 
-	rmse := math.Sqrt(sumSquaredError / n)
-	meanActual := sumActual / n
-
-	if meanActual == 0 {
-		if rmse == 0 {
-			return 0
+		if ulDenom > 0 {
+			sumSMAPE += math.Abs(float64(p.predUl-p.actualUl)) / (ulDenom / 2)
 		}
-		return 1.0
+		if dlDenom > 0 {
+			sumSMAPE += math.Abs(float64(p.predDl-p.actualDl)) / (dlDenom / 2)
+		}
 	}
 
-	return rmse / meanActual
+	return sumSMAPE / n
 }
 
 // triggerRetraining initiates Daisy FL retraining for a specific degraded model

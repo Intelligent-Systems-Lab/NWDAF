@@ -12,7 +12,10 @@ func rfc3339(unix int64) string {
 }
 
 // makeObs builds a TrafficObservation with all 10 numeric fields set.
-func makeObs(unix int64, totalVol, ulVol, dlVol, totalPkts, ulPkts, dlPkts, ulThr, dlThr, ulPktThr, dlPktThr float64) TrafficObservation {
+func makeObs(
+	unix int64,
+	totalVol, ulVol, dlVol, totalPkts, ulPkts, dlPkts, ulThr, dlThr, ulPktThr, dlPktThr float64,
+) TrafficObservation {
 	return TrafficObservation{
 		Ts:          rfc3339(unix),
 		TotalVol:    totalVol,
@@ -252,16 +255,16 @@ func TestAggregateObservationsByTimeBucket_AllFieldsSummed(t *testing.T) {
 		got   float64
 		want  float64
 	}{
-		{"TotalVol", r.TotalVol, 300},   // 100+200
-		{"UlVol", r.UlVol, 120},         // 40+80
-		{"DlVol", r.DlVol, 180},         // 60+120
+		{"TotalVol", r.TotalVol, 300},      // 100+200
+		{"UlVol", r.UlVol, 120},            // 40+80
+		{"DlVol", r.DlVol, 180},            // 60+120
 		{"TotalNbPkts", r.TotalNbPkts, 30}, // 10+20
-		{"UlNbPkts", r.UlNbPkts, 12},    // 4+8
-		{"DlNbPkts", r.DlNbPkts, 18},    // 6+12
-		{"UlThr", r.UlThr, 4},           // 1+3
-		{"DlThr", r.DlThr, 6},           // 2+4
-		{"UlPktThr", r.UlPktThr, 8},     // 3+5
-		{"DlPktThr", r.DlPktThr, 10},    // 4+6
+		{"UlNbPkts", r.UlNbPkts, 12},       // 4+8
+		{"DlNbPkts", r.DlNbPkts, 18},       // 6+12
+		{"UlThr", r.UlThr, 4},              // 1+3
+		{"DlThr", r.DlThr, 6},              // 2+4
+		{"UlPktThr", r.UlPktThr, 8},        // 3+5
+		{"DlPktThr", r.DlPktThr, 10},       // 4+6
 	}
 	for _, c := range cases {
 		if c.got != c.want {
