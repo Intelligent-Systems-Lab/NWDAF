@@ -46,6 +46,17 @@ type LoadModelResponse struct {
 	ModelId string `json:"model_id"`
 }
 
+// UnloadModelRequest represents the request to unload a model
+type UnloadModelRequest struct {
+	ModelId string `json:"model_id"`
+}
+
+// UnloadModelResponse represents the response from model unloading
+type UnloadModelResponse struct {
+	ModelId string `json:"model_id"`
+	Status  string `json:"status"`
+}
+
 // TrafficCharacterization represents predicted traffic volume data (used in response)
 type TrafficCharacterization struct {
 	UlVol int64 `json:"ul_vol"`
@@ -140,6 +151,53 @@ func (c *MlServiceClient) InitializeModel(modelUrl string) (string, error) {
 
 	consumerLog.Infof("ML model initialized: modelId=%s", response.ModelId)
 	return response.ModelId, nil
+}
+
+// UnloadModel unloads a model by ID
+// Calls POST /model/unload on the ML service
+func (c *MlServiceClient) UnloadModel(modelId string) error {
+	consumerLog.Infof("Unloading ML model: %s", modelId)
+
+	request := UnloadModelRequest{
+		ModelId: modelId,
+	}
+
+	jsonData, err := json.Marshal(request)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := c.endpoint + "/model/unload"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request to ML service: %w", err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			consumerLog.Debugf("failed to close response body: %v", closeErr)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("ML model unload failed: status=%d", resp.StatusCode)
+		}
+		return fmt.Errorf("ML model unload failed: status=%d, body=%s", resp.StatusCode, string(body))
+	}
+
+	consumerLog.Debugf("ML model unloaded: %s", modelId)
+	return nil
 }
 
 // Predict calls the ML service to get traffic predictions

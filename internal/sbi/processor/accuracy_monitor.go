@@ -203,7 +203,7 @@ func (p *Processor) checkConsecutiveTrigger(
 			modelUrl, deviation, threshold, count, required)
 		if count >= required {
 			store.ResetBreaches()
-			p.triggerRetraining()
+			p.triggerRetraining(modelUrl)
 			// Stop monitor to prevent repeated triggers during training
 			store.StopMonitor()
 			mtlfLog.Infof("Accuracy monitor paused after retrain trigger: model=%s", modelUrl)
@@ -232,7 +232,7 @@ func (p *Processor) checkEMATrigger(
 	if ema > threshold {
 		mtlfLog.Warnf("EMA degradation [%s]: ema=%.4f > threshold=%.2f",
 			modelUrl, ema, threshold)
-		p.triggerRetraining()
+		p.triggerRetraining(modelUrl)
 		// Stop monitor to prevent repeated triggers during training
 		store.StopMonitor()
 		mtlfLog.Infof("Accuracy monitor paused after retrain trigger: model=%s", modelUrl)
@@ -343,15 +343,15 @@ func computeNRMSE(pairs []matchedPair) float64 {
 	return rmse / meanActual
 }
 
-// triggerRetraining initiates Daisy FL retraining
-func (p *Processor) triggerRetraining() {
+// triggerRetraining initiates Daisy FL retraining for a specific degraded model
+func (p *Processor) triggerRetraining(oldModelUrl string) {
 	cfg := factory.NwdafConfig
 	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.Mtlf == nil {
 		return
 	}
 	mtlfCfg := cfg.Configuration.Mtlf
 
-	mtlfLog.Info("Triggering retraining due to accuracy degradation")
+	mtlfLog.Infof("Triggering retraining due to accuracy degradation for model: %s", oldModelUrl)
 
 	go func() {
 		if err := p.triggerTraining(mtlfCfg); err != nil {
@@ -359,5 +359,6 @@ func (p *Processor) triggerRetraining() {
 			return
 		}
 		mtlfLog.Info("Accuracy-triggered retraining completed successfully")
+		p.swapModelAfterRetrain(oldModelUrl, mtlfCfg)
 	}()
 }
