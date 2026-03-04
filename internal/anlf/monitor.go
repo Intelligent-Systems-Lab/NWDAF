@@ -91,6 +91,13 @@ func (a *AnlfService) runModelAccuracyLoop(
 		return
 	}
 
+	// Discard predictions accumulated during warmup — they reflect model
+	// behaviour before it stabilized and should not influence accuracy scoring.
+	if drained := store.ConsumeMaturePredictions(); len(drained) > 0 {
+		anlfLog.Infof("Accuracy monitor: discarded %d warmup predictions for model=%s",
+			len(drained), modelUrl)
+	}
+
 	interval := accCfg.CheckInterval
 	if interval <= 0 {
 		interval = 60
