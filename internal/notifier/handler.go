@@ -2,6 +2,7 @@
 package notifier
 
 import (
+	"github.com/free5gc/nwdaf/internal/anlf"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -34,7 +35,7 @@ func (h *UeCommunicationHandler) BuildEventNotification(
 ) models.NwdafEventsSubscriptionEventNotification {
 	return models.NwdafEventsSubscriptionEventNotification{
 		Event:   eventSub.Event,
-		UeComms: []models.UeCommunication{generateUeCommunicationAnalytics(nwdafSubId)},
+		UeComms: []models.UeCommunication{anlf.GenerateUeCommunicationAnalytics(nwdafSubId)},
 	}
 }
 
@@ -47,6 +48,6 @@ func (h *AbnormalBehaviourHandler) BuildEventNotification(
 ) models.NwdafEventsSubscriptionEventNotification {
 	return models.NwdafEventsSubscriptionEventNotification{
 		Event:        eventSub.Event,
-		AbnorBehavrs: generateMockAbnormalBehaviours(),
+		AbnorBehavrs: anlf.GenerateMockAbnormalBehaviours(),
 	}
 }

@@ -1,4 +1,4 @@
-package processor
+package anlf
 
 import (
 	"context"
@@ -11,9 +11,9 @@ import (
 )
 
 // StartAccuracyMonitorForModel starts a per-model accuracy monitoring goroutine.
-// Idempotent — skips if monitor is already running for this modelUrl.
-// Per TS 23.288 §5C: monitoring activated when analytics model becomes active.
-func (p *Processor) StartAccuracyMonitorForModel(
+// Idempotent — skips if a monitor is already running for this modelUrl.
+// Per TS 23.288 §6.2D: monitoring activated when analytics model becomes active.
+func (a *AnlfService) StartAccuracyMonitorForModel(
 	modelUrl string, wg *sync.WaitGroup,
 ) {
 	cfg := factory.NwdafConfig
@@ -28,7 +28,7 @@ func (p *Processor) StartAccuracyMonitorForModel(
 	store, isNew := nwdafCtx.GetOrCreateModelAccuracyStore(modelUrl)
 
 	if !isNew && store.IsMonitorRunning() {
-		mtlfLog.Debugf("Accuracy monitor already running for model: %s", modelUrl)
+		anlfLog.Debugf("Accuracy monitor already running for model: %s", modelUrl)
 		return
 	}
 
@@ -38,22 +38,21 @@ func (p *Processor) StartAccuracyMonitorForModel(
 		interval = 60
 	}
 
-	monCtx, cancel := context.WithCancel(p.nwdaf.CancelContext())
+	monCtx, cancel := context.WithCancel(a.nwdaf.CancelContext())
 	store.SetMonitorRunning(cancel)
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		p.runModelAccuracyLoop(monCtx, modelUrl, store, accCfg)
+		a.runModelAccuracyLoop(monCtx, modelUrl, store, accCfg)
 	}()
 
-	mtlfLog.Infof("Accuracy monitor started: model=%s, interval=%ds",
-		modelUrl, interval)
+	anlfLog.Infof("Accuracy monitor started: model=%s, interval=%ds", modelUrl, interval)
 }
 
 // StopAccuracyMonitorForModel stops the monitor for a model if no subscribers remain.
 // Checks SharedModelInfo subscriber count to decide.
-func (p *Processor) StopAccuracyMonitorForModel(modelUrl string) {
+func (a *AnlfService) StopAccuracyMonitorForModel(modelUrl string) {
 	cfg := factory.NwdafConfig
 	if cfg == nil || cfg.Configuration == nil ||
 		cfg.Configuration.Mtlf == nil ||
@@ -62,40 +61,36 @@ func (p *Processor) StopAccuracyMonitorForModel(modelUrl string) {
 		return
 	}
 
-	// Check registry — if subscribers remain, keep monitor running
 	nwdafCtx := nwdaf_context.GetSelf()
 	shared := nwdafCtx.GetSharedModel(modelUrl)
 	if shared != nil && shared.SubscriberCount() > 0 {
 		return
 	}
 
-	// Last subscriber gone — stop monitor and clean up
 	nwdafCtx.DeleteModelAccuracyStore(modelUrl)
-	mtlfLog.Infof("Accuracy monitor stopped: model=%s", modelUrl)
+	anlfLog.Infof("Accuracy monitor stopped: model=%s", modelUrl)
 }
 
-// runModelAccuracyLoop periodically checks accuracy for one model
-func (p *Processor) runModelAccuracyLoop(
+// runModelAccuracyLoop periodically checks accuracy for one model.
+func (a *AnlfService) runModelAccuracyLoop(
 	ctx context.Context,
 	modelUrl string,
 	store *nwdaf_context.ModelAccuracyStore,
 	accCfg *factory.AccuracyMonitorConfig,
 ) {
-	// Warmup: skip evaluation while model accumulates data
 	warmup := accCfg.WarmupDuration
 	if warmup <= 0 {
 		warmup = 120
 	}
-	mtlfLog.Infof("Accuracy monitor warmup: model=%s, waiting %ds", modelUrl, warmup)
+	anlfLog.Infof("Accuracy monitor warmup: model=%s, waiting %ds", modelUrl, warmup)
 	select {
 	case <-time.After(time.Duration(warmup) * time.Second):
-		mtlfLog.Infof("Accuracy monitor warmup complete: model=%s", modelUrl)
+		anlfLog.Infof("Accuracy monitor warmup complete: model=%s", modelUrl)
 	case <-ctx.Done():
-		mtlfLog.Infof("Accuracy monitor exiting during warmup: model=%s", modelUrl)
+		anlfLog.Infof("Accuracy monitor exiting during warmup: model=%s", modelUrl)
 		return
 	}
 
-	// Start periodic checks
 	interval := accCfg.CheckInterval
 	if interval <= 0 {
 		interval = 60
@@ -106,33 +101,33 @@ func (p *Processor) runModelAccuracyLoop(
 	for {
 		select {
 		case <-ticker.C:
-			p.checkModelAccuracy(modelUrl, store, accCfg)
+			a.checkModelAccuracy(modelUrl, store, accCfg)
 		case <-ctx.Done():
-			mtlfLog.Infof("Accuracy monitor exiting: model=%s", modelUrl)
+			anlfLog.Infof("Accuracy monitor exiting: model=%s", modelUrl)
 			return
 		}
 	}
 }
 
-// checkModelAccuracy compares predictions against ground truth for one model
-func (p *Processor) checkModelAccuracy(
+// checkModelAccuracy collects mature predictions, computes sMAPE, and reports
+// the deviation to MTLF via the onDeviationReport callback.
+// Per TS 23.288 §6.2D: AnLF generates Analytics Accuracy Information from
+// prediction vs ground truth comparison.
+func (a *AnlfService) checkModelAccuracy(
 	modelUrl string,
 	store *nwdaf_context.ModelAccuracyStore,
 	accCfg *factory.AccuracyMonitorConfig,
 ) {
 	nwdafCtx := nwdaf_context.GetSelf()
 
-	// Get predictions whose target time has passed
 	mature := store.ConsumeMaturePredictions()
 	if len(mature) == 0 {
 		return
 	}
 
-	// Collect matched pairs (prediction, actual ground truth)
 	var pairs []matchedPair
-
 	for _, pred := range mature {
-		actual := p.lookupGroundTruth(nwdafCtx, pred)
+		actual := a.lookupGroundTruth(nwdafCtx, pred)
 		if actual != nil {
 			pairs = append(pairs, matchedPair{
 				predUl: pred.PredUlVol, predDl: pred.PredDlVol,
@@ -142,104 +137,34 @@ func (p *Processor) checkModelAccuracy(
 	}
 
 	if len(pairs) == 0 {
-		mtlfLog.Debugf("No matched pairs for model: %s", modelUrl)
+		anlfLog.Debugf("No matched pairs for model: %s", modelUrl)
 		return
 	}
 
-	// Compute sMAPE
 	deviation := computeSMAPE(pairs)
 	inferenceNum := store.GetAndResetInferenceNum()
 	store.UpdateDeviation(deviation)
 
 	pseudoAccuracy := int(math.Max(0, 100-deviation*50))
-
-	mtlfLog.Infof("Accuracy [%s]: deviation=%.4f, accuracy=%d%%, samples=%d, inferences=%d",
+	anlfLog.Infof("Accuracy [%s]: deviation=%.4f, accuracy=%d%%, samples=%d, inferences=%d",
 		modelUrl, deviation, pseudoAccuracy, len(pairs), inferenceNum)
 
-	// Check threshold with configured strategy
-	threshold := accCfg.DeviationThreshold
-	if threshold <= 0 {
-		threshold = 0.3
-	}
 	minSamples := accCfg.MinSamples
 	if minSamples <= 0 {
 		minSamples = 5
 	}
-
 	if len(pairs) < minSamples {
-		mtlfLog.Debugf("Not enough samples [%s]: %d < %d", modelUrl, len(pairs), minSamples)
+		anlfLog.Debugf("Not enough samples [%s]: %d < %d", modelUrl, len(pairs), minSamples)
 		return
 	}
 
-	// Apply configured trigger strategy
-	strategy := accCfg.TriggerStrategy
-	if strategy == "" {
-		strategy = "consecutive"
-	}
-
-	switch strategy {
-	case "ema":
-		p.checkEMATrigger(modelUrl, store, deviation, threshold, accCfg)
-	default: // "consecutive"
-		p.checkConsecutiveTrigger(modelUrl, store, deviation, threshold, accCfg)
+	// Report to MTLF — MTLF decides whether to retrain (TS 23.288 §6.2E)
+	if a.onDeviationReport != nil {
+		a.onDeviationReport(modelUrl, deviation, store)
 	}
 }
 
-// checkConsecutiveTrigger triggers retraining after N consecutive threshold breaches
-func (p *Processor) checkConsecutiveTrigger(
-	modelUrl string,
-	store *nwdaf_context.ModelAccuracyStore,
-	deviation, threshold float64,
-	accCfg *factory.AccuracyMonitorConfig,
-) {
-	required := accCfg.ConsecutiveBreaches
-	if required <= 0 {
-		required = 3
-	}
-
-	if deviation > threshold {
-		count := store.IncrementBreaches()
-		mtlfLog.Warnf("Threshold breach [%s]: deviation=%.4f > %.2f (%d/%d)",
-			modelUrl, deviation, threshold, count, required)
-		if count >= required {
-			store.ResetBreaches()
-			p.triggerRetraining(modelUrl)
-			// Stop monitor to prevent repeated triggers during training
-			store.StopMonitor()
-			mtlfLog.Infof("Accuracy monitor paused after retrain trigger: model=%s", modelUrl)
-		}
-	} else {
-		store.ResetBreaches()
-	}
-}
-
-// checkEMATrigger triggers retraining when EMA-smoothed deviation exceeds threshold
-func (p *Processor) checkEMATrigger(
-	modelUrl string,
-	store *nwdaf_context.ModelAccuracyStore,
-	deviation, threshold float64,
-	accCfg *factory.AccuracyMonitorConfig,
-) {
-	alpha := accCfg.EmaAlpha
-	if alpha <= 0 || alpha > 1 {
-		alpha = 0.3
-	}
-
-	ema := store.UpdateEMA(deviation, alpha)
-	mtlfLog.Infof("EMA update [%s]: raw=%.4f, ema=%.4f, threshold=%.2f",
-		modelUrl, deviation, ema, threshold)
-
-	if ema > threshold {
-		mtlfLog.Warnf("EMA degradation [%s]: ema=%.4f > threshold=%.2f",
-			modelUrl, ema, threshold)
-		p.triggerRetraining(modelUrl)
-		// Stop monitor to prevent repeated triggers during training
-		store.StopMonitor()
-		mtlfLog.Infof("Accuracy monitor paused after retrain trigger: model=%s", modelUrl)
-	}
-}
-
-// groundTruth holds actual measurement values
+// groundTruth holds actual measurement values for one time window.
 type groundTruth struct {
 	ulVol, dlVol int64
 }
@@ -247,14 +172,12 @@ type groundTruth struct {
 // lookupGroundTruth finds actual UPF traffic data matching a prediction.
 // Primary source: MongoDB (precise time-range query).
 // Fallback: in-memory scan (when MongoDB is unavailable or returns nothing).
-func (p *Processor) lookupGroundTruth(
+func (a *AnlfService) lookupGroundTruth(
 	ctx *nwdaf_context.NWDAFContext,
 	pred nwdaf_context.PredictionRecord,
 ) *groundTruth {
-	// --- Resolve cfg and sampling interval ---
 	cfg := factory.NwdafConfig
 	from := pred.TargetTime
-	// Ground-truth window = one sampling interval (matches UPF report period)
 	samplingInterval := 10
 	if cfg != nil && cfg.Configuration != nil &&
 		cfg.Configuration.Analytics != nil &&
@@ -263,7 +186,7 @@ func (p *Processor) lookupGroundTruth(
 	}
 	to := pred.TargetTime.Add(time.Duration(samplingInterval) * time.Second)
 
-	// --- Primary: MongoDB time-range query ---
+	// Primary: MongoDB time-range query
 	if cfg != nil && cfg.Configuration != nil && cfg.Configuration.Mongodb != nil &&
 		nwdaf_context.IsMongoAvailable() {
 		dbName := cfg.Configuration.Mongodb.Name
@@ -271,7 +194,6 @@ func (p *Processor) lookupGroundTruth(
 		if len(corrIds) > 0 {
 			records, err := nwdaf_context.QueryTrafficInTimeRange(dbName, corrIds, from, to)
 			if err == nil && len(records) > 0 {
-				// Aggregate all records in the window (may be multiple IPs)
 				var ulVol, dlVol int64
 				for _, r := range records {
 					ulVol += r.UlVolume
@@ -280,18 +202,17 @@ func (p *Processor) lookupGroundTruth(
 				return &groundTruth{ulVol: ulVol, dlVol: dlVol}
 			}
 			if err != nil {
-				mtlfLog.Debugf("MongoDB ground truth query failed, falling back to in-memory: %v", err)
+				anlfLog.Debugf("MongoDB ground truth query failed, falling back to in-memory: %v", err)
 			}
 		}
 	}
 
-	// --- Fallback: in-memory scan ---
+	// Fallback: in-memory scan
 	dataList := ctx.GetTrafficDataByNwdafSubId(pred.NwdafSubId)
 	if len(dataList) == 0 {
 		return nil
 	}
 
-	// Aggregate across all SUPIs in the group for the target time window
 	var ulVol, dlVol int64
 	window := time.Duration(samplingInterval) * time.Second
 	for _, td := range dataList {
@@ -311,7 +232,7 @@ func (p *Processor) lookupGroundTruth(
 	return &groundTruth{ulVol: ulVol, dlVol: dlVol}
 }
 
-// matchedPair holds a prediction-truth pair for sMAPE computation
+// matchedPair holds a prediction-truth pair for sMAPE computation.
 type matchedPair struct {
 	predUl, predDl     int64
 	actualUl, actualDl int64
@@ -341,24 +262,4 @@ func computeSMAPE(pairs []matchedPair) float64 {
 	}
 
 	return sumSMAPE / n
-}
-
-// triggerRetraining initiates Daisy FL retraining for a specific degraded model
-func (p *Processor) triggerRetraining(oldModelUrl string) {
-	cfg := factory.NwdafConfig
-	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.Mtlf == nil {
-		return
-	}
-	mtlfCfg := cfg.Configuration.Mtlf
-
-	mtlfLog.Infof("Triggering retraining due to accuracy degradation for model: %s", oldModelUrl)
-
-	go func() {
-		if err := p.triggerTraining(mtlfCfg); err != nil {
-			mtlfLog.Errorf("Accuracy-triggered retraining failed: %v", err)
-			return
-		}
-		mtlfLog.Info("Accuracy-triggered retraining completed successfully")
-		p.swapModelAfterRetrain(oldModelUrl, mtlfCfg)
-	}()
 }

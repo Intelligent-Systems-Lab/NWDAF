@@ -271,7 +271,7 @@ func (p *Processor) HandleDeleteSubscription(subscriptionId string) *models.Prob
 		}
 
 		// Layer 2: Accuracy monitor — stop if no subscribers remain
-		p.StopAccuracyMonitorForModel(modelUrl)
+		p.anlf.StopAccuracyMonitorForModel(modelUrl)
 
 		ctx.DeleteMlModelInfo(subscriptionId)
 	}

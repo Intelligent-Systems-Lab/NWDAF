@@ -1,4 +1,4 @@
-package processor
+package anlf
 
 import (
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
@@ -10,23 +10,23 @@ import (
 // InitializeMlModel initializes the ML model directly using the ML Service.
 // Deduplicates model loading: if modelUrl is already loaded by another
 // subscription, reuses the existing modelId from SharedModelRegistry.
-func (p *Processor) InitializeMlModel(
+func (a *AnlfService) InitializeMlModel(
 	nwdafSubId string, mlInfo *nwdaf_context.MlModelInfo, modelUrl string,
 ) {
-	logger.ProcLog.Infof("Initializing ML model: sub=%s, url=%s", nwdafSubId, modelUrl)
+	logger.AnlfLog.Infof("Initializing ML model: sub=%s, url=%s", nwdafSubId, modelUrl)
 
 	// Get ML service configuration
 	cfg := factory.NwdafConfig
 	if cfg == nil || cfg.Configuration == nil ||
 		cfg.Configuration.MlService == nil || !cfg.Configuration.MlService.Enabled {
-		logger.ProcLog.Warnf("ML Service not configured, cannot initialize model")
+		logger.AnlfLog.Warnf("ML Service not configured, cannot initialize model")
 		mlInfo.SetModelFailed(nil)
 		return
 	}
 
 	mlServiceEndpoint := cfg.Configuration.MlService.Endpoint
 	if mlServiceEndpoint == "" {
-		logger.ProcLog.Warnf("ML Service endpoint not configured")
+		logger.AnlfLog.Warnf("ML Service endpoint not configured")
 		mlInfo.SetModelFailed(nil)
 		return
 	}
@@ -42,7 +42,7 @@ func (p *Processor) InitializeMlModel(
 		if existingModelId != "" {
 			// Reuse existing model — skip ML service call
 			mlInfo.SetModelReady(existingModelId)
-			logger.ProcLog.Infof("Reusing ML model: sub=%s, modelId=%s (already loaded)",
+			logger.AnlfLog.Infof("Reusing ML model: sub=%s, modelId=%s (already loaded)",
 				nwdafSubId, existingModelId)
 			return
 		}
@@ -52,17 +52,13 @@ func (p *Processor) InitializeMlModel(
 	mlClient := consumer.NewMlServiceClient(mlServiceEndpoint)
 	modelId, err := mlClient.InitializeModel(modelUrl)
 	if err != nil {
-		logger.ProcLog.Errorf("Failed to initialize ML model: %v", err)
+		logger.AnlfLog.Errorf("Failed to initialize ML model: %v", err)
 		mlInfo.SetModelFailed(err)
 		return
 	}
 
 	shared.SetModelId(modelId)
 	mlInfo.SetModelReady(modelId)
-	logger.ProcLog.Infof("ML model initialized: sub=%s, modelId=%s", nwdafSubId, modelId)
-
-	// Layer 2: Start accuracy monitor (optional, per-model)
-	if p.wg != nil {
-		p.StartAccuracyMonitorForModel(modelUrl, p.wg)
-	}
+	logger.AnlfLog.Infof("ML model initialized: sub=%s, modelId=%s", nwdafSubId, modelId)
+	// Note: accuracy monitor is started by the caller (processor) after this returns
 }

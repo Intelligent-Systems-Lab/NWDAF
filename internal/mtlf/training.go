@@ -1,4 +1,4 @@
-package processor
+package mtlf
 
 import (
 	"sync"
@@ -13,10 +13,8 @@ import (
 
 var mtlfLog = logger.MtlfLog
 
-// StartMtlfTrainingScheduler starts background MTLF training scheduler
-// Current: delay-based trigger after startup
-// Future: accuracy monitoring will replace/supplement delay-based trigger
-func (p *Processor) StartMtlfTrainingScheduler(wg *sync.WaitGroup) {
+// StartTrainingScheduler starts background MTLF training scheduler.
+func (m *MtlfService) StartTrainingScheduler(wg *sync.WaitGroup) {
 	cfg := factory.NwdafConfig
 	if cfg == nil || cfg.Configuration == nil ||
 		cfg.Configuration.Mtlf == nil || !cfg.Configuration.Mtlf.Enabled ||
@@ -33,26 +31,26 @@ func (p *Processor) StartMtlfTrainingScheduler(wg *sync.WaitGroup) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		p.runDelayedTraining(delay, mtlfCfg)
+		m.runDelayedTraining(delay, mtlfCfg)
 	}()
 }
 
-// runDelayedTraining waits for a delay then triggers training via Daisy
-// The POST to Daisy blocks until training completes (HTTP 200 = success)
-func (p *Processor) runDelayedTraining(delaySec int, mtlfCfg *factory.MtlfConfig) {
+// runDelayedTraining waits for a delay then triggers training via Daisy.
+// The POST to Daisy blocks until training completes (HTTP 200 = success).
+func (m *MtlfService) runDelayedTraining(delaySec int, mtlfCfg *factory.MtlfConfig) {
 	mtlfLog.Infof("MTLF training scheduled in %d seconds", delaySec)
 
 	select {
 	case <-time.After(time.Duration(delaySec) * time.Second):
 		// Timer expired, proceed to trigger training
-	case <-p.nwdaf.CancelContext().Done():
+	case <-m.nwdaf.CancelContext().Done():
 		mtlfLog.Info("MTLF training canceled (shutdown)")
 		return
 	}
 
 	mtlfLog.Infof("Triggering MTLF training via Daisy: endpoint=%s", mtlfCfg.Endpoint)
 
-	if err := p.triggerTraining(mtlfCfg); err != nil {
+	if err := m.triggerTraining(mtlfCfg); err != nil {
 		mtlfLog.Errorf("MTLF training failed: %v", err)
 		return
 	}
@@ -61,11 +59,32 @@ func (p *Processor) runDelayedTraining(delaySec int, mtlfCfg *factory.MtlfConfig
 
 	// Startup trigger uses the static model as the initial "old" model
 	oldModelUrl := mtlfCfg.StaticModelUrl
-	p.swapModelAfterRetrain(oldModelUrl, mtlfCfg)
+	m.swapModelAfterRetrain(oldModelUrl, mtlfCfg)
 }
 
-// triggerTraining sends training task to Daisy (shared by delay + accuracy triggers)
-func (p *Processor) triggerTraining(mtlfCfg *factory.MtlfConfig) error {
+// TriggerRetraining initiates retraining for a degraded model (called by accuracy monitor).
+// Per TS 23.288 §5C: AnLF reports accuracy degradation → MTLF decides to retrain.
+func (m *MtlfService) TriggerRetraining(oldModelUrl string) {
+	cfg := factory.NwdafConfig
+	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.Mtlf == nil {
+		return
+	}
+	mtlfCfg := cfg.Configuration.Mtlf
+
+	mtlfLog.Infof("Triggering retraining due to accuracy degradation for model: %s", oldModelUrl)
+
+	go func() {
+		if err := m.triggerTraining(mtlfCfg); err != nil {
+			mtlfLog.Errorf("Accuracy-triggered retraining failed: %v", err)
+			return
+		}
+		mtlfLog.Info("Accuracy-triggered retraining completed successfully")
+		m.swapModelAfterRetrain(oldModelUrl, mtlfCfg)
+	}()
+}
+
+// triggerTraining sends training task to Daisy (shared by delay + accuracy triggers).
+func (m *MtlfService) triggerTraining(mtlfCfg *factory.MtlfConfig) error {
 	client := consumer.NewDaisyClient(mtlfCfg.Endpoint)
 	task := mtlfCfg.Task
 	if task == nil {
@@ -74,8 +93,8 @@ func (p *Processor) triggerTraining(mtlfCfg *factory.MtlfConfig) error {
 	return client.TriggerTraining(task)
 }
 
-// swapModelAfterRetrain handles the hot-swap of models after a successful retraining
-func (p *Processor) swapModelAfterRetrain(oldModelUrl string, mtlfCfg *factory.MtlfConfig) {
+// swapModelAfterRetrain handles the hot-swap of models after a successful retraining.
+func (m *MtlfService) swapModelAfterRetrain(oldModelUrl string, mtlfCfg *factory.MtlfConfig) {
 	nwdafCtx := nwdaf_context.GetSelf()
 
 	// 1. Get new model URL (from Daisy task config MODEL_PATH)
@@ -144,11 +163,11 @@ func (p *Processor) swapModelAfterRetrain(oldModelUrl string, mtlfCfg *factory.M
 		}
 	}
 
-	// 6. Restart accuracy monitor for the new model
+	// 6. Restart accuracy monitor for the new model (wired via callback by processor)
 	nwdafCtx.DeleteModelAccuracyStore(oldModelUrl)
 
-	if p.wg != nil {
-		p.StartAccuracyMonitorForModel(newModelUrl, p.wg)
+	if m.onModelSwapped != nil {
+		m.onModelSwapped(newModelUrl, m.wg)
 	}
 
 	mtlfLog.Infof("Model hot-swap completed successfully: new modelId=%s", newModelId)

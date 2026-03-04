@@ -1,5 +1,5 @@
-// Package notifier provides subscription notification functionality for NWDAF
-package notifier
+// Package anlf provides the AnLF inference pipeline for NWDAF analytics.
+package anlf
 
 import (
 	"fmt"
@@ -13,14 +13,13 @@ import (
 	"github.com/free5gc/openapi/models"
 )
 
-var notifierLog = logger.NotifierLog
+var anlfLog = logger.AnlfLog
 
 // TrafficObservation for ML prediction request
 type TrafficObservation = consumer.TrafficObservation
 
 // getMlServiceClient returns a new ML service client if configured
 func getMlServiceClient() *consumer.MlServiceClient {
-	// Get ML service configuration
 	cfg := factory.NwdafConfig
 	if cfg == nil || cfg.Configuration == nil ||
 		cfg.Configuration.MlService == nil || !cfg.Configuration.MlService.Enabled {
@@ -35,9 +34,9 @@ func getMlServiceClient() *consumer.MlServiceClient {
 	return consumer.NewMlServiceClient(endpoint)
 }
 
-// generateMockAbnormalBehaviours generates mock DDoS detection analytics data
+// GenerateMockAbnormalBehaviours generates mock DDoS detection analytics data
 // TODO: Replace with real analytics from ML model and data collection
-func generateMockAbnormalBehaviours() []models.AbnormalBehaviour {
+func GenerateMockAbnormalBehaviours() []models.AbnormalBehaviour {
 	now := time.Now()
 
 	return []models.AbnormalBehaviour{
@@ -65,10 +64,10 @@ func generateMockAbnormalBehaviours() []models.AbnormalBehaviour {
 	}
 }
 
-// generateUeCommunicationAnalytics generates UE Communication analytics
+// GenerateUeCommunicationAnalytics generates UE Communication analytics
 // Per TS 23.288 §6.7.3: Analytics based on collected UPF traffic data
 // Uses ML-based prediction if model is ready, returns 0 confidence when insufficient resources
-func generateUeCommunicationAnalytics(nwdafSubId string) models.UeCommunication {
+func GenerateUeCommunicationAnalytics(nwdafSubId string) models.UeCommunication {
 	ctx := nwdaf_context.GetSelf()
 	now := time.Now()
 
@@ -77,14 +76,14 @@ func generateUeCommunicationAnalytics(nwdafSubId string) models.UeCommunication 
 	if mlInfo != nil && mlInfo.IsReady() {
 		result, err := generateMlBasedUeCommunication(nwdafSubId, mlInfo, ctx)
 		if err == nil {
-			notifierLog.Infof("Using ML-based analytics for subscription %s", nwdafSubId)
+			anlfLog.Infof("Using ML-based analytics for subscription %s", nwdafSubId)
 			return result
 		}
-		notifierLog.Warnf("ML prediction failed for %s: %v", nwdafSubId, err)
+		anlfLog.Warnf("ML prediction failed for %s: %v", nwdafSubId, err)
 	}
 
 	// Per TS 23.288: Return 0 confidence when insufficient resources for analytics
-	notifierLog.Debugf("Insufficient resources for ML analytics, returning 0 confidence for %s", nwdafSubId)
+	anlfLog.Debugf("Insufficient resources for ML analytics, returning 0 confidence for %s", nwdafSubId)
 	return models.UeCommunication{
 		CommDur:    0,
 		Ts:         &now,
@@ -215,12 +214,12 @@ func fetchHistoricalData(
 				dbName, corrIds, since, limit,
 			)
 			if err == nil && len(records) > 0 {
-				notifierLog.Debugf("Using %d MongoDB records for ML prediction (nwdafSubId=%s)",
+				anlfLog.Debugf("Using %d MongoDB records for ML prediction (nwdafSubId=%s)",
 					len(records), nwdafSubId)
 				obs, dnn = upfRecordsToObservations(records)
 			}
 			if err != nil {
-				notifierLog.Warnf(
+				anlfLog.Warnf(
 					"MongoDB query failed for ML prediction, falling back to in-memory: %v", err)
 			}
 		}
@@ -228,7 +227,7 @@ func fetchHistoricalData(
 
 	// --- Fallback: in-memory ---
 	if obs == nil {
-		notifierLog.Debugf("Using in-memory data for ML prediction (nwdafSubId=%s)", nwdafSubId)
+		anlfLog.Debugf("Using in-memory data for ML prediction (nwdafSubId=%s)", nwdafSubId)
 		obs, dnn = inMemoryToObservations(ctx, nwdafSubId)
 	}
 

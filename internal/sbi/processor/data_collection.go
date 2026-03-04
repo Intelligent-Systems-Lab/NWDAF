@@ -252,7 +252,12 @@ func (p *Processor) triggerMlModelProvisioning(
 		mlInfo.SetModelUrl(mtlfCfg.StaticModelUrl)
 		ctx.SetMlModelInfo(subscriptionId, mlInfo)
 
-		go p.InitializeMlModel(subscriptionId, mlInfo, mtlfCfg.StaticModelUrl)
+		go func() {
+			p.anlf.InitializeMlModel(subscriptionId, mlInfo, mtlfCfg.StaticModelUrl)
+			if p.wg != nil {
+				p.anlf.StartAccuracyMonitorForModel(mtlfCfg.StaticModelUrl, p.wg)
+			}
+		}()
 		return
 	}
 

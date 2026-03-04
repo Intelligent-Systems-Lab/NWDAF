@@ -18,6 +18,7 @@ var (
 	GinLog       *logrus.Entry
 	NotifierLog  *logrus.Entry
 	CollectorLog *logrus.Entry
+	AnlfLog      *logrus.Entry
 	MtlfLog      *logrus.Entry
 )
 
@@ -45,5 +46,6 @@ func init() {
 	GinLog = Log.WithField("component", "NWDAF").WithField("category", "GIN")
 	NotifierLog = Log.WithField("component", "NWDAF").WithField("category", "Notifier")
 	CollectorLog = Log.WithField("component", "NWDAF").WithField("category", "Collector")
+	AnlfLog = Log.WithField("component", "NWDAF").WithField("category", "AnLF")
 	MtlfLog = Log.WithField("component", "NWDAF").WithField("category", "MTLF")
 }

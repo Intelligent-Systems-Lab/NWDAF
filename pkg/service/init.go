@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -140,8 +141,10 @@ func (a *NwdafApp) Start() {
 					SetTimeField("timestamp").
 					SetMetaField("metadata"),
 			)
+			collCtx, collCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer collCancel()
 			collErr := mongoapi.Client.Database(mongodb.Name).CreateCollection(
-				context.Background(),
+				collCtx,
 				nwdaf_context.UpfTrafficDataColl,
 				opts,
 			)
