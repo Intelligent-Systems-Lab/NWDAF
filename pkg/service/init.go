@@ -136,8 +136,8 @@ func (a *NwdafApp) Start() {
 			// SetMongoDB does not verify the actual connection; Ping to confirm.
 			pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer pingCancel()
-			if err := mongoapi.Client.Ping(pingCtx, nil); err != nil {
-				logger.InitLog.Errorf("MongoDB not reachable (%s): %v", mongodb.Url, err)
+			if pingErr := mongoapi.Client.Ping(pingCtx, nil); pingErr != nil {
+				logger.InitLog.Errorf("MongoDB not reachable (%s): %v", mongodb.Url, pingErr)
 			} else {
 				logger.InitLog.Infof("Successfully connected to MongoDB (%s)", mongodb.Url)
 				nwdaf_context.SetMongoAvailable(true)

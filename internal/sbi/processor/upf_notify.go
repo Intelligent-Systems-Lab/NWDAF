@@ -38,6 +38,7 @@ type UpfNotificationItem struct {
 	Dnn                       string                      `json:"dnn,omitempty"`
 	Snssai                    *models.Snssai              `json:"snssai,omitempty"`
 	TimeStamp                 time.Time                   `json:"timeStamp"`
+	StartTime                 time.Time                   `json:"startTime"`
 	RatType                   models.RatType              `json:"ratType,omitempty"`
 	UserDataUsageMeasurements []UserDataUsageMeasurements `json:"userDataUsageMeasurements,omitempty"`
 }
@@ -210,10 +211,17 @@ func (p *Processor) processUpfNotificationItemUnified(
 	// Get GroupId if available from the original subscription resource tracking
 	groupId := ctx.GetGroupIdByCorrelationId(bucket.CorrelationId)
 
+	// Use startTime as the measurement bucket timestamp (per TS 29.564: startTime is the
+	// beginning of the measurement period). Fall back to timeStamp if startTime is absent.
+	measurementTs := item.StartTime
+	if measurementTs.IsZero() {
+		measurementTs = item.TimeStamp
+	}
+
 	// Process Measurements and save to MongoDB
 	for _, usage := range item.UserDataUsageMeasurements {
 		dataPoint := nwdaf_context.UpfDataPoint{
-			Timestamp: item.TimeStamp,
+			Timestamp: measurementTs,
 		}
 
 		record := nwdaf_context.UpfTrafficRecord{
@@ -224,7 +232,7 @@ func (p *Processor) processUpfNotificationItemUnified(
 				GroupId:       groupId,
 				Dnn:           item.Dnn,
 			},
-			Timestamp: item.TimeStamp,
+			Timestamp: measurementTs,
 		}
 
 		if usage.VolumeMeasurement != nil {
@@ -277,5 +285,5 @@ func (p *Processor) processUpfNotificationItemUnified(
 		}
 	}
 
-	data.LastUpdate = item.TimeStamp
+	data.LastUpdate = measurementTs
 }
