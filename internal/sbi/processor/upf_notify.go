@@ -217,6 +217,7 @@ func (p *Processor) processUpfNotificationItemUnified(
 	// ensuring inference aggregation and ground truth lookup use a consistent coordinate.
 	measurementTs := item.StartTime
 	if measurementTs.IsZero() {
+		logger.ProcLog.Debugf("UPF notification missing startTime, falling back to timeStamp (ip=%s)", ipAddr)
 		measurementTs = item.TimeStamp
 	}
 	if si := factory.NwdafConfig.GetSamplingInterval(); si > 0 {
