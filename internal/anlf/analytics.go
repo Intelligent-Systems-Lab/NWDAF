@@ -286,7 +286,7 @@ func aggregateObservationsByTimeBucket(obs []TrafficObservation, samplingInterva
 		if err != nil {
 			continue
 		}
-		bucketTs := (t.Unix() / si) * si
+		bucketTs := ((t.Unix() + si/2) / si) * si
 
 		b, ok := bucketMap[bucketTs]
 		if !ok {

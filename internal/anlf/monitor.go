@@ -186,12 +186,15 @@ func (a *AnlfService) lookupGroundTruth(
 	cfg := factory.NwdafConfig
 	from := pred.TargetTime
 	samplingInterval := 10
+	buffer := 0
 	if cfg != nil && cfg.Configuration != nil &&
 		cfg.Configuration.Analytics != nil &&
 		cfg.Configuration.Analytics.UeCommunication != nil {
-		samplingInterval = cfg.Configuration.Analytics.UeCommunication.SamplingIntervalOrDefault()
+		p := cfg.Configuration.Analytics.UeCommunication
+		samplingInterval = p.SamplingIntervalOrDefault()
+		buffer = p.QueryLookbackBuffer
 	}
-	to := pred.TargetTime.Add(time.Duration(samplingInterval) * time.Second)
+	to := pred.TargetTime.Add(time.Duration(samplingInterval+buffer) * time.Second)
 
 	// Primary: MongoDB time-range query
 	if cfg != nil && cfg.Configuration != nil && cfg.Configuration.Mongodb != nil &&
