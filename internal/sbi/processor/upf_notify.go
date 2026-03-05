@@ -272,9 +272,7 @@ func (p *Processor) processUpfNotificationItemUnified(
 				t.DlPacketThroughput, dataPoint.DlPacketThroughput)
 		}
 
-		data.RawUpfData = append(data.RawUpfData, dataPoint)
-
-		// Save to MongoDB natively using mongo-driver (if configured and connected)
+		// Save to MongoDB first so inference always reads from MongoDB before in-memory.
 		if nwdaf_context.IsMongoAvailable() &&
 			factory.NwdafConfig != nil && factory.NwdafConfig.Configuration != nil &&
 			factory.NwdafConfig.Configuration.Mongodb != nil {
@@ -284,6 +282,8 @@ func (p *Processor) processUpfNotificationItemUnified(
 				logger.ProcLog.Errorf("Failed to save UPF TimeSeries data: %v", err)
 			}
 		}
+
+		data.RawUpfData = append(data.RawUpfData, dataPoint)
 	}
 
 	data.LastUpdate = measurementTs
