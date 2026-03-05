@@ -20,6 +20,7 @@ uv sync  # Uses uv to manage Python environment
 - jq (JSON parsing)
 - curl
 - Python 3.10+ (managed by uv)
+- MongoDB (optional, for time-series storage; see [§6.1](#61-prerequisites) for setup)
 
 ---
 
@@ -409,6 +410,29 @@ Verifies that analytics read from MongoDB Time Series Collection instead of in-m
 - MongoDB running and accessible (URI configured in `nwdafcfg.yaml`)
 - Fake SMF+UPF server providing traffic data
 
+#### Starting MongoDB
+
+**Option A — Docker (recommended, version-independent):**
+```bash
+docker run -d --name mongodb -p 27017:27017 mongo:8
+```
+
+**Option B — Native install (Ubuntu):**
+
+The required steps vary by Ubuntu version (GPG key import + apt source setup).
+Refer to the official guide and select your Ubuntu release:
+https://www.mongodb.com/docs/manual/tutorial/install-mongodb-on-ubuntu/
+
+Once installed:
+```bash
+sudo systemctl start mongod
+```
+
+**Verify connection:**
+```bash
+mongosh --eval "db.runCommand({ ping: 1 })"
+```
+
 ### 6.2 Config (`config/nwdafcfg.yaml`)
 
 ```yaml
@@ -453,10 +477,7 @@ curl -s -X POST http://127.0.0.1:8080/nnwdaf-eventssubscription/v1/subscriptions
 
 ```bash
 # Wait ~30s for UPF data to accumulate, then:
-mongosh --eval "
-use free5gc;
-db['nwdaf.upfTrafficData'].find().sort({timestamp:-1}).limit(3).pretty()
-"
+mongosh --eval "db.getSiblingDB('free5gc').getCollection('nwdaf.upfTrafficData').find().sort({timestamp:-1}).limit(3)"
 ```
 
 ### 6.6 Verification Checklist
