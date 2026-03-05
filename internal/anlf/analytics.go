@@ -80,7 +80,6 @@ func GenerateUeCommunicationAnalytics(nwdafSubId string) models.UeCommunication 
 	if mlInfo != nil && mlInfo.IsReady() {
 		result, err := generateMlBasedUeCommunication(nwdafSubId, mlInfo, ctx)
 		if err == nil {
-			anlfLog.Infof("Using ML-based analytics for subscription %s", nwdafSubId)
 			return result
 		}
 		if err == errNoHistoricalData {
@@ -165,6 +164,9 @@ func generateMlBasedUeCommunication(
 
 	// commDur = total prediction horizon in seconds
 	commDur := int32(outputWindow * samplingInterval)
+
+	anlfLog.Infof("ML inference: sub=%s steps=%d ulVol=%d dlVol=%d confidence=%d commDur=%ds",
+		nwdafSubId, len(resp.PredictedData), totalUl, totalDl, avgConfidence, commDur)
 
 	return models.UeCommunication{
 		CommDur: commDur,
