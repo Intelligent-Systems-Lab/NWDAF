@@ -118,12 +118,12 @@ func (m *ModelParams) InputWindowOrDefault() int {
 	return 30
 }
 
-// LookbackBufferOrDefault returns LookbackBuffer with a fallback to SamplingIntervalOrDefault.
+// LookbackBufferOrDefault returns LookbackBuffer with a fallback to 2×SamplingIntervalOrDefault.
 func (m *ModelParams) LookbackBufferOrDefault() int {
 	if m.LookbackBuffer > 0 {
 		return m.LookbackBuffer
 	}
-	return m.SamplingIntervalOrDefault()
+	return 2 * m.SamplingIntervalOrDefault()
 }
 
 // OutputWindowOrDefault returns OutputWindow with a fallback to 5.

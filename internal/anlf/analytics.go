@@ -235,7 +235,7 @@ func fetchHistoricalData(
 
 	// --- Primary: MongoDB ---
 	if dbName != "" && nwdaf_context.IsMongoAvailable() && len(corrIds) > 0 {
-		since := time.Now().Add(-queryLookback)
+		since := snappedNow.Add(-queryLookback)
 		limit := inputWindow * len(corrIds)
 		records, err := nwdaf_context.QueryTrafficByMultipleCorrelationIds(
 			dbName, corrIds, since, limit,
@@ -381,7 +381,7 @@ func zipStreams(
 
 	counts := make([]string, outputLen)
 	result := make([]TrafficObservation, outputLen)
-	for pos := 0; pos < outputLen; pos++ {
+	for pos := range outputLen {
 		var agg trafficPoint
 		contributing := 0
 		for _, s := range streams {
