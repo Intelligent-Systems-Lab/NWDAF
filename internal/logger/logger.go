@@ -1,13 +1,14 @@
 package logger
 
 import (
-	"os"
-
 	"github.com/sirupsen/logrus"
+
+	logger_util "github.com/free5gc/util/logger"
 )
 
 var (
 	Log          *logrus.Logger
+	NfLog        *logrus.Entry
 	MainLog      *logrus.Entry
 	InitLog      *logrus.Entry
 	CfgLog       *logrus.Entry
@@ -23,29 +24,24 @@ var (
 )
 
 func init() {
-	Log = logrus.New()
-	Log.SetReportCaller(false)
-	Log.SetFormatter(&logrus.TextFormatter{
-		ForceColors:               true,
-		DisableColors:             false,
-		EnvironmentOverrideColors: false,
-		DisableTimestamp:          false,
-		FullTimestamp:             true,
-		TimestampFormat:           "2006-01-02T15:04:05.000Z07:00",
-	})
-	Log.SetOutput(os.Stdout)
-	Log.SetLevel(logrus.InfoLevel)
+	fieldsOrder := []string{
+		logger_util.FieldNF,
+		logger_util.FieldCategory,
+	}
 
-	MainLog = Log.WithField("component", "NWDAF").WithField("category", "Main")
-	InitLog = Log.WithField("component", "NWDAF").WithField("category", "Init")
-	CfgLog = Log.WithField("component", "NWDAF").WithField("category", "CFG")
-	CtxLog = Log.WithField("component", "NWDAF").WithField("category", "CTX")
-	SBILog = Log.WithField("component", "NWDAF").WithField("category", "SBI")
-	ProcLog = Log.WithField("component", "NWDAF").WithField("category", "Proc")
-	ConsLog = Log.WithField("component", "NWDAF").WithField("category", "Consumer")
-	GinLog = Log.WithField("component", "NWDAF").WithField("category", "GIN")
-	NotifierLog = Log.WithField("component", "NWDAF").WithField("category", "Notifier")
-	CollectorLog = Log.WithField("component", "NWDAF").WithField("category", "Collector")
-	AnlfLog = Log.WithField("component", "NWDAF").WithField("category", "AnLF")
-	MtlfLog = Log.WithField("component", "NWDAF").WithField("category", "MTLF")
+	Log = logger_util.New(fieldsOrder)
+	NfLog = Log.WithField(logger_util.FieldNF, "NWDAF")
+
+	MainLog = NfLog.WithField(logger_util.FieldCategory, "Main")
+	InitLog = NfLog.WithField(logger_util.FieldCategory, "Init")
+	CfgLog = NfLog.WithField(logger_util.FieldCategory, "CFG")
+	CtxLog = NfLog.WithField(logger_util.FieldCategory, "CTX")
+	SBILog = NfLog.WithField(logger_util.FieldCategory, "SBI")
+	ProcLog = NfLog.WithField(logger_util.FieldCategory, "Proc")
+	ConsLog = NfLog.WithField(logger_util.FieldCategory, "Consumer")
+	GinLog = NfLog.WithField(logger_util.FieldCategory, "GIN")
+	NotifierLog = NfLog.WithField(logger_util.FieldCategory, "Notifier")
+	CollectorLog = NfLog.WithField(logger_util.FieldCategory, "Collector")
+	AnlfLog = NfLog.WithField(logger_util.FieldCategory, "AnLF")
+	MtlfLog = NfLog.WithField(logger_util.FieldCategory, "MTLF")
 }
