@@ -145,7 +145,7 @@ type MtlfConfig struct {
 type AccuracyMonitorConfig struct {
 	Enabled            bool    `yaml:"enabled"`
 	CheckInterval      int     `yaml:"checkInterval,omitempty"`      // Seconds between checks (default: 60)
-	DeviationThreshold float64 `yaml:"deviationThreshold,omitempty"` // NRMSE retrain threshold (default: 0.3)
+	DeviationThreshold float64 `yaml:"deviationThreshold,omitempty"` // sMAPE retrain threshold in [0,2] (default: 0.3)
 	MinSamples         int     `yaml:"minSamples,omitempty"`         // Min samples before evaluation (default: 5)
 	WarmupDuration     int     `yaml:"warmupDuration,omitempty"`     // Seconds to skip checks after start (default: 120)
 
