@@ -4,6 +4,8 @@ package anlf
 import (
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
@@ -270,6 +272,7 @@ func aggregateObservationsByTimeBucket(obs []TrafficObservation, samplingInterva
 
 	type bucket struct {
 		ts          int64 // Unix timestamp of bucket start
+		count       int
 		TotalVol    float64
 		UlVol       float64
 		DlVol       float64
@@ -297,6 +300,7 @@ func aggregateObservationsByTimeBucket(obs []TrafficObservation, samplingInterva
 			b = &bucket{ts: bucketTs}
 			bucketMap[bucketTs] = b
 		}
+		b.count++
 		b.TotalVol += o.TotalVol
 		b.UlVol += o.UlVol
 		b.DlVol += o.DlVol
@@ -315,9 +319,11 @@ func aggregateObservationsByTimeBucket(obs []TrafficObservation, samplingInterva
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
 
+	counts := make([]string, 0, len(keys))
 	result := make([]TrafficObservation, 0, len(keys))
 	for _, k := range keys {
 		b := bucketMap[k]
+		counts = append(counts, strconv.Itoa(b.count))
 		result = append(result, TrafficObservation{
 			Ts:          time.Unix(b.ts, 0).UTC().Format(time.RFC3339),
 			TotalVol:    b.TotalVol,
@@ -332,6 +338,8 @@ func aggregateObservationsByTimeBucket(obs []TrafficObservation, samplingInterva
 			DlPktThr:    b.DlPktThr,
 		})
 	}
+	anlfLog.Debugf("Aggregation buckets [%d→%d]: %s",
+		len(obs), len(result), strings.Join(counts, ","))
 	return result
 }
 

@@ -3,6 +3,8 @@ package anlf
 import (
 	"context"
 	"math"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -133,6 +135,7 @@ func (a *AnlfService) checkModelAccuracy(
 	}
 
 	var pairs []matchedPair
+	gtCounts := make([]string, 0, len(mature))
 	for _, pred := range mature {
 		actual := a.lookupGroundTruth(nwdafCtx, pred)
 		if actual != nil {
@@ -140,8 +143,13 @@ func (a *AnlfService) checkModelAccuracy(
 				predUl: pred.PredUlVol, predDl: pred.PredDlVol,
 				actualUl: actual.ulVol, actualDl: actual.dlVol,
 			})
+			gtCounts = append(gtCounts, strconv.Itoa(actual.count))
+		} else {
+			gtCounts = append(gtCounts, "0")
 		}
 	}
+	anlfLog.Debugf("Ground truth [%d mature → %d matched]: %s",
+		len(mature), len(pairs), strings.Join(gtCounts, ","))
 
 	if len(pairs) == 0 {
 		anlfLog.Debugf("No matched pairs for model: %s", modelUrl)
@@ -174,6 +182,7 @@ func (a *AnlfService) checkModelAccuracy(
 // groundTruth holds actual measurement values for one time window.
 type groundTruth struct {
 	ulVol, dlVol int64
+	count        int // number of DB/in-memory records aggregated
 }
 
 // lookupGroundTruth finds actual UPF traffic data matching a prediction.
@@ -207,7 +216,7 @@ func (a *AnlfService) lookupGroundTruth(
 					ulVol += r.UlVolume
 					dlVol += r.DlVolume
 				}
-				return &groundTruth{ulVol: ulVol, dlVol: dlVol}
+				return &groundTruth{ulVol: ulVol, dlVol: dlVol, count: len(records)}
 			}
 			if err != nil {
 				anlfLog.Debugf("MongoDB ground truth query failed, falling back to in-memory: %v", err)
@@ -222,6 +231,7 @@ func (a *AnlfService) lookupGroundTruth(
 	}
 
 	var ulVol, dlVol int64
+	var count int
 	window := time.Duration(samplingInterval) * time.Second
 	for _, td := range dataList {
 		td.Lock()
@@ -230,6 +240,7 @@ func (a *AnlfService) lookupGroundTruth(
 			if diff >= 0 && diff < window {
 				ulVol += dp.UlVolume
 				dlVol += dp.DlVolume
+				count++
 			}
 		}
 		td.Unlock()
@@ -237,7 +248,7 @@ func (a *AnlfService) lookupGroundTruth(
 	if ulVol == 0 && dlVol == 0 {
 		return nil
 	}
-	return &groundTruth{ulVol: ulVol, dlVol: dlVol}
+	return &groundTruth{ulVol: ulVol, dlVol: dlVol, count: count}
 }
 
 // matchedPair holds a prediction-truth pair for sMAPE computation.
