@@ -5,293 +5,198 @@ import (
 	"time"
 )
 
-// rfc3339 returns the RFC3339 string for a Unix timestamp (UTC).
-// Used to build test observations with deterministic, readable timestamps.
-func rfc3339(unix int64) string {
-	return time.Unix(unix, 0).UTC().Format(time.RFC3339)
-}
-
-// makeObs builds a TrafficObservation with all 10 numeric fields set.
-func makeObs(
-	unix int64,
-	totalVol, ulVol, dlVol, totalPkts, ulPkts, dlPkts, ulThr, dlThr, ulPktThr, dlPktThr float64,
-) TrafficObservation {
-	return TrafficObservation{
-		Ts:          rfc3339(unix),
-		TotalVol:    totalVol,
-		UlVol:       ulVol,
-		DlVol:       dlVol,
-		TotalNbPkts: totalPkts,
-		UlNbPkts:    ulPkts,
-		DlNbPkts:    dlPkts,
-		UlThr:       ulThr,
-		DlThr:       dlThr,
-		UlPktThr:    ulPktThr,
-		DlPktThr:    dlPktThr,
+// makePoint builds a trafficPoint for test inputs.
+func makePoint(
+	totalVol, ulVol, dlVol, totalPkts, ulPkts, dlPkts,
+	ulThr, dlThr, ulPktThr, dlPktThr float64,
+) trafficPoint {
+	return trafficPoint{
+		TotalVol: totalVol, UlVol: ulVol, DlVol: dlVol,
+		TotalNbPkts: totalPkts, UlNbPkts: ulPkts, DlNbPkts: dlPkts,
+		UlThr: ulThr, DlThr: dlThr, UlPktThr: ulPktThr, DlPktThr: dlPktThr,
 	}
 }
 
-// TestAggregateObservationsByTimeBucket_Guard checks the early-return guard conditions.
-func TestAggregateObservationsByTimeBucket_Guard(t *testing.T) {
-	tests := []struct {
-		name             string
-		obs              []TrafficObservation
-		samplingInterval int
-		wantLen          int
-		wantFirstUlVol   float64
-	}{
-		{
-			name:             "nil input returns nil",
-			obs:              nil,
-			samplingInterval: 5,
-			wantLen:          0,
-		},
-		{
-			name:             "empty slice returns empty",
-			obs:              []TrafficObservation{},
-			samplingInterval: 5,
-			wantLen:          0,
-		},
-		{
-			name:             "zero samplingInterval returns obs unchanged",
-			obs:              []TrafficObservation{{Ts: rfc3339(100), UlVol: 10}},
-			samplingInterval: 0,
-			wantLen:          1,
-			wantFirstUlVol:   10,
-		},
-		{
-			name:             "negative samplingInterval returns obs unchanged",
-			obs:              []TrafficObservation{{Ts: rfc3339(100), UlVol: 20}},
-			samplingInterval: -1,
-			wantLen:          1,
-			wantFirstUlVol:   20,
-		},
-	}
+// snapped returns a time.Time snapped to Unix timestamp unix (UTC).
+func snapped(unix int64) time.Time { return time.Unix(unix, 0).UTC() }
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := aggregateObservationsByTimeBucket(tt.obs, tt.samplingInterval)
-			if len(result) != tt.wantLen {
-				t.Errorf("len = %d, want %d", len(result), tt.wantLen)
-			}
-			if tt.wantLen > 0 && result[0].UlVol != tt.wantFirstUlVol {
-				t.Errorf("result[0].UlVol = %v, want %v", result[0].UlVol, tt.wantFirstUlVol)
-			}
-		})
+// TestZipStreams_Empty verifies that empty input returns nil.
+func TestZipStreams_Empty(t *testing.T) {
+	result := zipStreams(nil, 5, 5, snapped(100))
+	if result != nil {
+		t.Errorf("want nil, got %v", result)
+	}
+	result = zipStreams([][]trafficPoint{}, 5, 5, snapped(100))
+	if result != nil {
+		t.Errorf("want nil for empty streams, got %v", result)
 	}
 }
 
-// TestAggregateObservationsByTimeBucket_SingleSupi verifies that a single SUPI
-// subscription (one record per time bucket) passes through unchanged.
-func TestAggregateObservationsByTimeBucket_SingleSupi(t *testing.T) {
-	obs := []TrafficObservation{
-		{Ts: rfc3339(100), UlVol: 10, DlVol: 20},
-		{Ts: rfc3339(105), UlVol: 12, DlVol: 25},
-		{Ts: rfc3339(110), UlVol: 11, DlVol: 22},
+// TestZipStreams_SingleStream verifies that a single stream with 3 points produces
+// 3 output entries with correct values and derived timestamps.
+func TestZipStreams_SingleStream(t *testing.T) {
+	si := 5
+	now := snapped(115) // snappedNow
+	stream := []trafficPoint{
+		{UlVol: 10, DlVol: 20}, // pos 0 → now - 2*si = t=105
+		{UlVol: 12, DlVol: 25}, // pos 1 → now - 1*si = t=110
+		{UlVol: 11, DlVol: 22}, // pos 2 → now        = t=115
 	}
-
-	result := aggregateObservationsByTimeBucket(obs, 5)
+	result := zipStreams([][]trafficPoint{stream}, 5, si, now)
 
 	if len(result) != 3 {
 		t.Fatalf("len = %d, want 3", len(result))
 	}
 	wantUl := []float64{10, 12, 11}
 	wantDl := []float64{20, 25, 22}
-	for i := range result {
-		if result[i].UlVol != wantUl[i] {
-			t.Errorf("result[%d].UlVol = %v, want %v", i, result[i].UlVol, wantUl[i])
+	wantTs := []time.Time{snapped(105), snapped(110), snapped(115)}
+	for i, r := range result {
+		if r.UlVol != wantUl[i] {
+			t.Errorf("[%d] UlVol = %v, want %v", i, r.UlVol, wantUl[i])
 		}
-		if result[i].DlVol != wantDl[i] {
-			t.Errorf("result[%d].DlVol = %v, want %v", i, result[i].DlVol, wantDl[i])
+		if r.DlVol != wantDl[i] {
+			t.Errorf("[%d] DlVol = %v, want %v", i, r.DlVol, wantDl[i])
 		}
-	}
-}
-
-// TestAggregateObservationsByTimeBucket_GroupThreeSupis is the primary regression
-// test for the group-subscription bug: 3 SUPIs each reporting at t=100/105/110
-// must be summed into 3 group-level observations, not concatenated into 9.
-func TestAggregateObservationsByTimeBucket_GroupThreeSupis(t *testing.T) {
-	// samplingInterval = 5s, so t=100/105/110 each form a distinct bucket
-	obs := []TrafficObservation{
-		// t=100: SUPI-1, SUPI-2, SUPI-3
-		{Ts: rfc3339(100), UlVol: 10, DlVol: 20, TotalVol: 30, TotalNbPkts: 5},
-		{Ts: rfc3339(100), UlVol: 15, DlVol: 30, TotalVol: 45, TotalNbPkts: 8},
-		{Ts: rfc3339(100), UlVol: 5, DlVol: 10, TotalVol: 15, TotalNbPkts: 3},
-		// t=105: SUPI-1, SUPI-2, SUPI-3
-		{Ts: rfc3339(105), UlVol: 12, DlVol: 25, TotalVol: 37, TotalNbPkts: 6},
-		{Ts: rfc3339(105), UlVol: 18, DlVol: 35, TotalVol: 53, TotalNbPkts: 9},
-		{Ts: rfc3339(105), UlVol: 8, DlVol: 15, TotalVol: 23, TotalNbPkts: 4},
-		// t=110: SUPI-1, SUPI-2, SUPI-3
-		{Ts: rfc3339(110), UlVol: 11, DlVol: 22, TotalVol: 33, TotalNbPkts: 5},
-		{Ts: rfc3339(110), UlVol: 16, DlVol: 32, TotalVol: 48, TotalNbPkts: 8},
-		{Ts: rfc3339(110), UlVol: 6, DlVol: 12, TotalVol: 18, TotalNbPkts: 3},
-	}
-
-	result := aggregateObservationsByTimeBucket(obs, 5)
-
-	if len(result) != 3 {
-		t.Fatalf("len = %d, want 3 (9 per-SUPI records should collapse to 3 group buckets)", len(result))
-	}
-
-	tests := []struct {
-		bucketIdx    int
-		wantUlVol    float64
-		wantDlVol    float64
-		wantTotalVol float64
-		wantPkts     float64
-		wantTs       string
-	}{
-		{0, 30, 60, 90, 16, rfc3339(100)},  // 10+15+5, 20+30+10, 30+45+15, 5+8+3
-		{1, 38, 75, 113, 19, rfc3339(105)}, // 12+18+8, 25+35+15, 37+53+23, 6+9+4
-		{2, 33, 66, 99, 16, rfc3339(110)},  // 11+16+6, 22+32+12, 33+48+18, 5+8+3
-	}
-
-	for _, tt := range tests {
-		r := result[tt.bucketIdx]
-		if r.Ts != tt.wantTs {
-			t.Errorf("result[%d].Ts = %v, want %v", tt.bucketIdx, r.Ts, tt.wantTs)
-		}
-		if r.UlVol != tt.wantUlVol {
-			t.Errorf("result[%d].UlVol = %v, want %v", tt.bucketIdx, r.UlVol, tt.wantUlVol)
-		}
-		if r.DlVol != tt.wantDlVol {
-			t.Errorf("result[%d].DlVol = %v, want %v", tt.bucketIdx, r.DlVol, tt.wantDlVol)
-		}
-		if r.TotalVol != tt.wantTotalVol {
-			t.Errorf("result[%d].TotalVol = %v, want %v", tt.bucketIdx, r.TotalVol, tt.wantTotalVol)
-		}
-		if r.TotalNbPkts != tt.wantPkts {
-			t.Errorf("result[%d].TotalNbPkts = %v, want %v", tt.bucketIdx, r.TotalNbPkts, tt.wantPkts)
+		wantTsStr := wantTs[i].UTC().Format(time.RFC3339)
+		if r.Ts != wantTsStr {
+			t.Errorf("[%d] Ts = %v, want %v", i, r.Ts, wantTsStr)
 		}
 	}
 }
 
-// TestAggregateObservationsByTimeBucket_MisalignedTimestamps verifies that records
-// with timestamps within the same samplingInterval window are merged into one bucket.
-// e.g. t=100, t=101, t=102 all fall in bucket [100,105) when si=5.
-func TestAggregateObservationsByTimeBucket_MisalignedTimestamps(t *testing.T) {
-	obs := []TrafficObservation{
-		{Ts: rfc3339(100), UlVol: 10, DlVol: 20},
-		{Ts: rfc3339(101), UlVol: 15, DlVol: 30},
-		{Ts: rfc3339(102), UlVol: 5, DlVol: 10},
+// TestZipStreams_MultiStreamSameLength verifies that 3 streams of equal length are
+// summed correctly at each position.
+func TestZipStreams_MultiStreamSameLength(t *testing.T) {
+	now := snapped(110)
+	streams := [][]trafficPoint{
+		{{UlVol: 10, DlVol: 20}, {UlVol: 12, DlVol: 25}, {UlVol: 11, DlVol: 22}},
+		{{UlVol: 15, DlVol: 30}, {UlVol: 18, DlVol: 35}, {UlVol: 16, DlVol: 32}},
+		{{UlVol: 5, DlVol: 10}, {UlVol: 8, DlVol: 15}, {UlVol: 6, DlVol: 12}},
 	}
-
-	result := aggregateObservationsByTimeBucket(obs, 5)
-
-	if len(result) != 1 {
-		t.Fatalf("len = %d, want 1 (t=100/101/102 are all in the same 5s bucket)", len(result))
-	}
-	if result[0].UlVol != 30 { // 10+15+5
-		t.Errorf("UlVol = %v, want 30", result[0].UlVol)
-	}
-	if result[0].DlVol != 60 { // 20+30+10
-		t.Errorf("DlVol = %v, want 60", result[0].DlVol)
-	}
-	// Bucket Ts should be aligned to the bucket start (truncated, not rounded)
-	if result[0].Ts != rfc3339(100) {
-		t.Errorf("Ts = %v, want %v (bucket start, not raw timestamp)", result[0].Ts, rfc3339(100))
-	}
-}
-
-// TestAggregateObservationsByTimeBucket_SortedOutput verifies that buckets are always
-// returned in ascending chronological order regardless of input order.
-func TestAggregateObservationsByTimeBucket_SortedOutput(t *testing.T) {
-	// Input intentionally in reverse order
-	obs := []TrafficObservation{
-		{Ts: rfc3339(110), UlVol: 11},
-		{Ts: rfc3339(100), UlVol: 10},
-		{Ts: rfc3339(105), UlVol: 12},
-	}
-
-	result := aggregateObservationsByTimeBucket(obs, 5)
+	result := zipStreams(streams, 5, 5, now)
 
 	if len(result) != 3 {
 		t.Fatalf("len = %d, want 3", len(result))
 	}
-	expectedTs := []string{rfc3339(100), rfc3339(105), rfc3339(110)}
-	for i, wantTs := range expectedTs {
-		if result[i].Ts != wantTs {
-			t.Errorf("result[%d].Ts = %v, want %v (output must be sorted ASC)", i, result[i].Ts, wantTs)
+	wantUl := []float64{30, 38, 33} // 10+15+5, 12+18+8, 11+16+6
+	wantDl := []float64{60, 75, 66} // 20+30+10, 25+35+15, 22+32+12
+	for i, r := range result {
+		if r.UlVol != wantUl[i] {
+			t.Errorf("[%d] UlVol = %v, want %v", i, r.UlVol, wantUl[i])
+		}
+		if r.DlVol != wantDl[i] {
+			t.Errorf("[%d] DlVol = %v, want %v", i, r.DlVol, wantDl[i])
 		}
 	}
 }
 
-// TestAggregateObservationsByTimeBucket_InvalidTimestampSkipped verifies that
-// observations with unparseable Ts are silently dropped without panic.
-func TestAggregateObservationsByTimeBucket_InvalidTimestampSkipped(t *testing.T) {
-	obs := []TrafficObservation{
-		{Ts: "not-a-timestamp", UlVol: 99},
-		{Ts: rfc3339(100), UlVol: 10, DlVol: 20},
-		{Ts: "", UlVol: 99},
+// TestZipStreams_DifferentLengthAlignedFromEnd verifies that streams of different
+// lengths are aligned from the end: the shorter stream's head is padded with zeros.
+// A=5pts, B=3pts → output has 5 entries; B contributes 0 at positions 0 and 1.
+func TestZipStreams_DifferentLengthAlignedFromEnd(t *testing.T) {
+	now := snapped(120)
+	streamA := []trafficPoint{ // 5 points
+		{UlVol: 10}, {UlVol: 11}, {UlVol: 12}, {UlVol: 13}, {UlVol: 14},
 	}
-
-	result := aggregateObservationsByTimeBucket(obs, 5)
-
-	if len(result) != 1 {
-		t.Fatalf("len = %d, want 1 (invalid Ts entries must be skipped)", len(result))
+	streamB := []trafficPoint{ // 3 points — aligns to positions 2,3,4
+		{UlVol: 100}, {UlVol: 101}, {UlVol: 102},
 	}
+	result := zipStreams([][]trafficPoint{streamA, streamB}, 10, 5, now)
+
+	if len(result) != 5 {
+		t.Fatalf("len = %d, want 5", len(result))
+	}
+	// pos 0,1: only A contributes (B is too short)
 	if result[0].UlVol != 10 {
-		t.Errorf("UlVol = %v, want 10 (only the valid entry should contribute)", result[0].UlVol)
+		t.Errorf("[0] UlVol = %v, want 10 (only A)", result[0].UlVol)
+	}
+	if result[1].UlVol != 11 {
+		t.Errorf("[1] UlVol = %v, want 11 (only A)", result[1].UlVol)
+	}
+	// pos 2,3,4: A + B
+	wantUl := []float64{112, 114, 116} // A[2]+B[0], A[3]+B[1], A[4]+B[2]
+	for i, pos := range []int{2, 3, 4} {
+		if result[pos].UlVol != wantUl[i] {
+			t.Errorf("[%d] UlVol = %v, want %v", pos, result[pos].UlVol, wantUl[i])
+		}
 	}
 }
 
-// TestAggregateObservationsByTimeBucket_BoundaryJitter verifies that floor bucketing
-// keeps jittered timestamps within their correct bucket instead of rounding them up
-// into the next bucket. e.g. t=98 (3s before boundary at 100) stays in bucket 95.
-func TestAggregateObservationsByTimeBucket_BoundaryJitter(t *testing.T) {
-	obs := []TrafficObservation{
-		{Ts: rfc3339(95), UlVol: 10},
-		{Ts: rfc3339(98), UlVol: 20}, // jitter: still in [95,100)
-		{Ts: rfc3339(100), UlVol: 30},
+// TestZipStreams_AllFieldsSummed verifies all 10 numeric fields are summed correctly.
+func TestZipStreams_AllFieldsSummed(t *testing.T) {
+	now := snapped(100)
+	streams := [][]trafficPoint{
+		{makePoint(100, 40, 60, 10, 4, 6, 1, 2, 3, 4)},
+		{makePoint(200, 80, 120, 20, 8, 12, 3, 4, 5, 6)},
 	}
-
-	result := aggregateObservationsByTimeBucket(obs, 5)
-
-	if len(result) != 2 {
-		t.Fatalf("len = %d, want 2 (bucket 95 and bucket 100)", len(result))
-	}
-	if result[0].UlVol != 30 { // 10+20 in bucket 95
-		t.Errorf("bucket 95 UlVol = %v, want 30", result[0].UlVol)
-	}
-	if result[1].UlVol != 30 { // 30 in bucket 100
-		t.Errorf("bucket 100 UlVol = %v, want 30", result[1].UlVol)
-	}
-}
-
-// TestAggregateObservationsByTimeBucket_AllFieldsSummed verifies that all 10 numeric
-// fields are correctly summed when two observations share the same bucket.
-func TestAggregateObservationsByTimeBucket_AllFieldsSummed(t *testing.T) {
-	obs := []TrafficObservation{
-		makeObs(100, 100, 40, 60, 10, 4, 6, 1, 2, 3, 4),
-		makeObs(100, 200, 80, 120, 20, 8, 12, 3, 4, 5, 6),
-	}
-
-	result := aggregateObservationsByTimeBucket(obs, 5)
+	result := zipStreams(streams, 1, 5, now)
 
 	if len(result) != 1 {
 		t.Fatalf("len = %d, want 1", len(result))
 	}
 	r := result[0]
-
 	cases := []struct {
 		field string
 		got   float64
 		want  float64
 	}{
-		{"TotalVol", r.TotalVol, 300},      // 100+200
-		{"UlVol", r.UlVol, 120},            // 40+80
-		{"DlVol", r.DlVol, 180},            // 60+120
-		{"TotalNbPkts", r.TotalNbPkts, 30}, // 10+20
-		{"UlNbPkts", r.UlNbPkts, 12},       // 4+8
-		{"DlNbPkts", r.DlNbPkts, 18},       // 6+12
-		{"UlThr", r.UlThr, 4},              // 1+3
-		{"DlThr", r.DlThr, 6},              // 2+4
-		{"UlPktThr", r.UlPktThr, 8},        // 3+5
-		{"DlPktThr", r.DlPktThr, 10},       // 4+6
+		{"TotalVol", r.TotalVol, 300},
+		{"UlVol", r.UlVol, 120},
+		{"DlVol", r.DlVol, 180},
+		{"TotalNbPkts", r.TotalNbPkts, 30},
+		{"UlNbPkts", r.UlNbPkts, 12},
+		{"DlNbPkts", r.DlNbPkts, 18},
+		{"UlThr", r.UlThr, 4},
+		{"DlThr", r.DlThr, 6},
+		{"UlPktThr", r.UlPktThr, 8},
+		{"DlPktThr", r.DlPktThr, 10},
 	}
 	for _, c := range cases {
 		if c.got != c.want {
 			t.Errorf("%s = %v, want %v", c.field, c.got, c.want)
+		}
+	}
+}
+
+// TestZipStreams_DerivedTimestamps verifies output Ts values are derived from
+// snappedNow regardless of input data timestamps.
+func TestZipStreams_DerivedTimestamps(t *testing.T) {
+	si := 5
+	now := snapped(100) // snappedNow
+	stream := []trafficPoint{{UlVol: 1}, {UlVol: 2}, {UlVol: 3}}
+	result := zipStreams([][]trafficPoint{stream}, 5, si, now)
+
+	if len(result) != 3 {
+		t.Fatalf("len = %d, want 3", len(result))
+	}
+	// outputLen=3: pos0→now-2*si=t=90, pos1→now-1*si=t=95, pos2→now=t=100
+	wantTs := []time.Time{snapped(90), snapped(95), snapped(100)}
+	for i, wt := range wantTs {
+		want := wt.UTC().Format(time.RFC3339)
+		if result[i].Ts != want {
+			t.Errorf("[%d] Ts = %v, want %v", i, result[i].Ts, want)
+		}
+	}
+}
+
+// TestZipStreams_InputWindowCap verifies that outputLen is capped at inputWindow
+// even when streams are longer.
+func TestZipStreams_InputWindowCap(t *testing.T) {
+	now := snapped(150)
+	stream := make([]trafficPoint, 10) // 10 points, but inputWindow=5
+	for i := range stream {
+		stream[i].UlVol = float64(i + 1)
+	}
+	result := zipStreams([][]trafficPoint{stream}, 5, 5, now)
+
+	if len(result) != 5 {
+		t.Fatalf("len = %d, want 5 (capped at inputWindow)", len(result))
+	}
+	// Should be the last 5: UlVol = 6,7,8,9,10
+	wantUl := []float64{6, 7, 8, 9, 10}
+	for i, r := range result {
+		if r.UlVol != wantUl[i] {
+			t.Errorf("[%d] UlVol = %v, want %v", i, r.UlVol, wantUl[i])
 		}
 	}
 }

@@ -3,7 +3,7 @@ package anlf
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -120,8 +120,13 @@ func generateMlBasedUeCommunication(
 	outputWindow := params.OutputWindowOrDefault()
 	samplingInterval := params.SamplingIntervalOrDefault()
 
+	// Snap now to the current period boundary so TargetTime aligns with UPF startTime,
+	// and so fetchHistoricalData can derive clean output timestamps.
+	si64 := int64(samplingInterval)
+	snappedNow := time.Unix((now.Unix()/si64)*si64, 0)
+
 	// Fetch historical data — prefer MongoDB, fall back to in-memory
-	historicalData, dnn := fetchHistoricalData(nwdafSubId, ctx, params)
+	historicalData, dnn := fetchHistoricalData(nwdafSubId, ctx, params, snappedNow)
 	if len(historicalData) == 0 {
 		return models.UeCommunication{}, errNoHistoricalData
 	}
@@ -140,9 +145,6 @@ func generateMlBasedUeCommunication(
 	// Aggregate predicted steps
 	var totalUl, totalDl int64
 	var totalConfidence int32
-	// Snap now to the current period boundary so TargetTime aligns with UPF startTime.
-	si64 := int64(samplingInterval)
-	snappedNow := time.Unix((now.Unix()/si64)*si64, 0)
 	for i, pred := range resp.PredictedData {
 		totalUl += pred.TrafChar.UlVol
 		totalDl += pred.TrafChar.DlVol
@@ -198,16 +200,26 @@ func getUeCommunicationModelParams() *factory.ModelParams {
 	return &factory.ModelParams{} // zero value → all helpers return defaults
 }
 
+// trafficPoint holds the numeric fields of a single UPF measurement.
+// Used as the common intermediate type for sequence alignment.
+type trafficPoint struct {
+	TotalVol, UlVol, DlVol           float64
+	TotalNbPkts, UlNbPkts, DlNbPkts  float64
+	UlThr, DlThr, UlPktThr, DlPktThr float64
+}
+
 // fetchHistoricalData retrieves recent UPF traffic data for ML prediction.
-// Primary source: MongoDB time-series collection (time-aligned, bounded query).
-// Fallback: in-memory RawUpfData (available even when MongoDB is not configured).
+// Primary source: MongoDB (per-corrId query). Fallback: in-memory RawUpfData.
 //
-// For group subscriptions (multiple corrIds), raw per-SUPI records are aggregated
-// into a single group-level time series before returning.
+// Records are grouped by correlationId (one stream per UE), trimmed to the most
+// recent inputWindow points each, then zipped by sequence position (index from the
+// end). Timestamps are never used for cross-stream alignment; output Ts values are
+// derived from snappedNow so they are perfectly grid-aligned regardless of jitter.
 func fetchHistoricalData(
 	nwdafSubId string,
 	ctx *nwdaf_context.NWDAFContext,
 	params *factory.ModelParams,
+	snappedNow time.Time,
 ) ([]TrafficObservation, string) {
 	cfg := factory.NwdafConfig
 	dbName := ""
@@ -217,194 +229,201 @@ func fetchHistoricalData(
 
 	inputWindow := params.InputWindowOrDefault()
 	samplingInterval := params.SamplingIntervalOrDefault()
-	queryLookback := time.Duration(params.QueryLookback()) * time.Second
+	queryLookback := time.Duration(params.QueryLookback()+params.LookbackBufferOrDefault()) * time.Second
 
-	var obs []TrafficObservation
-	var dnn string
+	corrIds := ctx.GetCorrelationIdsByNwdafSubId(nwdafSubId)
 
 	// --- Primary: MongoDB ---
-	if dbName != "" && nwdaf_context.IsMongoAvailable() {
-		corrIds := ctx.GetCorrelationIdsByNwdafSubId(nwdafSubId)
-		if len(corrIds) > 0 {
-			since := time.Now().Add(-queryLookback)
-			// Multiply limit by number of corrIds so each stream can contribute inputWindow records.
-			limit := inputWindow * len(corrIds)
-			records, err := nwdaf_context.QueryTrafficByMultipleCorrelationIds(
-				dbName, corrIds, since, limit,
-			)
-			if err == nil && len(records) > 0 {
-				anlfLog.Debugf("Using %d MongoDB records for ML prediction (nwdafSubId=%s)",
-					len(records), nwdafSubId)
-				obs, dnn = upfRecordsToObservations(records)
+	if dbName != "" && nwdaf_context.IsMongoAvailable() && len(corrIds) > 0 {
+		since := time.Now().Add(-queryLookback)
+		limit := inputWindow * len(corrIds)
+		records, err := nwdaf_context.QueryTrafficByMultipleCorrelationIds(
+			dbName, corrIds, since, limit,
+		)
+		if err == nil && len(records) > 0 {
+			anlfLog.Debugf("Using %d MongoDB records for ML prediction (nwdafSubId=%s, corrIds=%d)",
+				len(records), nwdafSubId, len(corrIds))
+			obs, dnn := alignAndZipRecords(corrIds, records, inputWindow, samplingInterval, snappedNow)
+			if len(obs) > 0 {
+				return obs, dnn
 			}
-			if err != nil {
-				anlfLog.Warnf(
-					"MongoDB query failed for ML prediction, falling back to in-memory: %v", err)
-			}
+		}
+		if err != nil {
+			anlfLog.Warnf("MongoDB query failed for ML prediction, falling back to in-memory: %v", err)
 		}
 	}
 
 	// --- Fallback: in-memory ---
-	if obs == nil {
-		anlfLog.Debugf("Using in-memory data for ML prediction (nwdafSubId=%s)", nwdafSubId)
-		obs, dnn = inMemoryToObservations(ctx, nwdafSubId)
-	}
-
-	// Aggregate per-SUPI streams into a single group-level time series by summing
-	// all metrics within each samplingInterval-aligned time bucket.
-	obs = aggregateObservationsByTimeBucket(obs, samplingInterval)
-
-	// Trim to inputWindow (most recent buckets)
-	if len(obs) > inputWindow {
-		obs = obs[len(obs)-inputWindow:]
-	}
-
-	return obs, dnn
+	anlfLog.Debugf("Using in-memory data for ML prediction (nwdafSubId=%s)", nwdafSubId)
+	return alignAndZipInMemory(corrIds, ctx, inputWindow, samplingInterval, snappedNow)
 }
 
-// aggregateObservationsByTimeBucket groups observations by time bucket
-// (timestamp truncated to samplingInterval seconds) and sums all numeric metrics
-// within each bucket. This merges per-SUPI streams into a single group-level series.
-func aggregateObservationsByTimeBucket(obs []TrafficObservation, samplingInterval int) []TrafficObservation {
-	if len(obs) == 0 || samplingInterval <= 0 {
-		return obs
+// alignAndZipRecords groups MongoDB records by correlationId, trims each stream to
+// the most recent inputWindow points, then zips all streams by sequence position
+// (index from the end) summing values at each position.
+// All expected corrIds (including those with no records) are pre-initialized so
+// missing streams contribute zeros. Output Ts values are derived from snappedNow.
+func alignAndZipRecords(
+	corrIds []string,
+	records []nwdaf_context.UpfTrafficRecord,
+	inputWindow, samplingInterval int,
+	snappedNow time.Time,
+) ([]TrafficObservation, string) {
+	byCorr := make(map[string][]nwdaf_context.UpfTrafficRecord, len(corrIds))
+	for _, id := range corrIds {
+		byCorr[id] = nil
 	}
-
-	type bucket struct {
-		ts          int64 // Unix timestamp of bucket start
-		count       int
-		TotalVol    float64
-		UlVol       float64
-		DlVol       float64
-		TotalNbPkts float64
-		UlNbPkts    float64
-		DlNbPkts    float64
-		UlThr       float64
-		DlThr       float64
-		UlPktThr    float64
-		DlPktThr    float64
-	}
-
-	bucketMap := make(map[int64]*bucket)
-	si := int64(samplingInterval)
-
-	for _, o := range obs {
-		t, err := time.Parse(time.RFC3339, o.Ts)
-		if err != nil {
-			continue
-		}
-		bucketTs := (t.Unix() / si) * si
-
-		b, ok := bucketMap[bucketTs]
-		if !ok {
-			b = &bucket{ts: bucketTs}
-			bucketMap[bucketTs] = b
-		}
-		b.count++
-		b.TotalVol += o.TotalVol
-		b.UlVol += o.UlVol
-		b.DlVol += o.DlVol
-		b.TotalNbPkts += o.TotalNbPkts
-		b.UlNbPkts += o.UlNbPkts
-		b.DlNbPkts += o.DlNbPkts
-		b.UlThr += o.UlThr
-		b.DlThr += o.DlThr
-		b.UlPktThr += o.UlPktThr
-		b.DlPktThr += o.DlPktThr
-	}
-
-	keys := make([]int64, 0, len(bucketMap))
-	for k := range bucketMap {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
-
-	counts := make([]string, 0, len(keys))
-	result := make([]TrafficObservation, 0, len(keys))
-	for _, k := range keys {
-		b := bucketMap[k]
-		counts = append(counts, strconv.Itoa(b.count))
-		result = append(result, TrafficObservation{
-			Ts:          time.Unix(b.ts, 0).UTC().Format(time.RFC3339),
-			TotalVol:    b.TotalVol,
-			UlVol:       b.UlVol,
-			DlVol:       b.DlVol,
-			TotalNbPkts: b.TotalNbPkts,
-			UlNbPkts:    b.UlNbPkts,
-			DlNbPkts:    b.DlNbPkts,
-			UlThr:       b.UlThr,
-			DlThr:       b.DlThr,
-			UlPktThr:    b.UlPktThr,
-			DlPktThr:    b.DlPktThr,
-		})
-	}
-	anlfLog.Debugf("Aggregation buckets [%d→%d]: %s",
-		len(obs), len(result), strings.Join(counts, ","))
-	return result
-}
-
-// upfRecordsToObservations converts MongoDB UpfTrafficRecord slice to ML input format.
-// All 10 features are filled; missing fields default to 0.
-func upfRecordsToObservations(records []nwdaf_context.UpfTrafficRecord) ([]TrafficObservation, string) {
-	obs := make([]TrafficObservation, 0, len(records))
 	dnn := "internet"
 	for _, r := range records {
-		obs = append(obs, TrafficObservation{
-			Ts:          r.Timestamp.Format(time.RFC3339),
-			TotalVol:    float64(r.TotalVolume),
-			UlVol:       float64(r.UlVolume),
-			DlVol:       float64(r.DlVolume),
-			TotalNbPkts: float64(r.TotalNbOfPackets),
-			UlNbPkts:    float64(r.UlNbOfPackets),
-			DlNbPkts:    float64(r.DlNbOfPackets),
-			UlThr:       r.UlThroughput,
-			DlThr:       r.DlThroughput,
-			UlPktThr:    r.UlPacketThroughput,
-			DlPktThr:    r.DlPacketThroughput,
-		})
+		byCorr[r.Metadata.CorrelationId] = append(byCorr[r.Metadata.CorrelationId], r)
 		if r.Metadata.Dnn != "" {
 			dnn = r.Metadata.Dnn
 		}
 	}
-	return obs, dnn
-}
 
-// inMemoryToObservations reads from in-memory store (fallback when MongoDB unavailable).
-// All 10 features are filled; missing fields default to 0.
-// Returns all available data points across all corrIds; trimming is done by the caller
-// after aggregation.
-func inMemoryToObservations(
-	ctx *nwdaf_context.NWDAFContext,
-	nwdafSubId string,
-) ([]TrafficObservation, string) {
-	trafficDataList := ctx.GetTrafficDataByNwdafSubId(nwdafSubId)
-	obs := make([]TrafficObservation, 0)
-	dnn := "internet"
-
-	for _, trafficData := range trafficDataList {
-		trafficData.Lock()
-		for _, dp := range trafficData.RawUpfData {
-			obs = append(obs, TrafficObservation{
-				Ts:          dp.Timestamp.Format(time.RFC3339),
-				TotalVol:    float64(dp.TotalVolume),
-				UlVol:       float64(dp.UlVolume),
-				DlVol:       float64(dp.DlVolume),
-				TotalNbPkts: float64(dp.TotalNbOfPackets),
-				UlNbPkts:    float64(dp.UlNbOfPackets),
-				DlNbPkts:    float64(dp.DlNbOfPackets),
-				UlThr:       dp.UlThroughput,
-				DlThr:       dp.DlThroughput,
-				UlPktThr:    dp.UlPacketThroughput,
-				DlPktThr:    dp.DlPacketThroughput,
-			})
+	streams := make([][]trafficPoint, 0, len(corrIds))
+	for _, id := range corrIds {
+		recs := byCorr[id]
+		slices.SortFunc(recs, func(a, b nwdaf_context.UpfTrafficRecord) int {
+			return a.Timestamp.Compare(b.Timestamp)
+		})
+		if len(recs) > inputWindow {
+			recs = recs[len(recs)-inputWindow:]
 		}
-		if trafficData.Dnn != "" {
-			dnn = trafficData.Dnn
+		pts := make([]trafficPoint, len(recs))
+		for i, r := range recs {
+			pts[i] = trafficPoint{
+				TotalVol:    float64(r.TotalVolume),
+				UlVol:       float64(r.UlVolume),
+				DlVol:       float64(r.DlVolume),
+				TotalNbPkts: float64(r.TotalNbOfPackets),
+				UlNbPkts:    float64(r.UlNbOfPackets),
+				DlNbPkts:    float64(r.DlNbOfPackets),
+				UlThr:       r.UlThroughput,
+				DlThr:       r.DlThroughput,
+				UlPktThr:    r.UlPacketThroughput,
+				DlPktThr:    r.DlPacketThroughput,
+			}
 		}
-		trafficData.Unlock()
+		streams = append(streams, pts)
 	}
 
-	return obs, dnn
+	return zipStreams(streams, inputWindow, samplingInterval, snappedNow), dnn
+}
+
+// alignAndZipInMemory performs the same sequence alignment as alignAndZipRecords
+// but reads from the in-memory TrafficData store.
+func alignAndZipInMemory(
+	corrIds []string,
+	ctx *nwdaf_context.NWDAFContext,
+	inputWindow, samplingInterval int,
+	snappedNow time.Time,
+) ([]TrafficObservation, string) {
+	dnn := "internet"
+	streams := make([][]trafficPoint, 0, len(corrIds))
+
+	for _, corrId := range corrIds {
+		allData := ctx.GetAllTrafficDataForCorrelation(corrId)
+		var pts []trafficPoint
+		for _, td := range allData {
+			td.Lock()
+			if td.Dnn != "" {
+				dnn = td.Dnn
+			}
+			// RawUpfData is appended in arrival order (ascending timestamp).
+			for _, dp := range td.RawUpfData {
+				pts = append(pts, trafficPoint{
+					TotalVol:    float64(dp.TotalVolume),
+					UlVol:       float64(dp.UlVolume),
+					DlVol:       float64(dp.DlVolume),
+					TotalNbPkts: float64(dp.TotalNbOfPackets),
+					UlNbPkts:    float64(dp.UlNbOfPackets),
+					DlNbPkts:    float64(dp.DlNbOfPackets),
+					UlThr:       dp.UlThroughput,
+					DlThr:       dp.DlThroughput,
+					UlPktThr:    dp.UlPacketThroughput,
+					DlPktThr:    dp.DlPacketThroughput,
+				})
+			}
+			td.Unlock()
+		}
+		if len(pts) > inputWindow {
+			pts = pts[len(pts)-inputWindow:]
+		}
+		streams = append(streams, pts)
+	}
+
+	return zipStreams(streams, inputWindow, samplingInterval, snappedNow), dnn
+}
+
+// zipStreams zips multiple per-corrId trafficPoint streams by sequence position from
+// the end, sums values across streams at each position, and assigns derived Ts values.
+// Streams shorter than outputLen are left-padded with zeros (no data → contributes 0).
+// outputLen = min(inputWindow, maxStreamLen).
+func zipStreams(
+	streams [][]trafficPoint,
+	inputWindow, samplingInterval int,
+	snappedNow time.Time,
+) []TrafficObservation {
+	if len(streams) == 0 {
+		return nil
+	}
+	maxLen := 0
+	for _, s := range streams {
+		if len(s) > maxLen {
+			maxLen = len(s)
+		}
+	}
+	outputLen := min(maxLen, inputWindow)
+	if outputLen == 0 {
+		return nil
+	}
+
+	counts := make([]string, outputLen)
+	result := make([]TrafficObservation, outputLen)
+	for pos := 0; pos < outputLen; pos++ {
+		var agg trafficPoint
+		contributing := 0
+		for _, s := range streams {
+			// Align from the end: pos 0 → oldest, pos outputLen-1 → most recent.
+			// idx < 0 means this stream is shorter; it contributes 0 at this position.
+			idx := len(s) - outputLen + pos
+			if idx < 0 {
+				continue
+			}
+			p := s[idx]
+			agg.TotalVol += p.TotalVol
+			agg.UlVol += p.UlVol
+			agg.DlVol += p.DlVol
+			agg.TotalNbPkts += p.TotalNbPkts
+			agg.UlNbPkts += p.UlNbPkts
+			agg.DlNbPkts += p.DlNbPkts
+			agg.UlThr += p.UlThr
+			agg.DlThr += p.DlThr
+			agg.UlPktThr += p.UlPktThr
+			agg.DlPktThr += p.DlPktThr
+			contributing++
+		}
+		counts[pos] = strconv.Itoa(contributing)
+		// Derive Ts from snappedNow: pos 0 is (outputLen-1) steps before snappedNow.
+		ts := snappedNow.Add(time.Duration((pos-outputLen+1)*samplingInterval) * time.Second)
+		result[pos] = TrafficObservation{
+			Ts:          ts.UTC().Format(time.RFC3339),
+			TotalVol:    agg.TotalVol,
+			UlVol:       agg.UlVol,
+			DlVol:       agg.DlVol,
+			TotalNbPkts: agg.TotalNbPkts,
+			UlNbPkts:    agg.UlNbPkts,
+			DlNbPkts:    agg.DlNbPkts,
+			UlThr:       agg.UlThr,
+			DlThr:       agg.DlThr,
+			UlPktThr:    agg.UlPktThr,
+			DlPktThr:    agg.DlPktThr,
+		}
+	}
+	anlfLog.Debugf("Aligned streams [streams=%d, outputLen=%d, contributors/pos]: %s",
+		len(streams), outputLen, strings.Join(counts, ","))
+	return result
 }
 
 // isAccuracyMonitorEnabled checks if accuracy monitoring is configured and enabled

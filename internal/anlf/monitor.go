@@ -186,66 +186,117 @@ type groundTruth struct {
 }
 
 // lookupGroundTruth finds actual UPF traffic data matching a prediction.
-// Primary source: MongoDB (precise time-range query).
-// Fallback: in-memory scan (when MongoDB is unavailable or returns nothing).
+// For each expected corrId (derived from pred.NwdafSubId), the record closest to
+// pred.TargetTime within ±samplingInterval is selected. Values are summed across
+// all corrIds to produce the group-level ground truth.
+// Primary source: MongoDB. Fallback: in-memory scan.
 func (a *AnlfService) lookupGroundTruth(
 	ctx *nwdaf_context.NWDAFContext,
 	pred nwdaf_context.PredictionRecord,
 ) *groundTruth {
 	cfg := factory.NwdafConfig
-	from := pred.TargetTime
 	samplingInterval := 10
 	if cfg != nil && cfg.Configuration != nil &&
 		cfg.Configuration.Analytics != nil &&
 		cfg.Configuration.Analytics.UeCommunication != nil {
-		p := cfg.Configuration.Analytics.UeCommunication
-		samplingInterval = p.SamplingIntervalOrDefault()
+		samplingInterval = cfg.Configuration.Analytics.UeCommunication.SamplingIntervalOrDefault()
 	}
-	to := pred.TargetTime.Add(time.Duration(samplingInterval) * time.Second)
+	si := time.Duration(samplingInterval) * time.Second
 
-	// Primary: MongoDB time-range query
-	if cfg != nil && cfg.Configuration != nil && cfg.Configuration.Mongodb != nil &&
-		nwdaf_context.IsMongoAvailable() {
-		dbName := cfg.Configuration.Mongodb.Name
-		corrIds := ctx.GetCorrelationIdsByNwdafSubId(pred.NwdafSubId)
-		if len(corrIds) > 0 {
-			records, err := nwdaf_context.QueryTrafficInTimeRange(dbName, corrIds, from, to)
-			if err == nil && len(records) > 0 {
-				var ulVol, dlVol int64
-				for _, r := range records {
-					ulVol += r.UlVolume
-					dlVol += r.DlVolume
-				}
-				return &groundTruth{ulVol: ulVol, dlVol: dlVol, count: len(records)}
-			}
-			if err != nil {
-				anlfLog.Debugf("MongoDB ground truth query failed, falling back to in-memory: %v", err)
-			}
-		}
-	}
-
-	// Fallback: in-memory scan
-	dataList := ctx.GetTrafficDataByNwdafSubId(pred.NwdafSubId)
-	if len(dataList) == 0 {
+	corrIds := ctx.GetCorrelationIdsByNwdafSubId(pred.NwdafSubId)
+	if len(corrIds) == 0 {
 		return nil
 	}
 
-	var ulVol, dlVol int64
-	var count int
-	window := time.Duration(samplingInterval) * time.Second
-	for _, td := range dataList {
-		td.Lock()
-		for _, dp := range td.RawUpfData {
-			diff := dp.Timestamp.Sub(pred.TargetTime)
-			if diff >= 0 && diff < window {
-				ulVol += dp.UlVolume
-				dlVol += dp.DlVolume
-				count++
+	// Query window: TargetTime ± si to absorb jitter.
+	from := pred.TargetTime.Add(-si)
+	to := pred.TargetTime.Add(si)
+
+	// Primary: MongoDB — query wider window, then pick nearest per corrId.
+	if cfg != nil && cfg.Configuration != nil && cfg.Configuration.Mongodb != nil &&
+		nwdaf_context.IsMongoAvailable() {
+		dbName := cfg.Configuration.Mongodb.Name
+		records, err := nwdaf_context.QueryTrafficInTimeRange(dbName, corrIds, from, to)
+		if err == nil && len(records) > 0 {
+			gt := nearestPerCorrId(corrIds, records, pred.TargetTime)
+			if gt != nil {
+				return gt
 			}
 		}
-		td.Unlock()
+		if err != nil {
+			anlfLog.Debugf("MongoDB ground truth query failed, falling back to in-memory: %v", err)
+		}
 	}
-	if ulVol == 0 && dlVol == 0 {
+
+	// Fallback: in-memory scan — per corrId, find nearest data point to TargetTime.
+	var ulVol, dlVol int64
+	count := 0
+	for _, corrId := range corrIds {
+		allData := ctx.GetAllTrafficDataForCorrelation(corrId)
+		var bestDiff time.Duration = -1
+		var bestUl, bestDl int64
+		for _, td := range allData {
+			td.Lock()
+			for _, dp := range td.RawUpfData {
+				diff := dp.Timestamp.Sub(pred.TargetTime)
+				if diff < 0 {
+					diff = -diff
+				}
+				if diff <= si && (bestDiff < 0 || diff < bestDiff) {
+					bestDiff = diff
+					bestUl = dp.UlVolume
+					bestDl = dp.DlVolume
+				}
+			}
+			td.Unlock()
+		}
+		if bestDiff >= 0 {
+			ulVol += bestUl
+			dlVol += bestDl
+			count++
+		}
+	}
+	if count == 0 {
+		return nil
+	}
+	return &groundTruth{ulVol: ulVol, dlVol: dlVol, count: count}
+}
+
+// nearestPerCorrId selects the record closest to targetTime for each corrId,
+// then sums UL/DL volumes across all corrIds.
+func nearestPerCorrId(
+	corrIds []string,
+	records []nwdaf_context.UpfTrafficRecord,
+	targetTime time.Time,
+) *groundTruth {
+	type best struct {
+		diff         time.Duration
+		ulVol, dlVol int64
+	}
+	byCorr := make(map[string]*best, len(corrIds))
+	for _, id := range corrIds {
+		byCorr[id] = nil
+	}
+	for _, r := range records {
+		diff := r.Timestamp.Sub(targetTime)
+		if diff < 0 {
+			diff = -diff
+		}
+		b := byCorr[r.Metadata.CorrelationId]
+		if b == nil || diff < b.diff {
+			byCorr[r.Metadata.CorrelationId] = &best{diff: diff, ulVol: r.UlVolume, dlVol: r.DlVolume}
+		}
+	}
+	var ulVol, dlVol int64
+	count := 0
+	for _, b := range byCorr {
+		if b != nil {
+			ulVol += b.ulVol
+			dlVol += b.dlVol
+			count++
+		}
+	}
+	if count == 0 {
 		return nil
 	}
 	return &groundTruth{ulVol: ulVol, dlVol: dlVol, count: count}

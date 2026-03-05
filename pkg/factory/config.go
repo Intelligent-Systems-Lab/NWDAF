@@ -82,6 +82,10 @@ type ModelParams struct {
 
 	// OutputWindow is the number of future steps the ML model predicts.
 	OutputWindow int `yaml:"outputWindow,omitempty"`
+
+	// LookbackBuffer is extra seconds added to the MongoDB query window beyond
+	// inputWindow×samplingInterval to absorb delivery jitter (default: samplingInterval).
+	LookbackBuffer int `yaml:"lookbackBuffer,omitempty"`
 }
 
 // QueryLookback returns the computed time window to query from MongoDB:
@@ -112,6 +116,14 @@ func (m *ModelParams) InputWindowOrDefault() int {
 		return m.InputWindow
 	}
 	return 30
+}
+
+// LookbackBufferOrDefault returns LookbackBuffer with a fallback to SamplingIntervalOrDefault.
+func (m *ModelParams) LookbackBufferOrDefault() int {
+	if m.LookbackBuffer > 0 {
+		return m.LookbackBuffer
+	}
+	return m.SamplingIntervalOrDefault()
 }
 
 // OutputWindowOrDefault returns OutputWindow with a fallback to 5.
