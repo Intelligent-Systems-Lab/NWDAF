@@ -133,26 +133,34 @@ func (a *NwdafApp) Start() {
 		if err := mongoapi.SetMongoDB(mongodb.Name, mongodb.Url); err != nil {
 			logger.InitLog.Errorf("Fail to connect to MongoDB: %+v", err)
 		} else {
-			logger.InitLog.Infof("Successfully connected to MongoDB (%s)", mongodb.Url)
-
-			// Initialize Time Series Collection for UPF Traffic Data
-			opts := options.CreateCollection().SetTimeSeriesOptions(
-				options.TimeSeries().
-					SetTimeField("timestamp").
-					SetMetaField("metadata"),
-			)
-			collCtx, collCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer collCancel()
-			collErr := mongoapi.Client.Database(mongodb.Name).CreateCollection(
-				collCtx,
-				nwdaf_context.UpfTrafficDataColl,
-				opts,
-			)
-			if collErr != nil {
-				// It's normal if the collection already exists
-				logger.InitLog.Debugf("MongoDB TimeSeries collection creation note: %v", collErr)
+			// SetMongoDB does not verify the actual connection; Ping to confirm.
+			pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer pingCancel()
+			if err := mongoapi.Client.Ping(pingCtx, nil); err != nil {
+				logger.InitLog.Errorf("MongoDB not reachable (%s): %v", mongodb.Url, err)
 			} else {
-				logger.InitLog.Infof("Created MongoDB TimeSeries collection: %s", nwdaf_context.UpfTrafficDataColl)
+				logger.InitLog.Infof("Successfully connected to MongoDB (%s)", mongodb.Url)
+				nwdaf_context.SetMongoAvailable(true)
+
+				// Initialize Time Series Collection for UPF Traffic Data
+				opts := options.CreateCollection().SetTimeSeriesOptions(
+					options.TimeSeries().
+						SetTimeField("timestamp").
+						SetMetaField("metadata"),
+				)
+				collCtx, collCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer collCancel()
+				collErr := mongoapi.Client.Database(mongodb.Name).CreateCollection(
+					collCtx,
+					nwdaf_context.UpfTrafficDataColl,
+					opts,
+				)
+				if collErr != nil {
+					// It's normal if the collection already exists
+					logger.InitLog.Debugf("MongoDB TimeSeries collection creation note: %v", collErr)
+				} else {
+					logger.InitLog.Infof("Created MongoDB TimeSeries collection: %s", nwdaf_context.UpfTrafficDataColl)
+				}
 			}
 		}
 	}

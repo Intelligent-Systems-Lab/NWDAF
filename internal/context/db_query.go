@@ -23,9 +23,17 @@ const (
 	DefaultMaxDataPoints = 30
 )
 
-// IsMongoAvailable returns true if the MongoDB client is initialized and reachable.
+// mongoAvailable is set to true only after a successful Ping to MongoDB.
+var mongoAvailable bool
+
+// SetMongoAvailable marks MongoDB as reachable (called from service init after Ping succeeds).
+func SetMongoAvailable(v bool) {
+	mongoAvailable = v
+}
+
+// IsMongoAvailable returns true only after a successful connectivity check at startup.
 func IsMongoAvailable() bool {
-	return mongoapi.Client != nil
+	return mongoAvailable
 }
 
 // getCollection returns the UPF traffic time-series collection.
