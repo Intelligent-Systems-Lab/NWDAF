@@ -25,12 +25,7 @@ func (a *AnlfService) StartAccuracyMonitorForModel(
 	}
 
 	nwdafCtx := nwdaf_context.GetSelf()
-	store, isNew := nwdafCtx.GetOrCreateModelAccuracyStore(modelUrl)
-
-	if !isNew && store.IsMonitorRunning() {
-		anlfLog.Debugf("Accuracy monitor already running for model: %s", modelUrl)
-		return
-	}
+	store, _ := nwdafCtx.GetOrCreateModelAccuracyStore(modelUrl)
 
 	accCfg := cfg.Configuration.Mtlf.AccuracyMonitor
 	interval := accCfg.CheckInterval
@@ -39,7 +34,10 @@ func (a *AnlfService) StartAccuracyMonitorForModel(
 	}
 
 	monCtx, cancel := context.WithCancel(a.nwdaf.CancelContext())
-	store.SetMonitorRunning(cancel)
+	if !store.TryStartMonitor(cancel) {
+		anlfLog.Debugf("Accuracy monitor already running for model: %s", modelUrl)
+		return
+	}
 
 	wg.Add(1)
 	go func() {

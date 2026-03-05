@@ -194,7 +194,7 @@ func TestContext_ModelAccuracyStoreRegistry(t *testing.T) {
 
 	// Delete — should also stop monitor
 	canceled := false
-	store.SetMonitorRunning(func() { canceled = true })
+	store.TryStartMonitor(func() { canceled = true })
 	ctx.DeleteModelAccuracyStore("file:///model-A.pth")
 
 	if !canceled {

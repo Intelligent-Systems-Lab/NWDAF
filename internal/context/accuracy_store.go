@@ -108,12 +108,20 @@ func (s *ModelAccuracyStore) IsMonitorRunning() bool {
 	return s.running
 }
 
-// SetMonitorRunning marks the monitor as running with a cancel function
-func (s *ModelAccuracyStore) SetMonitorRunning(cancel context.CancelFunc) {
+// TryStartMonitor atomically checks whether the monitor is already running and,
+// if not, marks it as running and stores cancel. Returns true if this caller
+// won the race and must start the goroutine; false if already running (cancel
+// is called internally so the caller need not clean it up).
+func (s *ModelAccuracyStore) TryStartMonitor(cancel context.CancelFunc) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.running {
+		cancel()
+		return false
+	}
 	s.running = true
 	s.cancelFunc = cancel
+	return true
 }
 
 // SetRetraining marks whether a retrain is currently in flight.

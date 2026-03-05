@@ -121,10 +121,12 @@ func TestModelAccuracyStore_MonitorLifecycle(t *testing.T) {
 	}
 
 	canceled := false
-	store.SetMonitorRunning(func() { canceled = true })
+	if !store.TryStartMonitor(func() { canceled = true }) {
+		t.Error("TryStartMonitor should return true on first call")
+	}
 
 	if !store.IsMonitorRunning() {
-		t.Error("IsMonitorRunning() should be true after SetMonitorRunning")
+		t.Error("IsMonitorRunning() should be true after TryStartMonitor")
 	}
 
 	store.StopMonitor()
