@@ -575,6 +575,8 @@ uv run callback_server.py 9091
 
 ### 6.4 Send Test Subscription (Group ID)
 
+Subscribe to `group-test-001` (consumer A):
+
 ```bash
 curl -X POST http://127.0.0.1:8080/nnwdaf-eventssubscription/v1/subscriptions \
   -H "Content-Type: application/json" \
@@ -582,6 +584,21 @@ curl -X POST http://127.0.0.1:8080/nnwdaf-eventssubscription/v1/subscriptions \
     "eventSubscriptions": [{
       "event": "UE_COMMUNICATION",
       "tgtUe": {"intGroupIds": ["group-test-001"]}
+    }],
+    "evtReq": {"notifMethod": "PERIODIC", "repPeriod": 5},
+    "notificationURI": "http://127.0.0.1:9091/notify"
+  }'
+```
+
+Subscribe to `group-test-002` (consumer B) — tests concurrent multi-group analytics:
+
+```bash
+curl -X POST http://127.0.0.1:8080/nnwdaf-eventssubscription/v1/subscriptions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "eventSubscriptions": [{
+      "event": "UE_COMMUNICATION",
+      "tgtUe": {"intGroupIds": ["group-test-002"]}
     }],
     "evtReq": {"notifMethod": "PERIODIC", "repPeriod": 5},
     "notificationURI": "http://127.0.0.1:9091/notify"

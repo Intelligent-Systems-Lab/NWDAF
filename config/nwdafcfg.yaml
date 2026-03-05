@@ -52,6 +52,11 @@ configuration:
           - "imsi-123456789012345"
           - "imsi-123456789012346"
           - "imsi-123456789012347"
+      - groupId: "group-test-002"
+        supis:
+          - "imsi-123456789012348"
+          - "imsi-123456789012349"
+          - "imsi-123456789012350"
 
   # MTLF (Daisy FL Framework)
   mtlf:
