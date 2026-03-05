@@ -213,9 +213,15 @@ func (p *Processor) processUpfNotificationItemUnified(
 
 	// Use startTime as the measurement bucket timestamp (per TS 29.564: startTime is the
 	// beginning of the measurement period). Fall back to timeStamp if startTime is absent.
+	// Snap to period boundary so stored timestamp is always aligned to samplingInterval,
+	// ensuring inference aggregation and ground truth lookup use a consistent coordinate.
 	measurementTs := item.StartTime
 	if measurementTs.IsZero() {
 		measurementTs = item.TimeStamp
+	}
+	if si := factory.NwdafConfig.GetSamplingInterval(); si > 0 {
+		si64 := int64(si)
+		measurementTs = time.Unix((measurementTs.Unix()/si64)*si64, 0)
 	}
 
 	// Process Measurements and save to MongoDB

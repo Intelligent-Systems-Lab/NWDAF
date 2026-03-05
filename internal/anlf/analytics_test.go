@@ -235,6 +235,29 @@ func TestAggregateObservationsByTimeBucket_InvalidTimestampSkipped(t *testing.T)
 	}
 }
 
+// TestAggregateObservationsByTimeBucket_BoundaryJitter verifies that floor bucketing
+// keeps jittered timestamps within their correct bucket instead of rounding them up
+// into the next bucket. e.g. t=98 (3s before boundary at 100) stays in bucket 95.
+func TestAggregateObservationsByTimeBucket_BoundaryJitter(t *testing.T) {
+	obs := []TrafficObservation{
+		{Ts: rfc3339(95), UlVol: 10},
+		{Ts: rfc3339(98), UlVol: 20}, // jitter: still in [95,100)
+		{Ts: rfc3339(100), UlVol: 30},
+	}
+
+	result := aggregateObservationsByTimeBucket(obs, 5)
+
+	if len(result) != 2 {
+		t.Fatalf("len = %d, want 2 (bucket 95 and bucket 100)", len(result))
+	}
+	if result[0].UlVol != 30 { // 10+20 in bucket 95
+		t.Errorf("bucket 95 UlVol = %v, want 30", result[0].UlVol)
+	}
+	if result[1].UlVol != 30 { // 30 in bucket 100
+		t.Errorf("bucket 100 UlVol = %v, want 30", result[1].UlVol)
+	}
+}
+
 // TestAggregateObservationsByTimeBucket_AllFieldsSummed verifies that all 10 numeric
 // fields are correctly summed when two observations share the same bucket.
 func TestAggregateObservationsByTimeBucket_AllFieldsSummed(t *testing.T) {

@@ -82,16 +82,10 @@ type ModelParams struct {
 
 	// OutputWindow is the number of future steps the ML model predicts.
 	OutputWindow int `yaml:"outputWindow,omitempty"`
-
-	// QueryLookbackBuffer adds extra seconds to the MongoDB lookback window to
-	// absorb UPF report delivery delays (default: 0).
-	QueryLookbackBuffer int `yaml:"queryLookbackBuffer,omitempty"`
 }
 
 // QueryLookback returns the computed time window to query from MongoDB:
-// SamplingInterval × InputWindow + QueryLookbackBuffer (seconds).
-// The buffer absorbs UPF report delivery delays so that slightly late data
-// is still captured before inference or ground truth lookup runs.
+// SamplingInterval × InputWindow (seconds).
 func (m *ModelParams) QueryLookback() int {
 	si := m.SamplingInterval
 	if si <= 0 {
@@ -101,7 +95,7 @@ func (m *ModelParams) QueryLookback() int {
 	if iw <= 0 {
 		iw = 30 // default: 30 points
 	}
-	return si*iw + m.QueryLookbackBuffer
+	return si * iw
 }
 
 // SamplingIntervalOrDefault returns SamplingInterval with a fallback to 10s.
@@ -244,6 +238,17 @@ func (c *Config) GetSbiScheme() string {
 		return "http"
 	}
 	return c.Configuration.Sbi.Scheme
+}
+
+// GetSamplingInterval returns the configured UE communication sampling interval,
+// or 0 if not configured (caller should skip snapping).
+func (c *Config) GetSamplingInterval() int {
+	if c == nil || c.Configuration == nil ||
+		c.Configuration.Analytics == nil ||
+		c.Configuration.Analytics.UeCommunication == nil {
+		return 0
+	}
+	return c.Configuration.Analytics.UeCommunication.SamplingIntervalOrDefault()
 }
 
 func (c *Config) GetNwdafName() string {

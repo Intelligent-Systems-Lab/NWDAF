@@ -138,6 +138,9 @@ func generateMlBasedUeCommunication(
 	// Aggregate predicted steps
 	var totalUl, totalDl int64
 	var totalConfidence int32
+	// Snap now to the current period boundary so TargetTime aligns with UPF startTime.
+	si64 := int64(samplingInterval)
+	snappedNow := time.Unix((now.Unix()/si64)*si64, 0)
 	for i, pred := range resp.PredictedData {
 		totalUl += pred.TrafChar.UlVol
 		totalDl += pred.TrafChar.DlVol
@@ -151,8 +154,9 @@ func generateMlBasedUeCommunication(
 				store.AddPrediction(nwdaf_context.PredictionRecord{
 					ModelUrl:    mlInfo.ModelUrl,
 					PredictedAt: now,
-					// Target: i-th step ahead in sampling-interval increments
-					TargetTime: now.Add(time.Duration((i+1)*samplingInterval) * time.Second),
+					// Target: i-th step ahead from the snapped period boundary,
+					// so TargetTime always aligns with UPF period startTime.
+					TargetTime: snappedNow.Add(time.Duration((i+1)*samplingInterval) * time.Second),
 					PredUlVol:  pred.TrafChar.UlVol,
 					PredDlVol:  pred.TrafChar.DlVol,
 					NwdafSubId: nwdafSubId,
@@ -286,7 +290,7 @@ func aggregateObservationsByTimeBucket(obs []TrafficObservation, samplingInterva
 		if err != nil {
 			continue
 		}
-		bucketTs := ((t.Unix() + si/2) / si) * si
+		bucketTs := (t.Unix() / si) * si
 
 		b, ok := bucketMap[bucketTs]
 		if !ok {

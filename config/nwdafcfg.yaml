@@ -30,8 +30,7 @@ configuration:
       samplingInterval: 5   # UPF report period (seconds); governs smf repPeriod
       inputWindow: 30       # data points fed to ML model (30 × 5s = 2.5 min history)
       outputWindow: 1       # ML service predicts 1 step ahead
-      queryLookbackBuffer: 10  # extra seconds to absorb UPF report delivery delay
-      # queryLookback = samplingInterval × inputWindow + buffer = 160s (auto-computed)
+      # queryLookback = samplingInterval × inputWindow = 150s (auto-computed)
 
   # External MTLF Integration
   externalMtlf:
