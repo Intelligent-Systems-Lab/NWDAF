@@ -27,6 +27,12 @@ func (m *MtlfService) HandleDeviationReport(
 		threshold = 0.3
 	}
 
+	// Skip evaluation if a retrain is already in flight for this model.
+	if store.IsRetraining() {
+		mtlfLog.Debugf("Retraining in progress, skipping deviation check: model=%s", modelUrl)
+		return
+	}
+
 	strategy := accCfg.TriggerStrategy
 	if strategy == "" {
 		strategy = "consecutive"
@@ -58,9 +64,8 @@ func (m *MtlfService) checkConsecutiveTrigger(
 			modelUrl, deviation, threshold, count, required)
 		if count >= required {
 			store.ResetBreaches()
-			m.TriggerRetraining(modelUrl)
-			store.StopMonitor()
-			mtlfLog.Infof("Accuracy monitor paused after retrain trigger: model=%s", modelUrl)
+			store.SetRetraining(true)
+			m.TriggerRetraining(modelUrl, store)
 		}
 	} else {
 		store.ResetBreaches()
@@ -86,8 +91,7 @@ func (m *MtlfService) checkEMATrigger(
 	if ema > threshold {
 		mtlfLog.Warnf("EMA degradation [%s]: ema=%.4f > threshold=%.2f",
 			modelUrl, ema, threshold)
-		m.TriggerRetraining(modelUrl)
-		store.StopMonitor()
-		mtlfLog.Infof("Accuracy monitor paused after retrain trigger: model=%s", modelUrl)
+		store.SetRetraining(true)
+		m.TriggerRetraining(modelUrl, store)
 	}
 }

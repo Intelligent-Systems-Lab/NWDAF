@@ -36,6 +36,9 @@ type ModelAccuracyStore struct {
 	// Goroutine lifecycle (per-model)
 	cancelFunc context.CancelFunc // Stops this model's monitor goroutine
 	running    bool               // Whether monitor loop is active
+
+	// Retraining guard — prevents duplicate retrain triggers while one is in flight
+	retraining bool
 }
 
 // NewModelAccuracyStore creates a new per-model accuracy store
@@ -111,6 +114,21 @@ func (s *ModelAccuracyStore) SetMonitorRunning(cancel context.CancelFunc) {
 	defer s.mu.Unlock()
 	s.running = true
 	s.cancelFunc = cancel
+}
+
+// SetRetraining marks whether a retrain is currently in flight.
+// While true, HandleDeviationReport will skip further trigger evaluation.
+func (s *ModelAccuracyStore) SetRetraining(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.retraining = v
+}
+
+// IsRetraining returns true if a retrain is currently in flight.
+func (s *ModelAccuracyStore) IsRetraining() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.retraining
 }
 
 // StopMonitor cancels the monitor goroutine

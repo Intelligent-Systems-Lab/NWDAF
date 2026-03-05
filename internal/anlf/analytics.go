@@ -15,6 +15,10 @@ import (
 
 var anlfLog = logger.AnlfLog
 
+// errNoHistoricalData is returned when no UPF traffic data is available yet.
+// This is expected during startup before SMF delivers the first measurements.
+var errNoHistoricalData = fmt.Errorf("no historical data available yet")
+
 // TrafficObservation for ML prediction request
 type TrafficObservation = consumer.TrafficObservation
 
@@ -79,7 +83,11 @@ func GenerateUeCommunicationAnalytics(nwdafSubId string) models.UeCommunication 
 			anlfLog.Infof("Using ML-based analytics for subscription %s", nwdafSubId)
 			return result
 		}
-		anlfLog.Warnf("ML prediction failed for %s: %v", nwdafSubId, err)
+		if err == errNoHistoricalData {
+			anlfLog.Debugf("ML prediction skipped for %s: %v", nwdafSubId, err)
+		} else {
+			anlfLog.Warnf("ML prediction failed for %s: %v", nwdafSubId, err)
+		}
 	}
 
 	// Per TS 23.288: Return 0 confidence when insufficient resources for analytics
@@ -113,6 +121,9 @@ func generateMlBasedUeCommunication(
 
 	// Fetch historical data — prefer MongoDB, fall back to in-memory
 	historicalData, dnn := fetchHistoricalData(nwdafSubId, ctx, params)
+	if len(historicalData) == 0 {
+		return models.UeCommunication{}, errNoHistoricalData
+	}
 
 	// Call ML service for prediction
 	modelId := mlInfo.GetModelId()

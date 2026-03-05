@@ -64,9 +64,14 @@ func (m *MtlfService) runDelayedTraining(delaySec int, mtlfCfg *factory.MtlfConf
 
 // TriggerRetraining initiates retraining for a degraded model (called by accuracy monitor).
 // Per TS 23.288 §5C: AnLF reports accuracy degradation → MTLF decides to retrain.
-func (m *MtlfService) TriggerRetraining(oldModelUrl string) {
+// store.SetRetraining(false) is called on failure so the monitor can re-trigger later.
+func (m *MtlfService) TriggerRetraining(
+	oldModelUrl string,
+	store *nwdaf_context.ModelAccuracyStore,
+) {
 	cfg := factory.NwdafConfig
 	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.Mtlf == nil {
+		store.SetRetraining(false)
 		return
 	}
 	mtlfCfg := cfg.Configuration.Mtlf
@@ -76,9 +81,11 @@ func (m *MtlfService) TriggerRetraining(oldModelUrl string) {
 	go func() {
 		if err := m.triggerTraining(mtlfCfg); err != nil {
 			mtlfLog.Errorf("Accuracy-triggered retraining failed: %v", err)
+			store.SetRetraining(false)
 			return
 		}
 		mtlfLog.Info("Accuracy-triggered retraining completed successfully")
+		// swapModelAfterRetrain deletes the old store, so no need to clear the flag.
 		m.swapModelAfterRetrain(oldModelUrl, mtlfCfg)
 	}()
 }
