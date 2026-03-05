@@ -67,13 +67,13 @@ func TestModelAccuracyStore_ConsumeMaturePredictions(t *testing.T) {
 		PredDlVol:  600,
 	})
 
-	mature := store.ConsumeMaturePredictions()
+	mature := store.ConsumeMaturePredictions(0)
 	if len(mature) != 2 {
 		t.Fatalf("ConsumeMaturePredictions() returned %d, want 2", len(mature))
 	}
 
 	// Second call should only return the future one when it matures
-	mature2 := store.ConsumeMaturePredictions()
+	mature2 := store.ConsumeMaturePredictions(0)
 	if len(mature2) != 0 {
 		t.Errorf("Second ConsumeMaturePredictions() returned %d, want 0 (future still pending)", len(mature2))
 	}
@@ -81,7 +81,7 @@ func TestModelAccuracyStore_ConsumeMaturePredictions(t *testing.T) {
 
 func TestModelAccuracyStore_ConsumeMaturePredictions_Empty(t *testing.T) {
 	store := NewModelAccuracyStore("file:///test/model.pth")
-	mature := store.ConsumeMaturePredictions()
+	mature := store.ConsumeMaturePredictions(0)
 	if len(mature) != 0 {
 		t.Errorf("ConsumeMaturePredictions() on empty store returned %d, want 0", len(mature))
 	}

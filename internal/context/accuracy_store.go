@@ -57,15 +57,17 @@ func (s *ModelAccuracyStore) AddPrediction(record PredictionRecord) {
 	s.inferenceNum++
 }
 
-// ConsumeMaturePredictions returns predictions whose target time has passed
-func (s *ModelAccuracyStore) ConsumeMaturePredictions() []PredictionRecord {
+// ConsumeMaturePredictions returns predictions where TargetTime+graceAfterTarget < now.
+// graceAfterTarget should be at least 2×samplingInterval so the UPF reporting period
+// has ended and the report has had time to arrive before ground truth is looked up.
+func (s *ModelAccuracyStore) ConsumeMaturePredictions(graceAfterTarget time.Duration) []PredictionRecord {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := time.Now()
+	deadline := time.Now().Add(-graceAfterTarget)
 	var mature, pending []PredictionRecord
 	for _, p := range s.predictions {
-		if p.TargetTime.Before(now) {
+		if p.TargetTime.Before(deadline) {
 			mature = append(mature, p)
 		} else {
 			pending = append(pending, p)

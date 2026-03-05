@@ -94,7 +94,7 @@ func (a *AnlfService) runModelAccuracyLoop(
 	// Discard predictions and inference counter accumulated during warmup —
 	// they reflect model behaviour before it stabilized and should not
 	// influence accuracy scoring.
-	if drained := store.ConsumeMaturePredictions(); len(drained) > 0 {
+	if drained := store.ConsumeMaturePredictions(0); len(drained) > 0 {
 		anlfLog.Infof("Accuracy monitor: discarded %d warmup predictions for model=%s",
 			len(drained), modelUrl)
 	}
@@ -129,7 +129,8 @@ func (a *AnlfService) checkModelAccuracy(
 ) {
 	nwdafCtx := nwdaf_context.GetSelf()
 
-	mature := store.ConsumeMaturePredictions()
+	si := time.Duration(getUeCommunicationModelParams().SamplingIntervalOrDefault()) * time.Second
+	mature := store.ConsumeMaturePredictions(2 * si)
 	if len(mature) == 0 {
 		return
 	}
