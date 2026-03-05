@@ -63,7 +63,7 @@ configuration:
     accuracyMonitor:
       enabled: true            # Trigger retraining on accuracy degradation
       checkInterval: 50         # seconds between accuracy checks
-      deviationThreshold: 0.3   # NRMSE > 0.3 triggers retraining
+      deviationThreshold: 0.3   # sMAPE [0,2] > 0.3 triggers retraining
       minSamples: 5             # min ground truth samples before evaluation
       warmupDuration: 155       # seconds to skip checks after start (model cold-start)
       triggerStrategy: consecutive  # "consecutive" or "ema"
