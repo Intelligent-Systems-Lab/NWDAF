@@ -284,6 +284,10 @@ func (p *Processor) processUpfNotificationItemUnified(
 		}
 
 		data.RawUpfData = append(data.RawUpfData, dataPoint)
+		if len(data.RawUpfData) > nwdaf_context.MaxInMemoryDataPoints {
+			drop := len(data.RawUpfData) - nwdaf_context.MaxInMemoryDataPoints
+			data.RawUpfData = data.RawUpfData[drop:]
+		}
 	}
 
 	data.LastUpdate = measurementTs
