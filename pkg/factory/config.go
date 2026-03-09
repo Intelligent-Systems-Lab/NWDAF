@@ -86,6 +86,10 @@ type ModelParams struct {
 	// LookbackBuffer is extra seconds added to the MongoDB query window beyond
 	// inputWindow×samplingInterval to absorb delivery jitter (default: samplingInterval).
 	LookbackBuffer int `yaml:"lookbackBuffer,omitempty"`
+
+	// RingBufferSize is the maximum number of UPF data points kept in memory per session.
+	// Inference reads exclusively from this buffer; must be >= InputWindow (default: 50).
+	RingBufferSize int `yaml:"ringBufferSize,omitempty"`
 }
 
 // QueryLookback returns the computed time window to query from MongoDB:
@@ -132,6 +136,14 @@ func (m *ModelParams) OutputWindowOrDefault() int {
 		return m.OutputWindow
 	}
 	return 5
+}
+
+// RingBufferSizeOrDefault returns RingBufferSize with a fallback to 50.
+func (m *ModelParams) RingBufferSizeOrDefault() int {
+	if m.RingBufferSize > 0 {
+		return m.RingBufferSize
+	}
+	return 50
 }
 
 // MlServiceConfig configuration for external ML inference service
@@ -233,6 +245,21 @@ func ReadConfig(cfgPath string) (*Config, error) {
 		cfg.Configuration.SupportedAnalytics = []string{"ABNORMAL_BEHAVIOUR"}
 	}
 
+	// Validate ring buffer vs input window
+	if cfg.Configuration.Analytics != nil && cfg.Configuration.Analytics.UeCommunication != nil {
+		p := cfg.Configuration.Analytics.UeCommunication
+		iw := p.InputWindowOrDefault()
+		rb := p.RingBufferSizeOrDefault()
+		if iw > rb {
+			logger.CfgLog.Warnf(
+				"analytics.ueCommunication.inputWindow (%d) > ringBufferSize (%d): "+
+					"inference will always have fewer points than the model expects; "+
+					"increase ringBufferSize to at least %d",
+				iw, rb, iw,
+			)
+		}
+	}
+
 	logger.CfgLog.Infof("Config loaded: %s", cfgPath)
 	return cfg, nil
 }
@@ -261,6 +288,17 @@ func (c *Config) GetSamplingInterval() int {
 		return 0
 	}
 	return c.Configuration.Analytics.UeCommunication.SamplingIntervalOrDefault()
+}
+
+// GetRingBufferSize returns the configured in-memory ring buffer size for UE communication,
+// or the default (50) if not configured.
+func (c *Config) GetRingBufferSize() int {
+	if c == nil || c.Configuration == nil ||
+		c.Configuration.Analytics == nil ||
+		c.Configuration.Analytics.UeCommunication == nil {
+		return 50
+	}
+	return c.Configuration.Analytics.UeCommunication.RingBufferSizeOrDefault()
 }
 
 func (c *Config) GetNwdafName() string {

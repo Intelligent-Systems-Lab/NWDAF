@@ -32,6 +32,7 @@ configuration:
       outputWindow: 1       # ML service predicts 1 step ahead
       lookbackBuffer: 15    # extra seconds added to query window to absorb jitter (default: 2×samplingInterval)
       # queryLookback = samplingInterval × inputWindow + lookbackBuffer (auto-computed)
+      ringBufferSize: 50    # in-memory ring buffer size per UE session; must be >= inputWindow
 
   # External MTLF Integration
   externalMtlf:

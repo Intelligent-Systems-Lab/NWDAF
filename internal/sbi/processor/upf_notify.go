@@ -272,7 +272,7 @@ func (p *Processor) processUpfNotificationItemUnified(
 				t.DlPacketThroughput, dataPoint.DlPacketThroughput)
 		}
 
-		// Save to MongoDB first so inference always reads from MongoDB before in-memory.
+		// Save to MongoDB for ground truth lookup by the accuracy monitor.
 		if nwdaf_context.IsMongoAvailable() &&
 			factory.NwdafConfig != nil && factory.NwdafConfig.Configuration != nil &&
 			factory.NwdafConfig.Configuration.Mongodb != nil {
@@ -284,8 +284,9 @@ func (p *Processor) processUpfNotificationItemUnified(
 		}
 
 		data.RawUpfData = append(data.RawUpfData, dataPoint)
-		if len(data.RawUpfData) > nwdaf_context.MaxInMemoryDataPoints {
-			drop := len(data.RawUpfData) - nwdaf_context.MaxInMemoryDataPoints
+		ringBufferSize := factory.NwdafConfig.GetRingBufferSize()
+		if len(data.RawUpfData) > ringBufferSize {
+			drop := len(data.RawUpfData) - ringBufferSize
 			data.RawUpfData = data.RawUpfData[drop:]
 		}
 	}

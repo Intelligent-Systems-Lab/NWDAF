@@ -3,7 +3,6 @@ package anlf
 
 import (
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -208,111 +207,26 @@ type trafficPoint struct {
 	UlThr, DlThr, UlPktThr, DlPktThr float64
 }
 
-// fetchHistoricalData retrieves recent UPF traffic data for ML prediction.
-// Primary source: MongoDB (per-corrId query). Fallback: in-memory RawUpfData.
+// fetchHistoricalData retrieves recent UPF traffic data for ML prediction from the
+// in-memory ring buffer. The buffer is the sole source for inference; MongoDB is
+// only consulted by the accuracy monitor for ground truth.
 //
-// Records are grouped by correlationId (one stream per UE), trimmed to the most
-// recent inputWindow points each, then zipped by sequence position (index from the
-// end). Timestamps are never used for cross-stream alignment; output Ts values are
-// derived from snappedNow so they are perfectly grid-aligned regardless of jitter.
+// Streams are grouped by correlationId, trimmed to the most recent inputWindow
+// points, then zipped by sequence position (index from the end). Output Ts values
+// are derived from snappedNow for perfect grid alignment.
 func fetchHistoricalData(
 	nwdafSubId string,
 	ctx *nwdaf_context.NWDAFContext,
 	params *factory.ModelParams,
 	snappedNow time.Time,
 ) ([]TrafficObservation, string) {
-	cfg := factory.NwdafConfig
-	dbName := ""
-	if cfg != nil && cfg.Configuration != nil && cfg.Configuration.Mongodb != nil {
-		dbName = cfg.Configuration.Mongodb.Name
-	}
-
 	inputWindow := params.InputWindowOrDefault()
 	samplingInterval := params.SamplingIntervalOrDefault()
-	queryLookback := time.Duration(params.QueryLookback()+params.LookbackBufferOrDefault()) * time.Second
-
 	corrIds := ctx.GetCorrelationIdsByNwdafSubId(nwdafSubId)
-
-	// --- Primary: MongoDB ---
-	if dbName != "" && nwdaf_context.IsMongoAvailable() && len(corrIds) > 0 {
-		since := snappedNow.Add(-queryLookback)
-		limit := inputWindow * len(corrIds)
-		records, err := nwdaf_context.QueryTrafficByMultipleCorrelationIds(
-			dbName, corrIds, since, limit,
-		)
-		if err == nil && len(records) > 0 {
-			anlfLog.Debugf("Using %d MongoDB records for ML prediction (nwdafSubId=%s, corrIds=%d)",
-				len(records), nwdafSubId, len(corrIds))
-			obs, dnn := alignAndZipRecords(corrIds, records, inputWindow, samplingInterval, snappedNow)
-			if len(obs) > 0 {
-				return obs, dnn
-			}
-		}
-		if err != nil {
-			anlfLog.Warnf("MongoDB query failed for ML prediction, falling back to in-memory: %v", err)
-		}
-	}
-
-	// --- Fallback: in-memory ---
-	anlfLog.Debugf("Using in-memory data for ML prediction (nwdafSubId=%s)", nwdafSubId)
 	return alignAndZipInMemory(corrIds, ctx, inputWindow, samplingInterval, snappedNow)
 }
 
-// alignAndZipRecords groups MongoDB records by correlationId, trims each stream to
-// the most recent inputWindow points, then zips all streams by sequence position
-// (index from the end) summing values at each position.
-// All expected corrIds (including those with no records) are pre-initialized so
-// missing streams contribute zeros. Output Ts values are derived from snappedNow.
-func alignAndZipRecords(
-	corrIds []string,
-	records []nwdaf_context.UpfTrafficRecord,
-	inputWindow, samplingInterval int,
-	snappedNow time.Time,
-) ([]TrafficObservation, string) {
-	byCorr := make(map[string][]nwdaf_context.UpfTrafficRecord, len(corrIds))
-	for _, id := range corrIds {
-		byCorr[id] = nil
-	}
-	dnn := "internet"
-	for _, r := range records {
-		byCorr[r.Metadata.CorrelationId] = append(byCorr[r.Metadata.CorrelationId], r)
-		if r.Metadata.Dnn != "" {
-			dnn = r.Metadata.Dnn
-		}
-	}
-
-	streams := make([][]trafficPoint, 0, len(corrIds))
-	for _, id := range corrIds {
-		recs := byCorr[id]
-		slices.SortFunc(recs, func(a, b nwdaf_context.UpfTrafficRecord) int {
-			return a.Timestamp.Compare(b.Timestamp)
-		})
-		if len(recs) > inputWindow {
-			recs = recs[len(recs)-inputWindow:]
-		}
-		pts := make([]trafficPoint, len(recs))
-		for i, r := range recs {
-			pts[i] = trafficPoint{
-				TotalVol:    float64(r.TotalVolume),
-				UlVol:       float64(r.UlVolume),
-				DlVol:       float64(r.DlVolume),
-				TotalNbPkts: float64(r.TotalNbOfPackets),
-				UlNbPkts:    float64(r.UlNbOfPackets),
-				DlNbPkts:    float64(r.DlNbOfPackets),
-				UlThr:       r.UlThroughput,
-				DlThr:       r.DlThroughput,
-				UlPktThr:    r.UlPacketThroughput,
-				DlPktThr:    r.DlPacketThroughput,
-			}
-		}
-		streams = append(streams, pts)
-	}
-
-	return zipStreams(streams, inputWindow, samplingInterval, snappedNow), dnn
-}
-
-// alignAndZipInMemory performs the same sequence alignment as alignAndZipRecords
-// but reads from the in-memory TrafficData store.
+// alignAndZipInMemory reads from the in-memory TrafficData store,
 func alignAndZipInMemory(
 	corrIds []string,
 	ctx *nwdaf_context.NWDAFContext,

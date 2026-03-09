@@ -18,11 +18,6 @@ const (
 	TargetType_ANY_UE   TargetType = "ANY_UE"
 )
 
-// MaxInMemoryDataPoints is the ring-buffer size for RawUpfData.
-// When MongoDB is available this acts as a short-term cache (fallback).
-// 50 points × 10 s/point ≈ 8.3 min of recent data kept in memory.
-const MaxInMemoryDataPoints = 50
-
 // UpfDataPoint represents a single UPF measurement with timestamp
 // Used for storing raw data instead of pre-aggregating
 type UpfDataPoint struct {
