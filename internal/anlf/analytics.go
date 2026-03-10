@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
+
+	"github.com/sirupsen/logrus"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
@@ -329,7 +333,12 @@ func alignAndZipInMemory(
 			perIP := make(map[int64]nwdaf_context.UpfDataPoint, len(td.RawUpfData))
 			for _, dp := range td.RawUpfData {
 				n := int64(math.Round(float64(dp.Timestamp.Unix()-anchorUnix) / float64(si)))
-				perIP[anchorUnix+n*si] = dp // last-wins on collision
+				centerUnix := anchorUnix + n*si
+				if _, exists := perIP[centerUnix]; exists {
+					anlfLog.Warnf("dedup collision ip=%s: t=%d and previous both snap to center=%d (anchor=%d si=%d), keeping later",
+						td.IpAddress, dp.Timestamp.Unix(), centerUnix, anchorUnix, si)
+				}
+				perIP[centerUnix] = dp
 			}
 			td.Unlock() // release lock before touching shared buckets map
 
@@ -362,39 +371,57 @@ func alignAndZipInMemory(
 		return nil, dnn
 	}
 
-	// Sort global indices in ascending order (oldest → newest) and retain only
-	// the most recent inputWindow slots.
+	// Determine the continuous output range [startIdx, endIdx].
+	// endIdx = the most recent slot with data.
+	// startIdx = endIdx - inputWindow + 1, clamped to the earliest slot with data
+	// so we do not emit leading zero-pads before any real observation exists.
 	keys := make([]int, 0, len(buckets))
 	for k := range buckets {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
-	if len(keys) > inputWindow {
-		keys = keys[len(keys)-inputWindow:]
+	endIdx := keys[len(keys)-1]
+	startIdx := endIdx - inputWindow + 1
+	if keys[0] > startIdx {
+		startIdx = keys[0]
 	}
 
-	result := make([]TrafficObservation, len(keys))
-	for i, idx := range keys {
-		b := buckets[idx]
-		// Mean center: integer-round the float average to the nearest second.
-		meanCenter := int64(math.Round(float64(b.centerSum) / float64(b.centerCount)))
-		ts := time.Unix(meanCenter, 0).UTC()
-		result[i] = TrafficObservation{
-			Ts:          ts.Format(time.RFC3339),
-			TotalVol:    b.agg.TotalVol,
-			UlVol:       b.agg.UlVol,
-			DlVol:       b.agg.DlVol,
-			TotalNbPkts: b.agg.TotalNbPkts,
-			UlNbPkts:    b.agg.UlNbPkts,
-			DlNbPkts:    b.agg.DlNbPkts,
-			UlThr:       b.agg.UlThr,
-			DlThr:       b.agg.DlThr,
-			UlPktThr:    b.agg.UlPktThr,
-			DlPktThr:    b.agg.DlPktThr,
+	// Build the result slice over [startIdx, endIdx], filling gaps with zeros.
+	// Zero-padded slots get a Ts derived from snappedNow so the sequence remains
+	// evenly spaced for the ML model.
+	outputLen := endIdx - startIdx + 1
+	result := make([]TrafficObservation, outputLen)
+	counts := make([]string, outputLen) // for debug log
+	for i := range outputLen {
+		idx := startIdx + i
+		ts := time.Unix(snappedNowUnix+int64(idx)*si, 0).UTC()
+		if b, ok := buckets[idx]; ok {
+			// Mean center: integer-round the float average to the nearest second.
+			meanCenter := int64(math.Round(float64(b.centerSum) / float64(b.centerCount)))
+			ts = time.Unix(meanCenter, 0).UTC()
+			result[i] = TrafficObservation{
+				Ts:          ts.Format(time.RFC3339),
+				TotalVol:    b.agg.TotalVol,
+				UlVol:       b.agg.UlVol,
+				DlVol:       b.agg.DlVol,
+				TotalNbPkts: b.agg.TotalNbPkts,
+				UlNbPkts:    b.agg.UlNbPkts,
+				DlNbPkts:    b.agg.DlNbPkts,
+				UlThr:       b.agg.UlThr,
+				DlThr:       b.agg.DlThr,
+				UlPktThr:    b.agg.UlPktThr,
+				DlPktThr:    b.agg.DlPktThr,
+			}
+			counts[i] = strconv.Itoa(b.centerCount)
+		} else {
+			result[i] = TrafficObservation{Ts: ts.Format(time.RFC3339)}
+			counts[i] = "0"
 		}
 	}
-	anlfLog.Debugf("Aggregated %d global slots from %d corrIds (inputWindow=%d)",
-		len(result), len(corrIds), inputWindow)
+	if anlfLog.Logger.IsLevelEnabled(logrus.DebugLevel) {
+		anlfLog.Debugf("Aggregated %d global slots from %d corrIds (inputWindow=%d) ipCount/slot:[%s]",
+			len(result), len(corrIds), inputWindow, strings.Join(counts, ","))
+	}
 	return result, dnn
 }
 

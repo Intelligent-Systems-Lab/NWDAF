@@ -253,3 +253,46 @@ func TestAggregateInMemory_InputWindowCap(t *testing.T) {
 		}
 	}
 }
+
+// TestAggregateInMemory_ZeroPadding verifies that missing slots within the output
+// range are filled with zero-valued observations so the ML model receives an
+// evenly-spaced sequence.
+//
+// si=5, snappedNow=20, inputWindow=4
+// IP-A reports at t=0 (global -4) and t=10 (global -2), skipping t=5 (global -3).
+// Expected output (4 slots): [t=0: UlVol=10], [t=5: zero], [t=10: UlVol=11], [t=15: zero... wait
+// Actually startIdx = max(keys[0], endIdx-inputWindow+1) = max(-4, -2-4+1) = max(-4,-5) = -4
+// endIdx=-2, range = -4,-3,-2 → 3 slots (inputWindow=4 but data only spans 3 slots from -4 to -2)
+// slot -4: UlVol=10, slot -3: zero, slot -2: UlVol=11
+func TestAggregateInMemory_ZeroPadding(t *testing.T) {
+	ctx := setupCtx(t)
+	si := 5
+	setRawUpfData(ctx, "corr-1", "1.1.1.1", []nwdaf_context.UpfDataPoint{
+		makeDP(0, 10, 20),
+		makeDP(10, 11, 22), // skip t=5
+	})
+
+	result, _ := alignAndZipInMemory([]string{"corr-1"}, ctx, 4, si, snappedTs(20))
+
+	// 3 slots: t=0 (data), t=5 (zero-pad), t=10 (data)
+	if len(result) != 3 {
+		t.Fatalf("len=%d, want 3 (gap filled with zero)", len(result))
+	}
+	if result[0].UlVol != 10 {
+		t.Errorf("[0] UlVol=%v, want 10", result[0].UlVol)
+	}
+	if result[1].UlVol != 0 {
+		t.Errorf("[1] UlVol=%v, want 0 (zero-padded)", result[1].UlVol)
+	}
+	if result[1].DlVol != 0 {
+		t.Errorf("[1] DlVol=%v, want 0 (zero-padded)", result[1].DlVol)
+	}
+	if result[2].UlVol != 11 {
+		t.Errorf("[2] UlVol=%v, want 11", result[2].UlVol)
+	}
+	// Zero-padded Ts should be snappedNow + idx*si = 20 + (-3)*5 = 5
+	wantZeroTs := snappedTs(5).UTC().Format(time.RFC3339)
+	if result[1].Ts != wantZeroTs {
+		t.Errorf("[1] Ts=%v, want %v (derived from snappedNow)", result[1].Ts, wantZeroTs)
+	}
+}
