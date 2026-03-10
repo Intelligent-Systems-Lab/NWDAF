@@ -250,8 +250,9 @@ func (p *Processor) processUpfNotificationItemUnified(
 			record.TotalNbOfPackets = v.TotalNbOfPackets
 			record.UlNbOfPackets = v.UlNbOfPackets
 			record.DlNbOfPackets = v.DlNbOfPackets
-			logger.ProcLog.Infof("UPF VOLUME: ip=%s, total=%d, ul=%d, dl=%d, totalPkts=%d, ulPkts=%d, dlPkts=%d",
-				ipAddr, v.TotalVolume, v.UlVolume, v.DlVolume,
+			logger.ProcLog.Infof("UPF VOLUME: ip=%s, startTime=%s, total=%d, ul=%d, dl=%d, totalPkts=%d, ulPkts=%d, dlPkts=%d",
+				ipAddr, measurementTs.UTC().Format(time.RFC3339),
+				v.TotalVolume, v.UlVolume, v.DlVolume,
 				v.TotalNbOfPackets, v.UlNbOfPackets, v.DlNbOfPackets)
 		}
 
