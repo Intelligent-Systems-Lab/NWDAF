@@ -3,8 +3,8 @@ package anlf
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
+	"math"
+	"slices"
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
@@ -210,10 +210,6 @@ type trafficPoint struct {
 // fetchHistoricalData retrieves recent UPF traffic data for ML prediction from the
 // in-memory ring buffer. The buffer is the sole source for inference; MongoDB is
 // only consulted by the accuracy monitor for ground truth.
-//
-// Streams are grouped by correlationId, trimmed to the most recent inputWindow
-// points, then zipped by sequence position (index from the end). Output Ts values
-// are derived from snappedNow for perfect grid alignment.
 func fetchHistoricalData(
 	nwdafSubId string,
 	ctx *nwdaf_context.NWDAFContext,
@@ -226,7 +222,76 @@ func fetchHistoricalData(
 	return alignAndZipInMemory(corrIds, ctx, inputWindow, samplingInterval, snappedNow)
 }
 
-// alignAndZipInMemory reads from the in-memory TrafficData store,
+// globalBucket accumulates traffic values and snapped center timestamps for all
+// IP sessions that are mapped to the same global time slot.
+//
+// centerSum / centerCount is used to compute the mean center timestamp for the
+// output Ts, which reflects the true measurement time across IPs with different
+// anchor offsets rather than forcing an artificial grid point.
+type globalBucket struct {
+	agg         trafficPoint
+	centerSum   int64 // sum of per-IP snapped center unix timestamps (seconds)
+	centerCount int   // number of IP sessions that contributed to this slot
+}
+
+// alignAndZipInMemory reads the in-memory ring buffer for all corrIds belonging
+// to an NWDAF subscription, aggregates the UPF traffic reports into a fixed-length
+// time-slot sequence, and returns it ready for the ML inference service.
+//
+// # The alignment problem
+//
+// UPF reports arrive with a startTime set by the UPF itself. Even though every UE
+// is supposed to report at a fixed interval (samplingInterval seconds), two sources
+// of misalignment exist:
+//
+//  1. Anchor drift: each IP session's first report lands at an arbitrary sub-second
+//     offset from the absolute Unix grid (e.g. t=0.3, 5.3, 10.3 instead of 0, 5, 10).
+//     A naive floor(t/si)*si would assign a report at t=9.8 to slot 5 instead of 10.
+//
+//  2. Late joiners: an IP that subscribes much later than the rest of the group has
+//     a completely different anchor. Using the raw sequence index to merge streams
+//     would co-locate data from different real measurement periods.
+//
+// # Two-step alignment
+//
+// Step 1 — Per-IP anchor round (eliminates drift, provides dedup):
+//
+//	anchor := first report's Unix timestamp for this IP session
+//	n      := round( (t - anchor) / si )          // nearest integer step
+//	center := anchor + n*si                        // snapped to IP's own grid
+//
+// Because we round relative to the anchor, a report at t=9.8 with anchor=0.3 gives
+// n=round(9.5/5)=2, center=0.3+10=10.3 — correctly placed in the third slot.
+// The tolerance window is ±si/2 around each expected report time.
+//
+// The center value is used as the map key within each IP session: if two reports
+// from the same session map to the same center (e.g. a duplicate or a retransmit),
+// the later entry overwrites the earlier one (last-wins dedup).
+//
+// Step 2 — Global round (aligns IPs with different anchors):
+//
+//	globalIndex := round( (center - snappedNow) / si )
+//
+// snappedNow is the current inference time floored to the grid. The global index
+// is negative for historical slots (e.g. -1 = one period before now). Two IP
+// sessions whose per-IP centers differ by less than si/2 — because they started
+// reporting at slightly different real times — will receive the same globalIndex
+// and are therefore summed together into the correct output slot.
+//
+// # Output Ts
+//
+// Rather than forcing all slots to the absolute grid, the representative timestamp
+// for each output slot is the mean of the contributing IPs' per-IP centers:
+//
+//	Ts = mean( center_ip  for all IPs in globalIndex )
+//
+// This preserves the true measurement time (e.g. 26s instead of 25s or 27s when
+// two IPs contributed centers at 25 and 27).
+//
+// # Return value
+//
+// Returns the last min(inputWindow, available) slots in ascending time order.
+// Returns nil when no data is available for any corrId.
 func alignAndZipInMemory(
 	corrIds []string,
 	ctx *nwdaf_context.NWDAFContext,
@@ -234,110 +299,103 @@ func alignAndZipInMemory(
 	snappedNow time.Time,
 ) ([]TrafficObservation, string) {
 	dnn := "internet"
-	streams := make([][]trafficPoint, 0, len(corrIds))
+	si := int64(samplingInterval)
+	snappedNowUnix := snappedNow.Unix()
+
+	// buckets maps globalIndex → accumulated traffic + center metadata.
+	// Negative indices represent past slots (e.g. -1 = one period before snappedNow).
+	buckets := make(map[int]*globalBucket)
 
 	for _, corrId := range corrIds {
-		allData := ctx.GetAllTrafficDataForCorrelation(corrId)
-		var pts []trafficPoint
-		for _, td := range allData {
+		for _, td := range ctx.GetAllTrafficDataForCorrelation(corrId) {
 			td.Lock()
 			if td.Dnn != "" {
 				dnn = td.Dnn
 			}
-			// RawUpfData is appended in arrival order (ascending timestamp).
-			for _, dp := range td.RawUpfData {
-				pts = append(pts, trafficPoint{
-					TotalVol:    float64(dp.TotalVolume),
-					UlVol:       float64(dp.UlVolume),
-					DlVol:       float64(dp.DlVolume),
-					TotalNbPkts: float64(dp.TotalNbOfPackets),
-					UlNbPkts:    float64(dp.UlNbOfPackets),
-					DlNbPkts:    float64(dp.DlNbOfPackets),
-					UlThr:       dp.UlThroughput,
-					DlThr:       dp.DlThroughput,
-					UlPktThr:    dp.UlPacketThroughput,
-					DlPktThr:    dp.DlPacketThroughput,
-				})
-			}
-			td.Unlock()
-		}
-		if len(pts) > inputWindow {
-			pts = pts[len(pts)-inputWindow:]
-		}
-		streams = append(streams, pts)
-	}
-
-	return zipStreams(streams, inputWindow, samplingInterval, snappedNow), dnn
-}
-
-// zipStreams zips multiple per-corrId trafficPoint streams by sequence position from
-// the end, sums values across streams at each position, and assigns derived Ts values.
-// Streams shorter than outputLen are left-padded with zeros (no data → contributes 0).
-// outputLen = min(inputWindow, maxStreamLen).
-func zipStreams(
-	streams [][]trafficPoint,
-	inputWindow, samplingInterval int,
-	snappedNow time.Time,
-) []TrafficObservation {
-	if len(streams) == 0 {
-		return nil
-	}
-	maxLen := 0
-	for _, s := range streams {
-		if len(s) > maxLen {
-			maxLen = len(s)
-		}
-	}
-	outputLen := min(maxLen, inputWindow)
-	if outputLen == 0 {
-		return nil
-	}
-
-	counts := make([]string, outputLen)
-	result := make([]TrafficObservation, outputLen)
-	for pos := range outputLen {
-		var agg trafficPoint
-		contributing := 0
-		for _, s := range streams {
-			// Align from the end: pos 0 → oldest, pos outputLen-1 → most recent.
-			// idx < 0 means this stream is shorter; it contributes 0 at this position.
-			idx := len(s) - outputLen + pos
-			if idx < 0 {
+			if len(td.RawUpfData) == 0 {
+				td.Unlock()
 				continue
 			}
-			p := s[idx]
-			agg.TotalVol += p.TotalVol
-			agg.UlVol += p.UlVol
-			agg.DlVol += p.DlVol
-			agg.TotalNbPkts += p.TotalNbPkts
-			agg.UlNbPkts += p.UlNbPkts
-			agg.DlNbPkts += p.DlNbPkts
-			agg.UlThr += p.UlThr
-			agg.DlThr += p.DlThr
-			agg.UlPktThr += p.UlPktThr
-			agg.DlPktThr += p.DlPktThr
-			contributing++
-		}
-		counts[pos] = strconv.Itoa(contributing)
-		// Derive Ts from snappedNow: pos 0 is (outputLen-1) steps before snappedNow.
-		ts := snappedNow.Add(time.Duration((pos-outputLen+1)*samplingInterval) * time.Second)
-		result[pos] = TrafficObservation{
-			Ts:          ts.UTC().Format(time.RFC3339),
-			TotalVol:    agg.TotalVol,
-			UlVol:       agg.UlVol,
-			DlVol:       agg.DlVol,
-			TotalNbPkts: agg.TotalNbPkts,
-			UlNbPkts:    agg.UlNbPkts,
-			DlNbPkts:    agg.DlNbPkts,
-			UlThr:       agg.UlThr,
-			DlThr:       agg.DlThr,
-			UlPktThr:    agg.UlPktThr,
-			DlPktThr:    agg.DlPktThr,
+
+			// anchor is this IP session's first report time, used as the reference
+			// for all subsequent round operations (Step 1).
+			anchorUnix := td.RawUpfData[0].Timestamp.Unix()
+
+			// Step 1: snap every data point to the nearest anchor-relative grid
+			// center and deduplicate within the same session.
+			// key = anchorUnix + n*si  (exact integer, always a multiple of si
+			// offset from this session's anchor)
+			// If two reports round to the same key, the later one overwrites.
+			perIP := make(map[int64]nwdaf_context.UpfDataPoint, len(td.RawUpfData))
+			for _, dp := range td.RawUpfData {
+				n := int64(math.Round(float64(dp.Timestamp.Unix()-anchorUnix) / float64(si)))
+				perIP[anchorUnix+n*si] = dp // last-wins on collision
+			}
+			td.Unlock() // release lock before touching shared buckets map
+
+			// Step 2: map each session-local center to a global slot index and
+			// accumulate into the shared bucket.
+			for centerUnix, dp := range perIP {
+				idx := int(math.Round(float64(centerUnix-snappedNowUnix) / float64(si)))
+				b, ok := buckets[idx]
+				if !ok {
+					b = &globalBucket{}
+					buckets[idx] = b
+				}
+				b.agg.TotalVol += float64(dp.TotalVolume)
+				b.agg.UlVol += float64(dp.UlVolume)
+				b.agg.DlVol += float64(dp.DlVolume)
+				b.agg.TotalNbPkts += float64(dp.TotalNbOfPackets)
+				b.agg.UlNbPkts += float64(dp.UlNbOfPackets)
+				b.agg.DlNbPkts += float64(dp.DlNbOfPackets)
+				b.agg.UlThr += dp.UlThroughput
+				b.agg.DlThr += dp.DlThroughput
+				b.agg.UlPktThr += dp.UlPacketThroughput
+				b.agg.DlPktThr += dp.DlPacketThroughput
+				b.centerSum += centerUnix // accumulated for mean Ts computation
+				b.centerCount++
+			}
 		}
 	}
-	anlfLog.Debugf("Aligned streams [streams=%d, outputLen=%d, contributors/pos]: %s",
-		len(streams), outputLen, strings.Join(counts, ","))
-	return result
+
+	if len(buckets) == 0 {
+		return nil, dnn
+	}
+
+	// Sort global indices in ascending order (oldest → newest) and retain only
+	// the most recent inputWindow slots.
+	keys := make([]int, 0, len(buckets))
+	for k := range buckets {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	if len(keys) > inputWindow {
+		keys = keys[len(keys)-inputWindow:]
+	}
+
+	result := make([]TrafficObservation, len(keys))
+	for i, idx := range keys {
+		b := buckets[idx]
+		// Mean center: integer-round the float average to the nearest second.
+		meanCenter := int64(math.Round(float64(b.centerSum) / float64(b.centerCount)))
+		ts := time.Unix(meanCenter, 0).UTC()
+		result[i] = TrafficObservation{
+			Ts:          ts.Format(time.RFC3339),
+			TotalVol:    b.agg.TotalVol,
+			UlVol:       b.agg.UlVol,
+			DlVol:       b.agg.DlVol,
+			TotalNbPkts: b.agg.TotalNbPkts,
+			UlNbPkts:    b.agg.UlNbPkts,
+			DlNbPkts:    b.agg.DlNbPkts,
+			UlThr:       b.agg.UlThr,
+			DlThr:       b.agg.DlThr,
+			UlPktThr:    b.agg.UlPktThr,
+			DlPktThr:    b.agg.DlPktThr,
+		}
+	}
+	anlfLog.Debugf("Aggregated %d global slots from %d corrIds (inputWindow=%d)",
+		len(result), len(corrIds), inputWindow)
+	return result, dnn
 }
 
 // isAccuracyMonitorEnabled checks if accuracy monitoring is configured and enabled

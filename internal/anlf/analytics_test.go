@@ -3,200 +3,253 @@ package anlf
 import (
 	"testing"
 	"time"
+
+	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 )
 
-// makePoint builds a trafficPoint for test inputs.
-func makePoint(
-	totalVol, ulVol, dlVol, totalPkts, ulPkts, dlPkts,
-	ulThr, dlThr, ulPktThr, dlPktThr float64,
-) trafficPoint {
-	return trafficPoint{
-		TotalVol: totalVol, UlVol: ulVol, DlVol: dlVol,
-		TotalNbPkts: totalPkts, UlNbPkts: ulPkts, DlNbPkts: dlPkts,
-		UlThr: ulThr, DlThr: dlThr, UlPktThr: ulPktThr, DlPktThr: dlPktThr,
+// makeDP builds an UpfDataPoint with only the fields used by tests.
+func makeDP(unixSec int64, ulVol, dlVol int64) nwdaf_context.UpfDataPoint {
+	return nwdaf_context.UpfDataPoint{
+		Timestamp: time.Unix(unixSec, 0),
+		UlVolume:  ulVol,
+		DlVolume:  dlVol,
 	}
 }
 
-// snapped returns a time.Time snapped to Unix timestamp unix (UTC).
-func snapped(unix int64) time.Time { return time.Unix(unix, 0).UTC() }
+// makeDPf builds an UpfDataPoint with a fractional-second timestamp (for drift tests).
+func makeDPf(unixSec float64, ulVol, dlVol int64) nwdaf_context.UpfDataPoint {
+	sec := int64(unixSec)
+	nsec := int64((unixSec - float64(sec)) * 1e9)
+	return nwdaf_context.UpfDataPoint{
+		Timestamp: time.Unix(sec, nsec),
+		UlVolume:  ulVol,
+		DlVolume:  dlVol,
+	}
+}
 
-// TestZipStreams_Empty verifies that empty input returns nil.
-func TestZipStreams_Empty(t *testing.T) {
-	result := zipStreams(nil, 5, 5, snapped(100))
+// setupCtx re-initializes the global NWDAF context and returns it.
+func setupCtx(t *testing.T) *nwdaf_context.NWDAFContext {
+	t.Helper()
+	nwdaf_context.Init()
+	return nwdaf_context.GetSelf()
+}
+
+// snappedTs returns a UTC time from a unix second value.
+func snappedTs(unix int64) time.Time { return time.Unix(unix, 0).UTC() }
+
+// --- helpers ---
+
+func setRawUpfData(ctx *nwdaf_context.NWDAFContext, corrId, ip string, pts []nwdaf_context.UpfDataPoint) {
+	td := ctx.GetOrCreateTrafficData(corrId, ip)
+	td.Lock()
+	td.RawUpfData = pts
+	td.Unlock()
+}
+
+// --- tests ---
+
+// TestAggregateInMemory_NoCorrIds verifies that nil corrIds returns nil.
+func TestAggregateInMemory_NoCorrIds(t *testing.T) {
+	ctx := setupCtx(t)
+	result, _ := alignAndZipInMemory(nil, ctx, 5, 5, snappedTs(100))
 	if result != nil {
 		t.Errorf("want nil, got %v", result)
 	}
-	result = zipStreams([][]trafficPoint{}, 5, 5, snapped(100))
+}
+
+// TestAggregateInMemory_NoData verifies that a corrId with no data returns nil.
+func TestAggregateInMemory_NoData(t *testing.T) {
+	ctx := setupCtx(t)
+	setRawUpfData(ctx, "corr-1", "1.1.1.1", nil)
+	result, _ := alignAndZipInMemory([]string{"corr-1"}, ctx, 5, 5, snappedTs(100))
 	if result != nil {
-		t.Errorf("want nil for empty streams, got %v", result)
+		t.Errorf("want nil for empty data, got %v", result)
 	}
 }
 
-// TestZipStreams_SingleStream verifies that a single stream with 3 points produces
-// 3 output entries with correct values and derived timestamps.
-func TestZipStreams_SingleStream(t *testing.T) {
+// TestAggregateInMemory_SingleIP_Basic verifies values and timestamps for a single
+// IP with 3 clean reports at exact si intervals.
+// si=5, snappedNow=15, anchor=0: reports at 0,5,10 → global indices -3,-2,-1 → Ts=0,5,10
+func TestAggregateInMemory_SingleIP_Basic(t *testing.T) {
+	ctx := setupCtx(t)
 	si := 5
-	now := snapped(115) // snappedNow
-	stream := []trafficPoint{
-		{UlVol: 10, DlVol: 20}, // pos 0 → now - 2*si = t=105
-		{UlVol: 12, DlVol: 25}, // pos 1 → now - 1*si = t=110
-		{UlVol: 11, DlVol: 22}, // pos 2 → now        = t=115
-	}
-	result := zipStreams([][]trafficPoint{stream}, 5, si, now)
+	setRawUpfData(ctx, "corr-1", "1.1.1.1", []nwdaf_context.UpfDataPoint{
+		makeDP(0, 10, 20),
+		makeDP(5, 12, 25),
+		makeDP(10, 11, 22),
+	})
+
+	result, _ := alignAndZipInMemory([]string{"corr-1"}, ctx, 5, si, snappedTs(15))
 
 	if len(result) != 3 {
-		t.Fatalf("len = %d, want 3", len(result))
+		t.Fatalf("len=%d, want 3", len(result))
 	}
 	wantUl := []float64{10, 12, 11}
 	wantDl := []float64{20, 25, 22}
-	wantTs := []time.Time{snapped(105), snapped(110), snapped(115)}
+	wantTs := []time.Time{snappedTs(0), snappedTs(5), snappedTs(10)}
 	for i, r := range result {
 		if r.UlVol != wantUl[i] {
-			t.Errorf("[%d] UlVol = %v, want %v", i, r.UlVol, wantUl[i])
+			t.Errorf("[%d] UlVol=%v, want %v", i, r.UlVol, wantUl[i])
 		}
 		if r.DlVol != wantDl[i] {
-			t.Errorf("[%d] DlVol = %v, want %v", i, r.DlVol, wantDl[i])
+			t.Errorf("[%d] DlVol=%v, want %v", i, r.DlVol, wantDl[i])
 		}
-		wantTsStr := wantTs[i].UTC().Format(time.RFC3339)
-		if r.Ts != wantTsStr {
-			t.Errorf("[%d] Ts = %v, want %v", i, r.Ts, wantTsStr)
-		}
-	}
-}
-
-// TestZipStreams_MultiStreamSameLength verifies that 3 streams of equal length are
-// summed correctly at each position.
-func TestZipStreams_MultiStreamSameLength(t *testing.T) {
-	now := snapped(110)
-	streams := [][]trafficPoint{
-		{{UlVol: 10, DlVol: 20}, {UlVol: 12, DlVol: 25}, {UlVol: 11, DlVol: 22}},
-		{{UlVol: 15, DlVol: 30}, {UlVol: 18, DlVol: 35}, {UlVol: 16, DlVol: 32}},
-		{{UlVol: 5, DlVol: 10}, {UlVol: 8, DlVol: 15}, {UlVol: 6, DlVol: 12}},
-	}
-	result := zipStreams(streams, 5, 5, now)
-
-	if len(result) != 3 {
-		t.Fatalf("len = %d, want 3", len(result))
-	}
-	wantUl := []float64{30, 38, 33} // 10+15+5, 12+18+8, 11+16+6
-	wantDl := []float64{60, 75, 66} // 20+30+10, 25+35+15, 22+32+12
-	for i, r := range result {
-		if r.UlVol != wantUl[i] {
-			t.Errorf("[%d] UlVol = %v, want %v", i, r.UlVol, wantUl[i])
-		}
-		if r.DlVol != wantDl[i] {
-			t.Errorf("[%d] DlVol = %v, want %v", i, r.DlVol, wantDl[i])
+		want := wantTs[i].UTC().Format(time.RFC3339)
+		if r.Ts != want {
+			t.Errorf("[%d] Ts=%v, want %v", i, r.Ts, want)
 		}
 	}
 }
 
-// TestZipStreams_DifferentLengthAlignedFromEnd verifies that streams of different
-// lengths are aligned from the end: the shorter stream's head is padded with zeros.
-// A=5pts, B=3pts → output has 5 entries; B contributes 0 at positions 0 and 1.
-func TestZipStreams_DifferentLengthAlignedFromEnd(t *testing.T) {
-	now := snapped(120)
-	streamA := []trafficPoint{ // 5 points
-		{UlVol: 10}, {UlVol: 11}, {UlVol: 12}, {UlVol: 13}, {UlVol: 14},
-	}
-	streamB := []trafficPoint{ // 3 points — aligns to positions 2,3,4
-		{UlVol: 100}, {UlVol: 101}, {UlVol: 102},
-	}
-	result := zipStreams([][]trafficPoint{streamA, streamB}, 10, 5, now)
-
-	if len(result) != 5 {
-		t.Fatalf("len = %d, want 5", len(result))
-	}
-	// pos 0,1: only A contributes (B is too short)
-	if result[0].UlVol != 10 {
-		t.Errorf("[0] UlVol = %v, want 10 (only A)", result[0].UlVol)
-	}
-	if result[1].UlVol != 11 {
-		t.Errorf("[1] UlVol = %v, want 11 (only A)", result[1].UlVol)
-	}
-	// pos 2,3,4: A + B
-	wantUl := []float64{112, 114, 116} // A[2]+B[0], A[3]+B[1], A[4]+B[2]
-	for i, pos := range []int{2, 3, 4} {
-		if result[pos].UlVol != wantUl[i] {
-			t.Errorf("[%d] UlVol = %v, want %v", pos, result[pos].UlVol, wantUl[i])
-		}
-	}
-}
-
-// TestZipStreams_AllFieldsSummed verifies all 10 numeric fields are summed correctly.
-func TestZipStreams_AllFieldsSummed(t *testing.T) {
-	now := snapped(100)
-	streams := [][]trafficPoint{
-		{makePoint(100, 40, 60, 10, 4, 6, 1, 2, 3, 4)},
-		{makePoint(200, 80, 120, 20, 8, 12, 3, 4, 5, 6)},
-	}
-	result := zipStreams(streams, 1, 5, now)
-
-	if len(result) != 1 {
-		t.Fatalf("len = %d, want 1", len(result))
-	}
-	r := result[0]
-	cases := []struct {
-		field string
-		got   float64
-		want  float64
-	}{
-		{"TotalVol", r.TotalVol, 300},
-		{"UlVol", r.UlVol, 120},
-		{"DlVol", r.DlVol, 180},
-		{"TotalNbPkts", r.TotalNbPkts, 30},
-		{"UlNbPkts", r.UlNbPkts, 12},
-		{"DlNbPkts", r.DlNbPkts, 18},
-		{"UlThr", r.UlThr, 4},
-		{"DlThr", r.DlThr, 6},
-		{"UlPktThr", r.UlPktThr, 8},
-		{"DlPktThr", r.DlPktThr, 10},
-	}
-	for _, c := range cases {
-		if c.got != c.want {
-			t.Errorf("%s = %v, want %v", c.field, c.got, c.want)
-		}
-	}
-}
-
-// TestZipStreams_DerivedTimestamps verifies output Ts values are derived from
-// snappedNow regardless of input data timestamps.
-func TestZipStreams_DerivedTimestamps(t *testing.T) {
+// TestAggregateInMemory_Drift verifies that a report arriving slightly before the
+// next period boundary is still assigned to the correct slot via anchor-based round.
+// anchor=0.3, si=5: report at 9.8 should be slot index 2 (center≈10.3), not slot 1.
+func TestAggregateInMemory_Drift(t *testing.T) {
+	ctx := setupCtx(t)
 	si := 5
-	now := snapped(100) // snappedNow
-	stream := []trafficPoint{{UlVol: 1}, {UlVol: 2}, {UlVol: 3}}
-	result := zipStreams([][]trafficPoint{stream}, 5, si, now)
+	setRawUpfData(ctx, "corr-1", "1.1.1.1", []nwdaf_context.UpfDataPoint{
+		makeDPf(0.3, 10, 0),
+		makeDPf(5.3, 12, 0),
+		makeDPf(9.8, 11, 0), // drifted: expected ≈10.3, arrived 0.5s early
+		makeDPf(15.3, 14, 0),
+	})
 
-	if len(result) != 3 {
-		t.Fatalf("len = %d, want 3", len(result))
+	// snappedNow=20, so global indices: 0.3→-4, 5.3→-3, 9.8→-2 (rounds to center≈10.3), 15.3→-1
+	result, _ := alignAndZipInMemory([]string{"corr-1"}, ctx, 10, si, snappedTs(20))
+
+	if len(result) != 4 {
+		t.Fatalf("len=%d, want 4 (drift report must be in its own slot)", len(result))
 	}
-	// outputLen=3: pos0→now-2*si=t=90, pos1→now-1*si=t=95, pos2→now=t=100
-	wantTs := []time.Time{snapped(90), snapped(95), snapped(100)}
-	for i, wt := range wantTs {
-		want := wt.UTC().Format(time.RFC3339)
-		if result[i].Ts != want {
-			t.Errorf("[%d] Ts = %v, want %v", i, result[i].Ts, want)
+	// The UlVol sequence should be 10, 12, 11, 14 in ascending time order.
+	wantUl := []float64{10, 12, 11, 14}
+	for i, r := range result {
+		if r.UlVol != wantUl[i] {
+			t.Errorf("[%d] UlVol=%v, want %v", i, r.UlVol, wantUl[i])
 		}
 	}
 }
 
-// TestZipStreams_InputWindowCap verifies that outputLen is capped at inputWindow
-// even when streams are longer.
-func TestZipStreams_InputWindowCap(t *testing.T) {
-	now := snapped(150)
-	stream := make([]trafficPoint, 10) // 10 points, but inputWindow=5
-	for i := range stream {
-		stream[i].UlVol = float64(i + 1)
-	}
-	result := zipStreams([][]trafficPoint{stream}, 5, 5, now)
+// TestAggregateInMemory_Dedup verifies that two reports from the same IP that land
+// on the same anchor-relative slot are deduplicated (last wins).
+func TestAggregateInMemory_Dedup(t *testing.T) {
+	ctx := setupCtx(t)
+	si := 5
+	setRawUpfData(ctx, "corr-1", "1.1.1.1", []nwdaf_context.UpfDataPoint{
+		makeDP(0, 10, 20),
+		makeDP(1, 99, 99), // rounds to slot 0 (anchor=0, round(1/5)=0) → last wins
+		makeDP(5, 12, 25),
+	})
 
-	if len(result) != 5 {
-		t.Fatalf("len = %d, want 5 (capped at inputWindow)", len(result))
+	result, _ := alignAndZipInMemory([]string{"corr-1"}, ctx, 5, si, snappedTs(10))
+
+	if len(result) != 2 {
+		t.Fatalf("len=%d, want 2 (slot 0 deduped to 1 entry)", len(result))
 	}
-	// Should be the last 5: UlVol = 6,7,8,9,10
-	wantUl := []float64{6, 7, 8, 9, 10}
+	// Slot 0: last of {10,99} wins → UlVol=99
+	if result[0].UlVol != 99 {
+		t.Errorf("slot 0 UlVol=%v, want 99 (last-wins dedup)", result[0].UlVol)
+	}
+	if result[1].UlVol != 12 {
+		t.Errorf("slot 1 UlVol=%v, want 12", result[1].UlVol)
+	}
+}
+
+// TestAggregateInMemory_MultiIP_SameAnchor verifies that two IPs with the same
+// anchor and timing have their values summed in each slot.
+func TestAggregateInMemory_MultiIP_SameAnchor(t *testing.T) {
+	ctx := setupCtx(t)
+	si := 5
+	setRawUpfData(ctx, "corr-1", "1.1.1.1", []nwdaf_context.UpfDataPoint{
+		makeDP(0, 10, 20),
+		makeDP(5, 12, 25),
+	})
+	setRawUpfData(ctx, "corr-2", "2.2.2.2", []nwdaf_context.UpfDataPoint{
+		makeDP(0, 5, 10),
+		makeDP(5, 8, 15),
+	})
+
+	result, _ := alignAndZipInMemory([]string{"corr-1", "corr-2"}, ctx, 5, si, snappedTs(10))
+
+	if len(result) != 2 {
+		t.Fatalf("len=%d, want 2", len(result))
+	}
+	// Slot 0: 10+5=15 UlVol, 20+10=30 DlVol
+	if result[0].UlVol != 15 {
+		t.Errorf("slot 0 UlVol=%v, want 15", result[0].UlVol)
+	}
+	if result[0].DlVol != 30 {
+		t.Errorf("slot 0 DlVol=%v, want 30", result[0].DlVol)
+	}
+	// Slot 1: 12+8=20 UlVol, 25+15=40 DlVol
+	if result[1].UlVol != 20 {
+		t.Errorf("slot 1 UlVol=%v, want 20", result[1].UlVol)
+	}
+	if result[1].DlVol != 40 {
+		t.Errorf("slot 1 DlVol=%v, want 40", result[1].DlVol)
+	}
+}
+
+// TestAggregateInMemory_MultiIP_DifferentAnchor verifies that a late-joining IP
+// (anchor far from others) is correctly co-located via global round, not mis-aligned.
+//
+// si=5, snappedNow=30
+// IP-A anchor=0:  slots at t=25 (global -1) and t=30 (global 0)
+// IP-B anchor=27: slot  at t=27 → per-IP center=27 → global round((27-30)/5)=-1
+// So global -1 should sum IP-A(t=25) + IP-B(t=27), Ts=mean(25,27)=26
+// Global  0 should have only IP-A(t=30)
+func TestAggregateInMemory_MultiIP_DifferentAnchor(t *testing.T) {
+	ctx := setupCtx(t)
+	si := 5
+	// IP-A: long-running, reports every 5s from t=0
+	setRawUpfData(ctx, "corr-1", "1.1.1.1", []nwdaf_context.UpfDataPoint{
+		makeDP(25, 10, 0),
+		makeDP(30, 20, 0),
+	})
+	// IP-B: joined late, first report at t=27
+	setRawUpfData(ctx, "corr-2", "2.2.2.2", []nwdaf_context.UpfDataPoint{
+		makeDP(27, 5, 0),
+	})
+
+	result, _ := alignAndZipInMemory([]string{"corr-1", "corr-2"}, ctx, 5, si, snappedTs(30))
+
+	if len(result) != 2 {
+		t.Fatalf("len=%d, want 2", len(result))
+	}
+	// Slot global -1: IP-A center=25, IP-B center=27 → UlVol=10+5=15, mean Ts=26
+	if result[0].UlVol != 15 {
+		t.Errorf("slot -1 UlVol=%v, want 15 (IP-A+IP-B summed)", result[0].UlVol)
+	}
+	wantTs0 := snappedTs(26).UTC().Format(time.RFC3339)
+	if result[0].Ts != wantTs0 {
+		t.Errorf("slot -1 Ts=%v, want %v (mean of 25,27)", result[0].Ts, wantTs0)
+	}
+	// Slot global 0: only IP-A center=30 → UlVol=20
+	if result[1].UlVol != 20 {
+		t.Errorf("slot 0 UlVol=%v, want 20 (only IP-A)", result[1].UlVol)
+	}
+}
+
+// TestAggregateInMemory_InputWindowCap verifies that only the last inputWindow
+// slots are returned when there are more slots than inputWindow.
+func TestAggregateInMemory_InputWindowCap(t *testing.T) {
+	ctx := setupCtx(t)
+	si := 5
+	pts := make([]nwdaf_context.UpfDataPoint, 10)
+	for i := range pts {
+		pts[i] = makeDP(int64(i*si), int64(i+1), 0)
+	}
+	setRawUpfData(ctx, "corr-1", "1.1.1.1", pts)
+
+	result, _ := alignAndZipInMemory([]string{"corr-1"}, ctx, 4, si, snappedTs(int64(9*si)))
+
+	if len(result) != 4 {
+		t.Fatalf("len=%d, want 4 (capped at inputWindow)", len(result))
+	}
+	// Last 4 slots: UlVol = 7,8,9,10
+	wantUl := []float64{7, 8, 9, 10}
 	for i, r := range result {
 		if r.UlVol != wantUl[i] {
-			t.Errorf("[%d] UlVol = %v, want %v", i, r.UlVol, wantUl[i])
+			t.Errorf("[%d] UlVol=%v, want %v", i, r.UlVol, wantUl[i])
 		}
 	}
 }
