@@ -20,6 +20,7 @@ import (
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/nwdaf/pkg/service"
+	logger_util "github.com/free5gc/util/logger"
 )
 
 var NWDAF *service.NwdafApp
@@ -53,6 +54,10 @@ func main() {
 }
 
 func action(cliCtx *cli.Context) error {
+	if err := initLogFile(cliCtx.StringSlice("log")); err != nil {
+		return err
+	}
+
 	logger.MainLog.Infoln("NWDAF")
 	logger.MainLog.Infoln("NWDAF version: v0.1.0")
 
@@ -79,5 +84,14 @@ func action(cliCtx *cli.Context) error {
 
 	nwdaf.Start()
 
+	return nil
+}
+
+func initLogFile(logNfPath []string) error {
+	for _, path := range logNfPath {
+		if err := logger_util.LogFileHook(logger.Log, path); err != nil {
+			return err
+		}
+	}
 	return nil
 }
