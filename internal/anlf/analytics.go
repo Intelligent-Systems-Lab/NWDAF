@@ -128,7 +128,7 @@ func generateMlBasedUeCommunication(
 	si64 := int64(samplingInterval)
 	snappedNow := time.Unix((now.Unix()/si64)*si64, 0)
 
-	// Fetch historical data — prefer MongoDB, fall back to in-memory
+	// Fetch historical data from in-memory ring buffer
 	historicalData, dnn := fetchHistoricalData(nwdafSubId, ctx, params, snappedNow)
 	if len(historicalData) == 0 {
 		return models.UeCommunication{}, errNoHistoricalData
