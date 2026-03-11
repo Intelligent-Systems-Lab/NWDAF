@@ -176,8 +176,8 @@ func generateMlBasedUeCommunication(
 	// commDur = total prediction horizon in seconds
 	commDur := int32(outputWindow * samplingInterval)
 
-	anlfLog.Infof("ML inference: sub=%s steps=%d ulVol=%d dlVol=%d confidence=%d commDur=%ds",
-		nwdafSubId, len(resp.PredictedData), totalUl, totalDl, avgConfidence, commDur)
+	anlfLog.Infof("ML inference: sub=%s %s steps=%d ulVol=%d dlVol=%d confidence=%d commDur=%ds",
+		nwdafSubId, inferenceTargetLabel(nwdafSubId, ctx), len(resp.PredictedData), totalUl, totalDl, avgConfidence, commDur)
 
 	return models.UeCommunication{
 		CommDur: commDur,
@@ -423,6 +423,32 @@ func alignAndZipInMemory(
 			len(result), len(corrIds), inputWindow, strings.Join(counts, ","))
 	}
 	return result, dnn
+}
+
+// inferenceTargetLabel returns a concise target description for log context:
+// "group=<id>", "supi=<supi>", or "supis=[s1,s2,...]" for multi-SUPI subscriptions.
+func inferenceTargetLabel(nwdafSubId string, ctx *nwdaf_context.NWDAFContext) string {
+	resources := ctx.GetNwdafSubResources(nwdafSubId)
+	if len(resources) == 0 {
+		return ""
+	}
+	if resources[0].OriginalGroupId != "" {
+		return "group=" + resources[0].OriginalGroupId
+	}
+	supis := make([]string, 0, len(resources))
+	for _, r := range resources {
+		if r.Supi != "" {
+			supis = append(supis, r.Supi)
+		}
+	}
+	switch len(supis) {
+	case 0:
+		return ""
+	case 1:
+		return "supi=" + supis[0]
+	default:
+		return "supis=[" + strings.Join(supis, ",") + "]"
+	}
 }
 
 // isAccuracyMonitorEnabled checks if accuracy monitoring is configured and enabled
