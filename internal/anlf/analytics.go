@@ -134,6 +134,17 @@ func generateMlBasedUeCommunication(
 		return models.UeCommunication{}, errNoHistoricalData
 	}
 
+	last := historicalData[len(historicalData)-1]
+	target := inferenceTargetLabel(nwdafSubId, ctx)
+	anlfLog.Infof("latest aggregated slot: %s %s ts=%s"+
+		" ulVol=%.0f dlVol=%.0f totalVol=%.0f"+
+		" ulPkts=%.0f dlPkts=%.0f totalPkts=%.0f"+
+		" ulThr=%.4f dlThr=%.4f ulPktThr=%.4f dlPktThr=%.4f",
+		nwdafSubId, target, last.Ts,
+		last.UlVol, last.DlVol, last.TotalVol,
+		last.UlNbPkts, last.DlNbPkts, last.TotalNbPkts,
+		last.UlThr, last.DlThr, last.UlPktThr, last.DlPktThr)
+
 	// Call ML service for prediction
 	modelId := mlInfo.GetModelId()
 	resp, err := mlClient.Predict(modelId, historicalData)
