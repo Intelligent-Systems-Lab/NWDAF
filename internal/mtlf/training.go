@@ -1,6 +1,8 @@
 package mtlf
 
 import (
+	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -12,6 +14,40 @@ import (
 )
 
 var mtlfLog = logger.MtlfLog
+
+// inFlightEntry holds the context needed to complete a hot-swap once Daisy
+// calls back with the training result.
+type inFlightEntry struct {
+	oldModelUrl string
+	// store is non-nil only for accuracy-triggered retraining; used to clear
+	// the IsRetraining flag if training fails so the monitor can re-trigger.
+	store *nwdaf_context.ModelAccuracyStore
+}
+
+// buildCallbackURL constructs the NWDAF callback URL that Daisy will POST to
+// when async training completes.
+func buildCallbackURL() string {
+	cfg := factory.NwdafConfig
+	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.Sbi == nil {
+		return ""
+	}
+	sbi := cfg.Configuration.Sbi
+	ip := sbi.RegisterIPv4
+	if ip == "" {
+		ip = sbi.BindingIPv4
+	}
+	return fmt.Sprintf("%s://%s:%d/mtlf/training-complete", cfg.GetSbiScheme(), ip, sbi.Port)
+}
+
+// newModelUrlFromCfg derives the new model URL from the task config (sync mode).
+func newModelUrlFromCfg(mtlfCfg *factory.MtlfConfig) string {
+	if taskOption, exists := mtlfCfg.Task["MODEL_PATH"]; exists {
+		if pathStr, isStr := taskOption.(string); isStr {
+			return pathStr
+		}
+	}
+	return "model.npy"
+}
 
 // StartTrainingScheduler starts background MTLF training scheduler.
 func (m *MtlfService) StartTrainingScheduler(wg *sync.WaitGroup) {
@@ -36,7 +72,8 @@ func (m *MtlfService) StartTrainingScheduler(wg *sync.WaitGroup) {
 }
 
 // runDelayedTraining waits for a delay then triggers training via Daisy.
-// The POST to Daisy blocks until training completes (HTTP 200 = success).
+// In sync mode (default): POST blocks until 200 (training complete).
+// In async mode: POST expects 202; swap happens when Daisy calls back.
 func (m *MtlfService) runDelayedTraining(delaySec int, mtlfCfg *factory.MtlfConfig) {
 	mtlfLog.Infof("MTLF training scheduled in %d seconds", delaySec)
 
@@ -48,18 +85,23 @@ func (m *MtlfService) runDelayedTraining(delaySec int, mtlfCfg *factory.MtlfConf
 		return
 	}
 
-	mtlfLog.Infof("Triggering MTLF training via Daisy: endpoint=%s", mtlfCfg.Endpoint)
+	mtlfLog.Infof("Triggering MTLF training via Daisy: endpoint=%s asyncMode=%v",
+		mtlfCfg.Endpoint, mtlfCfg.AsyncMode)
 
+	oldModelUrl := mtlfCfg.StaticModelUrl
+
+	if mtlfCfg.AsyncMode {
+		m.triggerTrainingAsync(mtlfCfg, oldModelUrl, nil)
+		return
+	}
+
+	// Sync mode: block until training completes.
 	if err := m.triggerTraining(mtlfCfg); err != nil {
 		mtlfLog.Errorf("MTLF training failed: %v", err)
 		return
 	}
-
 	mtlfLog.Info("MTLF training completed successfully")
-
-	// Startup trigger uses the static model as the initial "old" model
-	oldModelUrl := mtlfCfg.StaticModelUrl
-	m.swapModelAfterRetrain(oldModelUrl, mtlfCfg)
+	m.swapModelAfterRetrain(oldModelUrl, newModelUrlFromCfg(mtlfCfg))
 }
 
 // TriggerRetraining initiates retraining for a degraded model (called by accuracy monitor).
@@ -78,6 +120,12 @@ func (m *MtlfService) TriggerRetraining(
 
 	mtlfLog.Infof("Triggering retraining due to accuracy degradation for model: %s", oldModelUrl)
 
+	if mtlfCfg.AsyncMode {
+		go m.triggerTrainingAsync(mtlfCfg, oldModelUrl, store)
+		return
+	}
+
+	// Sync mode: block in a goroutine.
 	go func() {
 		if err := m.triggerTraining(mtlfCfg); err != nil {
 			mtlfLog.Errorf("Accuracy-triggered retraining failed: %v", err)
@@ -85,12 +133,11 @@ func (m *MtlfService) TriggerRetraining(
 			return
 		}
 		mtlfLog.Info("Accuracy-triggered retraining completed successfully")
-		// swapModelAfterRetrain deletes the old store, so no need to clear the flag.
-		m.swapModelAfterRetrain(oldModelUrl, mtlfCfg)
+		m.swapModelAfterRetrain(oldModelUrl, newModelUrlFromCfg(mtlfCfg))
 	}()
 }
 
-// triggerTraining sends training task to Daisy (shared by delay + accuracy triggers).
+// triggerTraining sends training task to Daisy and blocks until complete (sync mode).
 func (m *MtlfService) triggerTraining(mtlfCfg *factory.MtlfConfig) error {
 	client := consumer.NewDaisyClient(mtlfCfg.Endpoint)
 	task := mtlfCfg.Task
@@ -100,17 +147,74 @@ func (m *MtlfService) triggerTraining(mtlfCfg *factory.MtlfConfig) error {
 	return client.TriggerTraining(task)
 }
 
-// swapModelAfterRetrain handles the hot-swap of models after a successful retraining.
-func (m *MtlfService) swapModelAfterRetrain(oldModelUrl string, mtlfCfg *factory.MtlfConfig) {
-	nwdafCtx := nwdaf_context.GetSelf()
-
-	// 1. Get new model URL (from Daisy task config MODEL_PATH)
-	newModelUrl := "model.npy"
-	if taskOption, exists := mtlfCfg.Task["MODEL_PATH"]; exists {
-		if pathStr, isStr := taskOption.(string); isStr {
-			newModelUrl = pathStr
-		}
+// triggerTrainingAsync sends an async training request to Daisy and stores the
+// in-flight entry. When Daisy calls back, HandleTrainingComplete completes the swap.
+func (m *MtlfService) triggerTrainingAsync(
+	mtlfCfg *factory.MtlfConfig,
+	oldModelUrl string,
+	store *nwdaf_context.ModelAccuracyStore,
+) {
+	cbURL := buildCallbackURL()
+	if cbURL == "" {
+		mtlfLog.Warn("callback URL is empty; Daisy cannot notify completion")
 	}
+
+	task := mtlfCfg.Task
+	if task == nil {
+		task = map[string]any{}
+	}
+	// Clone to avoid mutating the shared config map.
+	taskCopy := make(map[string]any, len(task)+2)
+	maps.Copy(taskCopy, task)
+
+	client := consumer.NewDaisyClient(mtlfCfg.Endpoint)
+	taskId, err := client.TriggerTrainingAsync(taskCopy, cbURL)
+	if err != nil {
+		mtlfLog.Errorf("Failed to send async training request to Daisy: %v", err)
+		if store != nil {
+			store.SetRetraining(false)
+		}
+		return
+	}
+
+	m.inFlight.Store(taskId, &inFlightEntry{
+		oldModelUrl: oldModelUrl,
+		store:       store,
+	})
+	mtlfLog.Infof("Async training request accepted: taskId=%s callbackURL=%s", taskId, cbURL)
+}
+
+// HandleTrainingComplete is called when Daisy posts the async training callback.
+// It looks up the in-flight entry and either clears the retraining flag (on
+// failure) or triggers the model hot-swap (on success).
+func (m *MtlfService) HandleTrainingComplete(taskId, modelUrl, status, errMsg string) {
+	val, ok := m.inFlight.LoadAndDelete(taskId)
+	if !ok {
+		mtlfLog.Warnf("HandleTrainingComplete: unknown taskId=%s (already handled or never registered)", taskId)
+		return
+	}
+	entry := val.(*inFlightEntry)
+
+	if status != "success" {
+		mtlfLog.Errorf("Async training failed: taskId=%s error=%s", taskId, errMsg)
+		if entry.store != nil {
+			entry.store.SetRetraining(false)
+		}
+		return
+	}
+
+	mtlfLog.Infof("Async training complete: taskId=%s modelUrl=%s", taskId, modelUrl)
+	m.swapModelAfterRetrain(entry.oldModelUrl, modelUrl)
+}
+
+// swapModelAfterRetrain handles the hot-swap of models after a successful retraining.
+func (m *MtlfService) swapModelAfterRetrain(oldModelUrl, newModelUrl string) {
+	if factory.NwdafConfig == nil || factory.NwdafConfig.Configuration == nil {
+		mtlfLog.Error("config not initialized; cannot perform model swap")
+		return
+	}
+
+	nwdafCtx := nwdaf_context.GetSelf()
 
 	mtlfLog.Infof("Starting model hot-swap: old=%s, new=%s", oldModelUrl, newModelUrl)
 
@@ -122,55 +226,54 @@ func (m *MtlfService) swapModelAfterRetrain(oldModelUrl string, mtlfCfg *factory
 	}
 	mlClient := consumer.NewMlServiceClient(mlCfg.Endpoint)
 
-	// 2. Load new model
+	// 1. Load new model
 	newModelId, err := mlClient.InitializeModel(newModelUrl)
 	if err != nil {
 		mtlfLog.Errorf("Hot-swap failed: failed to load new model %s: %v", newModelUrl, err)
 		return
 	}
 
-	// 3. Unload old model
+	// 2. Unload old model
 	oldShared := nwdafCtx.GetSharedModel(oldModelUrl)
 	if oldShared != nil {
 		oldModelId := oldShared.GetModelId()
 		if oldModelId != "" {
-			err = mlClient.UnloadModel(oldModelId)
-			if err != nil {
-				mtlfLog.Warnf("Failed to unload old model ID %s (url=%s): %v", oldModelId, oldModelUrl, err)
+			if unloadErr := mlClient.UnloadModel(oldModelId); unloadErr != nil {
+				mtlfLog.Warnf("Failed to unload old model ID %s (url=%s): %v",
+					oldModelId, oldModelUrl, unloadErr)
 			}
 		}
 	}
 
-	// 4. Update SharedModelRegistry
+	// 3. Update SharedModelRegistry
 	nwdafCtx.DeleteSharedModel(oldModelUrl)
 	newShared, _ := nwdafCtx.GetOrCreateSharedModel(newModelUrl, models.NwdafEvent_UE_COMMUNICATION)
 	newShared.SetModelId(newModelId)
 
-	// 5. Update all subscriptions currently using the old model
+	// 4. Update all subscriptions currently using the old model
 	subs := nwdafCtx.GetAllSubscriptions()
 	for _, sub := range subs {
 		mlInfo := nwdafCtx.GetMlModelInfo(sub.ID)
-		if mlInfo != nil {
-			mlInfo.RLock()
-			currentUrl := mlInfo.ModelUrl
-			mlInfo.RUnlock()
+		if mlInfo == nil {
+			continue
+		}
+		mlInfo.RLock()
+		currentUrl := mlInfo.ModelUrl
+		mlInfo.RUnlock()
 
-			switch currentUrl {
-			case oldModelUrl:
-				// Update to new model
-				mlInfo.SetModelUrl(newModelUrl)
-				mlInfo.SetModelReady(newModelId)
-				newShared.AddSubscriber(sub.ID)
-				mtlfLog.Infof("Updated subscription %s to new model ID %s", sub.ID, newModelId)
-			case newModelUrl:
-				// Edge case: same URL but we just reloaded it
-				mlInfo.SetModelReady(newModelId)
-				newShared.AddSubscriber(sub.ID)
-			}
+		switch currentUrl {
+		case oldModelUrl:
+			mlInfo.SetModelUrl(newModelUrl)
+			mlInfo.SetModelReady(newModelId)
+			newShared.AddSubscriber(sub.ID)
+			mtlfLog.Infof("Updated subscription %s to new model ID %s", sub.ID, newModelId)
+		case newModelUrl:
+			mlInfo.SetModelReady(newModelId)
+			newShared.AddSubscriber(sub.ID)
 		}
 	}
 
-	// 6. Restart accuracy monitor for the new model (wired via callback by processor)
+	// 5. Restart accuracy monitor for the new model (wired via callback by processor)
 	nwdafCtx.DeleteModelAccuracyStore(oldModelUrl)
 
 	if m.onModelSwapped != nil {

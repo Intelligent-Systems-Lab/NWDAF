@@ -85,6 +85,10 @@ func NewServer(nwdaf nwdafApp) (*Server, error) {
 	mlModelGroup := s.router.Group("/mlmodel-notify")
 	applyRoutes(mlModelGroup, mlModelRoutes)
 
+	// Daisy async training callback routes
+	daisyGroup := s.router.Group("/mtlf")
+	applyRoutes(daisyGroup, s.getDaisyCallbackRoutes())
+
 	cfg := nwdaf.Config()
 	bindAddr := fmt.Sprintf("%s:%d",
 		cfg.Configuration.Sbi.BindingIPv4,

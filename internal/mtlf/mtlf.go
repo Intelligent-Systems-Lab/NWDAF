@@ -21,6 +21,10 @@ type MtlfService struct {
 	nwdaf          NwdafApp
 	wg             *sync.WaitGroup
 	onModelSwapped func(modelUrl string, wg *sync.WaitGroup)
+	// inFlight tracks async training tasks: taskId → *inFlightEntry.
+	// Populated when an async training request is accepted by Daisy;
+	// cleared when HandleTrainingComplete is called.
+	inFlight sync.Map
 }
 
 // NewMtlfService creates a new MtlfService instance.

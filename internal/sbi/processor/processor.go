@@ -61,6 +61,11 @@ func (p *Processor) StartMtlfTrainingScheduler(wg *sync.WaitGroup) {
 	p.mtlf.StartTrainingScheduler(wg)
 }
 
+// HandleDaisyCallback delegates an async Daisy training callback to MtlfService.
+func (p *Processor) HandleDaisyCallback(taskId, modelUrl, status, errMsg string) {
+	p.mtlf.HandleTrainingComplete(taskId, modelUrl, status, errMsg)
+}
+
 // InitializeMlModel delegates to AnlfService and then starts accuracy monitoring.
 func (p *Processor) InitializeMlModel(
 	nwdafSubId string, mlInfo *nwdaf_context.MlModelInfo, modelUrl string,
