@@ -68,7 +68,7 @@ configuration:
     triggerDelay: 10            # seconds to wait before startup trigger
     asyncMode: false            # false: block on POST until Daisy returns 200 (sync)
                                 # true:  expect 202 immediately; Daisy calls back POST /mtlf/training-complete when done
-    staticModelUrl: nwdaf_ml_service/ml/artifacts/model_original.npy  # Static path for direct model loading
+    staticModelUrl: http://placeholder/download/initial  # Initial model bundle (pre-cached in ML Service artifacts/initial/)
     accuracyMonitor:
       enabled: true            # Trigger retraining on accuracy degradation
       checkInterval: 50         # seconds between accuracy checks
@@ -80,16 +80,16 @@ configuration:
       emaAlpha: 0.3             # EMA smoothing factor 0-1 (for ema)
     task:
       TID: "nwdaf_fl_training"
-      NUM_ROUNDS: 2
+      NUM_ROUNDS: 30
       EVALUATE_INTERVAL: 1
       EVALUATE_INIT_MODEL_MASTER: true
       MIN_WAITING_TIME_MASTER: 5
-      MODEL_PATH: "nwdaf_ml_service/ml/artifacts/model_new.npy"
+      MODEL_PATH: "model/model.npy"
       OPERATORS:
         MASTER_SERVER_OPERATOR: ["daisyfl.operator.base.base_server_logic", "BaseServerLogic"]
         CLIENT_OPERATOR: ["daisyfl.operator.base.base_client_logic", "BaseClientLogic"]
       STRATEGIES:
-        MASTER_STRATEGY: ["daisyfl.strategy.fedavg", "FedAvg"]
+        MASTER_STRATEGY: ["custom_strategy", "EarlyStoppingFedAvg"]
       METRICS_HANDLERS:
         MASTER_METRICS_HANDLER: ["daisyfl.metrics_handler.flat_metrics_handler", "FlatMetricsHandler"]
       SAVE_MODEL: true

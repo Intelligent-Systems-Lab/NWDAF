@@ -117,7 +117,7 @@ func (c *MlServiceClient) InitializeModel(modelUrl string) (string, error) {
 
 	url := c.endpoint + "/model/load"
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
