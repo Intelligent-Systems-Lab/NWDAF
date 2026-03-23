@@ -66,8 +66,6 @@ configuration:
     endpoint: http://127.0.0.1:9887
     triggerOnStartup: false      # Trigger training once after NWDAF startup
     triggerDelay: 10            # seconds to wait before startup trigger
-    asyncMode: false            # false: block on POST until Daisy returns 200 (sync)
-                                # true:  expect 202 immediately; Daisy calls back POST /mtlf/training-complete when done
     staticModelUrl: http://placeholder/download/initial  # Initial model bundle (pre-cached in ML Service artifacts/initial/)
     accuracyMonitor:
       enabled: true            # Trigger retraining on accuracy degradation

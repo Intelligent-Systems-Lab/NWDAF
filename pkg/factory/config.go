@@ -161,12 +161,6 @@ type MtlfConfig struct {
 	StaticModelUrl   string                 `yaml:"staticModelUrl,omitempty"`   // Static URL for ML model
 	Task             map[string]any         `yaml:"task,omitempty"`             // Task payload (mirrors task.json)
 	AccuracyMonitor  *AccuracyMonitorConfig `yaml:"accuracyMonitor,omitempty"`  // Accuracy monitoring settings
-	// AsyncMode switches Daisy communication to async callback mode.
-	// When true, NWDAF sends POST and expects 202 immediately; Daisy calls back
-	// POST /mtlf/training-complete when training finishes.
-	// When false (default), NWDAF blocks on POST until Daisy returns 200.
-	// TODO: flip default to true once Daisy implements async callback support.
-	AsyncMode bool `yaml:"asyncMode,omitempty"`
 }
 
 // AccuracyMonitorConfig controls accuracy monitoring behavior

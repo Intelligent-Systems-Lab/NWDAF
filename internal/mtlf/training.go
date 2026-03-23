@@ -39,16 +39,6 @@ func buildCallbackURL() string {
 	return fmt.Sprintf("%s://%s:%d/mtlf/training-complete", cfg.GetSbiScheme(), ip, sbi.Port)
 }
 
-// newModelUrlFromCfg derives the new model URL from the task config (sync mode).
-func newModelUrlFromCfg(mtlfCfg *factory.MtlfConfig) string {
-	if taskOption, exists := mtlfCfg.Task["MODEL_PATH"]; exists {
-		if pathStr, isStr := taskOption.(string); isStr {
-			return pathStr
-		}
-	}
-	return "model.npy"
-}
-
 // StartTrainingScheduler starts background MTLF training scheduler.
 func (m *MtlfService) StartTrainingScheduler(wg *sync.WaitGroup) {
 	cfg := factory.NwdafConfig
@@ -71,9 +61,8 @@ func (m *MtlfService) StartTrainingScheduler(wg *sync.WaitGroup) {
 	}()
 }
 
-// runDelayedTraining waits for a delay then triggers training via Daisy.
-// In sync mode (default): POST blocks until 200 (training complete).
-// In async mode: POST expects 202; swap happens when Daisy calls back.
+// runDelayedTraining waits for a delay then triggers async training via Daisy.
+// Daisy responds 202 immediately; swap happens when Daisy calls back.
 func (m *MtlfService) runDelayedTraining(delaySec int, mtlfCfg *factory.MtlfConfig) {
 	mtlfLog.Infof("MTLF training scheduled in %d seconds", delaySec)
 
@@ -85,23 +74,8 @@ func (m *MtlfService) runDelayedTraining(delaySec int, mtlfCfg *factory.MtlfConf
 		return
 	}
 
-	mtlfLog.Infof("Triggering MTLF training via Daisy: endpoint=%s asyncMode=%v",
-		mtlfCfg.Endpoint, mtlfCfg.AsyncMode)
-
-	oldModelUrl := mtlfCfg.StaticModelUrl
-
-	if mtlfCfg.AsyncMode {
-		m.triggerTrainingAsync(mtlfCfg, oldModelUrl, nil)
-		return
-	}
-
-	// Sync mode: block until training completes.
-	if err := m.triggerTraining(mtlfCfg); err != nil {
-		mtlfLog.Errorf("MTLF training failed: %v", err)
-		return
-	}
-	mtlfLog.Info("MTLF training completed successfully")
-	m.swapModelAfterRetrain(oldModelUrl, newModelUrlFromCfg(mtlfCfg))
+	mtlfLog.Infof("Triggering MTLF training via Daisy: endpoint=%s", mtlfCfg.Endpoint)
+	m.triggerTrainingAsync(mtlfCfg, mtlfCfg.StaticModelUrl, nil)
 }
 
 // TriggerRetraining initiates retraining for a degraded model (called by accuracy monitor).
@@ -119,32 +93,7 @@ func (m *MtlfService) TriggerRetraining(
 	mtlfCfg := cfg.Configuration.Mtlf
 
 	mtlfLog.Infof("Triggering retraining due to accuracy degradation for model: %s", oldModelUrl)
-
-	if mtlfCfg.AsyncMode {
-		go m.triggerTrainingAsync(mtlfCfg, oldModelUrl, store)
-		return
-	}
-
-	// Sync mode: block in a goroutine.
-	go func() {
-		if err := m.triggerTraining(mtlfCfg); err != nil {
-			mtlfLog.Errorf("Accuracy-triggered retraining failed: %v", err)
-			store.SetRetraining(false)
-			return
-		}
-		mtlfLog.Info("Accuracy-triggered retraining completed successfully")
-		m.swapModelAfterRetrain(oldModelUrl, newModelUrlFromCfg(mtlfCfg))
-	}()
-}
-
-// triggerTraining sends training task to Daisy and blocks until complete (sync mode).
-func (m *MtlfService) triggerTraining(mtlfCfg *factory.MtlfConfig) error {
-	client := consumer.NewDaisyClient(mtlfCfg.Endpoint)
-	task := mtlfCfg.Task
-	if task == nil {
-		task = map[string]any{}
-	}
-	return client.TriggerTraining(task)
+	go m.triggerTrainingAsync(mtlfCfg, oldModelUrl, store)
 }
 
 // triggerTrainingAsync sends an async training request to Daisy and stores the
