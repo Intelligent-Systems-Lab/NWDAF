@@ -110,6 +110,8 @@ type SharedModelInfo struct {
 	ModelId     string              // From ML service (set once on first init)
 	Event       models.NwdafEvent   // Analytics event type
 	Subscribers map[string]struct{} // nwdafSubId set
+	loadOnce    sync.Once
+	loaded      chan struct{} // closed when loading completes (success or failure)
 }
 
 // NewSharedModelInfo creates a new SharedModelInfo
@@ -118,7 +120,19 @@ func NewSharedModelInfo(modelUrl string, event models.NwdafEvent) *SharedModelIn
 		ModelUrl:    modelUrl,
 		Event:       event,
 		Subscribers: make(map[string]struct{}),
+		loaded:      make(chan struct{}),
 	}
+}
+
+// LoadDone signals that model loading has completed (success or failure).
+// Safe to call multiple times; only the first call takes effect.
+func (s *SharedModelInfo) LoadDone() {
+	s.loadOnce.Do(func() { close(s.loaded) })
+}
+
+// WaitLoaded blocks until loading is complete.
+func (s *SharedModelInfo) WaitLoaded() {
+	<-s.loaded
 }
 
 // AddSubscriber adds a subscriber, returns current count
@@ -151,9 +165,10 @@ func (s *SharedModelInfo) GetModelId() string {
 	return s.ModelId
 }
 
-// SetModelId stores the ML service model ID (set once on first init)
+// SetModelId stores the ML service model ID and signals load completion.
 func (s *SharedModelInfo) SetModelId(modelId string) {
 	s.Lock()
-	defer s.Unlock()
 	s.ModelId = modelId
+	s.Unlock()
+	s.LoadDone()
 }

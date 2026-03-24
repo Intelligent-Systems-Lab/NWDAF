@@ -1,6 +1,8 @@
 package anlf
 
 import (
+	"fmt"
+
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
@@ -38,21 +40,26 @@ func (a *AnlfService) InitializeMlModel(
 	shared.AddSubscriber(nwdafSubId)
 
 	if !isNew {
+		// Another goroutine is loading or has already loaded; wait for completion.
+		shared.WaitLoaded()
 		existingModelId := shared.GetModelId()
 		if existingModelId != "" {
-			// Reuse existing model — skip ML service call
 			mlInfo.SetModelReady(existingModelId)
 			logger.AnlfLog.Infof("Reusing ML model: sub=%s, modelId=%s (already loaded)",
 				nwdafSubId, existingModelId)
-			return
+		} else {
+			mlInfo.SetModelFailed(fmt.Errorf("shared model load failed for url=%s", modelUrl))
+			logger.AnlfLog.Errorf("Shared model load failed: sub=%s url=%s", nwdafSubId, modelUrl)
 		}
+		return
 	}
 
-	// First subscriber — init via ML service
+	// isNew=true: this goroutine is responsible for loading
 	mlClient := consumer.NewMlServiceClient(mlServiceEndpoint)
 	modelId, err := mlClient.InitializeModel(modelUrl)
 	if err != nil {
 		logger.AnlfLog.Errorf("Failed to initialize ML model: %v", err)
+		shared.LoadDone()
 		mlInfo.SetModelFailed(err)
 		return
 	}
