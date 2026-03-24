@@ -9,6 +9,36 @@ import (
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
+// SwapModel loads a new model and unloads the old one via the ML Service.
+// Called by MTLF (via processor callback) during model hot-swap after retraining.
+// Returns the new model ID assigned by the ML Service.
+func (a *AnlfService) SwapModel(newModelUrl, oldModelId string) (string, error) {
+	cfg := factory.NwdafConfig
+	if cfg == nil || cfg.Configuration == nil ||
+		cfg.Configuration.MlService == nil || !cfg.Configuration.MlService.Enabled ||
+		cfg.Configuration.MlService.Endpoint == "" {
+		return "", fmt.Errorf("ML Service not configured")
+	}
+
+	mlClient := consumer.NewMlServiceClient(cfg.Configuration.MlService.Endpoint)
+
+	newModelId, err := mlClient.InitializeModel(newModelUrl)
+	if err != nil {
+		return "", fmt.Errorf("failed to load new model %s: %w", newModelUrl, err)
+	}
+	logger.AnlfLog.Infof("SwapModel: loaded new model: url=%s modelId=%s", newModelUrl, newModelId)
+
+	if oldModelId != "" {
+		if unloadErr := mlClient.UnloadModel(oldModelId); unloadErr != nil {
+			logger.AnlfLog.Warnf("SwapModel: failed to unload old model ID %s: %v", oldModelId, unloadErr)
+		} else {
+			logger.AnlfLog.Infof("SwapModel: unloaded old model ID %s", oldModelId)
+		}
+	}
+
+	return newModelId, nil
+}
+
 // InitializeMlModel initializes the ML model directly using the ML Service.
 // Deduplicates model loading: if modelUrl is already loaded by another
 // subscription, reuses the existing modelId from SharedModelRegistry.

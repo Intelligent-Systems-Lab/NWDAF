@@ -167,31 +167,23 @@ func (m *MtlfService) swapModelAfterRetrain(oldModelUrl, newModelUrl string) {
 
 	mtlfLog.Infof("Starting model hot-swap: old=%s, new=%s", oldModelUrl, newModelUrl)
 
-	// Get ML Service client
-	mlCfg := factory.NwdafConfig.Configuration.MlService
-	if mlCfg == nil || !mlCfg.Enabled || mlCfg.Endpoint == "" {
-		mtlfLog.Error("ML service not configured; cannot perform model swap")
-		return
-	}
-	mlClient := consumer.NewMlServiceClient(mlCfg.Endpoint)
-
-	// 1. Load new model
-	newModelId, err := mlClient.InitializeModel(newModelUrl)
-	if err != nil {
-		mtlfLog.Errorf("Hot-swap failed: failed to load new model %s: %v", newModelUrl, err)
-		return
-	}
-
-	// 2. Unload old model
+	// 1. Look up old model ID before modifying the registry
+	oldModelId := ""
 	oldShared := nwdafCtx.GetSharedModel(oldModelUrl)
 	if oldShared != nil {
-		oldModelId := oldShared.GetModelId()
-		if oldModelId != "" {
-			if unloadErr := mlClient.UnloadModel(oldModelId); unloadErr != nil {
-				mtlfLog.Warnf("Failed to unload old model ID %s (url=%s): %v",
-					oldModelId, oldModelUrl, unloadErr)
-			}
-		}
+		oldModelId = oldShared.GetModelId()
+	}
+
+	// 2. Delegate ML Service operations to AnLF via callback:
+	//    load new model → unload old model → return new model ID
+	if m.onModelSwapReady == nil {
+		mtlfLog.Error("onModelSwapReady callback not set; cannot perform model swap")
+		return
+	}
+	newModelId, err := m.onModelSwapReady(newModelUrl, oldModelId)
+	if err != nil {
+		mtlfLog.Errorf("Hot-swap failed: AnLF could not load new model %s: %v", newModelUrl, err)
+		return
 	}
 
 	// 3. Update SharedModelRegistry

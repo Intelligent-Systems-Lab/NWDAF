@@ -41,7 +41,13 @@ func NewProcessor(nwdaf NwdafApp) *Processor {
 		p.mtlf.HandleDeviationReport(modelUrl, deviation, store)
 	})
 
-	// Wire 2: MTLF hot-swap completes → AnLF restarts accuracy monitor for new model.
+	// Wire 2: MTLF requests ML Service operations during hot-swap → AnLF executes them.
+	// AnLF loads the new model, unloads the old one, and returns the new model ID.
+	p.mtlf.SetOnModelSwapReady(func(newModelUrl, oldModelId string) (string, error) {
+		return p.anlf.SwapModel(newModelUrl, oldModelId)
+	})
+
+	// Wire 3: MTLF hot-swap completes → AnLF restarts accuracy monitor for new model.
 	p.mtlf.SetOnModelSwapped(func(modelUrl string, wg *sync.WaitGroup) {
 		p.anlf.StartAccuracyMonitorForModel(modelUrl, wg)
 	})
