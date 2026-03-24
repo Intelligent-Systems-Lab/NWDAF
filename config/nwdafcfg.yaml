@@ -91,6 +91,31 @@ configuration:
       METRICS_HANDLERS:
         MASTER_METRICS_HANDLER: ["daisyfl.metrics_handler.flat_metrics_handler", "FlatMetricsHandler"]
       SAVE_MODEL: true
+      MODEL_META:
+        model:
+          input_size: 10
+          output_size: 2
+          num_channels: [32, 64, 64, 64]
+          kernel_size: 2
+          dropout: 0.2
+        inference:
+          seq_length: 30
+          out_seq_len: 1
+          feature_order:
+            - total_vol
+            - ul_vol
+            - dl_vol
+            - total_nb_pkts
+            - ul_nb_pkts
+            - dl_nb_pkts
+            - ul_thr
+            - dl_thr
+            - ul_pkt_thr
+            - dl_pkt_thr
+          output_fields:
+            - ul_vol
+            - dl_vol
+          preprocessing: log1p_standard_scaler
 
 logger:
   enable: true
