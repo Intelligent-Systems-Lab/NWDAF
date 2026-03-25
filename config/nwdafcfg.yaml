@@ -117,6 +117,12 @@ configuration:
             - dl_vol
           preprocessing: log1p_standard_scaler
 
+  # ADRF (Analytics Data Repository Function) — TS 29.575
+  adrf:
+    url: http://127.0.0.1:9888
+    storageThreshold: 1   # per-UE: flush every N notifications from the same UE; 1 = immediate
+    fetchBatchSize: 30    # max fetchCorrIds per retrieval request
+
 logger:
   enable: true
   level: info

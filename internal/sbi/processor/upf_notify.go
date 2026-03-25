@@ -2,6 +2,7 @@ package processor
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
@@ -163,6 +164,17 @@ func (p *Processor) HandleUpfNotification(notif *UpfNotificationData) error {
 	for i := range notif.NotificationItems {
 		item := &notif.NotificationItems[i]
 		p.processUpfNotificationItemUnified(ctx, bucket, item)
+	}
+
+	// Forward to ADRF buffer if configured
+	if p.adrfBuffer != nil {
+		if info := ctx.GetAdrfSmfInfo(correlationId); info != nil {
+			if notifJSON, err := json.Marshal(notif); err == nil {
+				p.adrfBuffer.add(info, notifJSON)
+			} else {
+				logger.ProcLog.Warnf("Failed to marshal UPF notification for ADRF: %v", err)
+			}
+		}
 	}
 
 	return nil

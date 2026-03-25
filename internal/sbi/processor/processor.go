@@ -9,6 +9,7 @@ import (
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/mtlf"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
+	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
 type NwdafApp interface {
@@ -17,10 +18,11 @@ type NwdafApp interface {
 }
 
 type Processor struct {
-	nwdaf NwdafApp
-	wg    *sync.WaitGroup
-	anlf  *anlf.AnlfService
-	mtlf  *mtlf.MtlfService
+	nwdaf      NwdafApp
+	wg         *sync.WaitGroup
+	anlf       *anlf.AnlfService
+	mtlf       *mtlf.MtlfService
+	adrfBuffer *adrfBuffer
 }
 
 func NewProcessor(nwdaf NwdafApp) *Processor {
@@ -51,6 +53,13 @@ func NewProcessor(nwdaf NwdafApp) *Processor {
 	p.mtlf.SetOnModelSwapped(func(modelUrl string, wg *sync.WaitGroup) {
 		p.anlf.StartAccuracyMonitorForModel(modelUrl, wg)
 	})
+
+	// ADRF buffer: forward UPF notifications to ADRF for retrain dataset.
+	if adrf := p.nwdaf.Consumer().Adrf; adrf != nil {
+		threshold := factory.NwdafConfig.Configuration.Adrf.StorageThresholdOrDefault()
+		p.adrfBuffer = newAdrfBuffer(threshold, adrf)
+		logger.ProcLog.Infof("ADRF buffer initialized: threshold=%d", threshold)
+	}
 
 	logger.ProcLog.Info("Processor initialized")
 	return p

@@ -5,6 +5,7 @@ package consumer
 import (
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
+	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
 var consumerLog = logger.ConsLog
@@ -15,6 +16,7 @@ var consumerLog = logger.ConsLog
 type Consumer struct {
 	*NsmfService
 	*NmtlfService
+	Adrf *AdrfClient // nil if ADRF not configured
 }
 
 // NewConsumer creates a new Consumer with all service clients initialized
@@ -26,6 +28,11 @@ func NewConsumer() (*Consumer, error) {
 
 	// Initialize MTLF service with the consumer reference
 	c.NmtlfService = NewNmtlfService(c)
+
+	if factory.NwdafConfig.Configuration.Adrf.AdrfEnabled() {
+		c.Adrf = NewAdrfClient(factory.NwdafConfig.Configuration.Adrf.Url)
+		consumerLog.Infof("ADRF client initialized: url=%s", factory.NwdafConfig.Configuration.Adrf.Url)
+	}
 
 	consumerLog.Info("Consumer initialized")
 	return c, nil

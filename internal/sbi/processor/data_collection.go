@@ -215,6 +215,16 @@ func (p *Processor) triggerTargetDataCollection(
 				logger.ProcLog.Info(logMsg)
 			}
 
+			// Record SMF subscription parameters for ADRF storage
+			ctx.StoreAdrfSmfInfo(correlationId, &nwdaf_context.AdrfSmfInfo{
+				Supi:        target.Supi,
+				NotifId:     correlationId,
+				NotifUri:    smfNotifUri,
+				UpfNotifUri: upfNotifUri,
+				NotifMethod: "PERIODIC",
+				RepPeriod:   smfRepPeriod,
+			})
+
 			// Store cleanup tracking
 			ctx.AddNwdafSubResource(subscriptionId, nwdaf_context.NwdafSubResource{
 				SmfEndpoint:     smfEndpoint,

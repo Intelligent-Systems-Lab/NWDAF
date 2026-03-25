@@ -800,8 +800,9 @@ func (p *Processor) cleanupDataCollection(subscriptionId string) {
 		shouldDelete, smfSub := ctx.ReleaseSmfSubscription(res.CorrelationId, subscriptionId)
 
 		if shouldDelete && smfSub != nil {
-			// Last reference - clean up traffic data bucket
+			// Last reference - clean up traffic data bucket and ADRF info
 			ctx.DeleteTrafficBucket(res.CorrelationId)
+			ctx.DeleteAdrfSmfInfo(res.CorrelationId)
 
 			// Unsubscribe from SMF
 			if consumer != nil {

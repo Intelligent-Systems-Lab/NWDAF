@@ -42,6 +42,7 @@ type Configuration struct {
 	GroupMembership    *GroupMembershipConfig `yaml:"groupMembership,omitempty"`
 	Mtlf               *MtlfConfig            `yaml:"mtlf,omitempty"`
 	Analytics          *AnalyticsConfig       `yaml:"analytics,omitempty"`
+	Adrf               *AdrfConfig            `yaml:"adrf,omitempty"`
 }
 
 // GroupMembershipConfig maps Group IDs to SUPI lists (substitute for UDM)
@@ -176,6 +177,34 @@ type AccuracyMonitorConfig struct {
 	TriggerStrategy     string  `yaml:"triggerStrategy,omitempty"`
 	ConsecutiveBreaches int     `yaml:"consecutiveBreaches,omitempty"` // Consecutive checks above threshold (default: 3)
 	EmaAlpha            float64 `yaml:"emaAlpha,omitempty"`            // EMA smoothing factor 0-1 (default: 0.3)
+}
+
+// AdrfConfig holds connection settings for the ADRF (Analytics Data Repository Function).
+// Per TS 29.575: ADRF stores and retrieves analytics/data records.
+// StorageThreshold is used by the processor ADRF buffer.
+// FetchBatchSize is used by MTLF retrieval (Phase E3).
+type AdrfConfig struct {
+	Url              string `yaml:"url,omitempty"`
+	StorageThreshold int    `yaml:"storageThreshold,omitempty"` // default: 1
+	FetchBatchSize   int    `yaml:"fetchBatchSize,omitempty"`   // default: 30
+}
+
+func (a *AdrfConfig) AdrfEnabled() bool {
+	return a != nil && a.Url != ""
+}
+
+func (a *AdrfConfig) StorageThresholdOrDefault() int {
+	if a == nil || a.StorageThreshold <= 0 {
+		return 1
+	}
+	return a.StorageThreshold
+}
+
+func (a *AdrfConfig) FetchBatchSizeOrDefault() int {
+	if a == nil || a.FetchBatchSize <= 0 {
+		return 30
+	}
+	return a.FetchBatchSize
 }
 
 // SmfConfig configuration for SMF data collection

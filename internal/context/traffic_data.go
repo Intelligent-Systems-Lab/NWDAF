@@ -272,6 +272,41 @@ func (d *TrafficData) EnrichWithSupi(supi string) bool {
 	return false
 }
 
+// AdrfSmfInfo records the SMF subscription parameters needed to reconstruct
+// smfDataSub when storing UPF data to ADRF (TS 29.575 NadrfDataStoreRecord).
+// Populated at SMF subscription time; keyed by correlationId.
+//
+// SmfSubscription serves routing/lifecycle purposes only.
+// Storing here captures the actual parameters used at subscription time,
+// rather than re-deriving from config which may change at runtime.
+type AdrfSmfInfo struct {
+	Supi        string // Target SUPI
+	NotifId     string // correlationId (SMF notifId)
+	NotifUri    string // SMF notification URI
+	UpfNotifUri string // UPF bundled notification URI (for reconstructing eventSubs)
+	NotifMethod string // e.g. "PERIODIC"
+	RepPeriod   int32  // report period in seconds
+}
+
+// StoreAdrfSmfInfo saves the SMF subscription parameters for a correlationId.
+func (c *NWDAFContext) StoreAdrfSmfInfo(correlationId string, info *AdrfSmfInfo) {
+	c.adrfSmfInfos.Store(correlationId, info)
+}
+
+// GetAdrfSmfInfo retrieves the SMF subscription parameters for a correlationId.
+// Returns nil if not found.
+func (c *NWDAFContext) GetAdrfSmfInfo(correlationId string) *AdrfSmfInfo {
+	if val, ok := c.adrfSmfInfos.Load(correlationId); ok {
+		return val.(*AdrfSmfInfo)
+	}
+	return nil
+}
+
+// DeleteAdrfSmfInfo removes the SMF subscription parameters for a correlationId.
+func (c *NWDAFContext) DeleteAdrfSmfInfo(correlationId string) {
+	c.adrfSmfInfos.Delete(correlationId)
+}
+
 // --- NWDAFContext methods for SmfSubscription management ---
 
 // getSmfTargetKey generating unique key for target on specific SMF

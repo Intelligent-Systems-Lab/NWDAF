@@ -77,6 +77,10 @@ type NWDAFContext struct {
 	// Only used when accuracy monitoring is enabled
 	modelAccuracyStores sync.Map
 
+	// ADRF SMF info: correlationId → *AdrfSmfInfo
+	// Captures SMF subscription parameters at subscription time for ADRF storage.
+	adrfSmfInfos sync.Map
+
 	// Sequential correlation ID counter
 	correlationIdCounter atomic.Int64
 }
