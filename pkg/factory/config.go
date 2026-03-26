@@ -186,9 +186,10 @@ type AccuracyMonitorConfig struct {
 type AdrfConfig struct {
 	Url              string `yaml:"url,omitempty"`
 	StorageThreshold int    `yaml:"storageThreshold,omitempty"` // default: 1
-	FetchBatchSize   int    `yaml:"fetchBatchSize,omitempty"`   // default: 1; ADRF V0 enforces exactly 1 ID per GET request — do not set above 1
-	RetrainWindow    int    `yaml:"retrainWindow,omitempty"`    // default: 1800 (seconds of history to fetch)
-	WatchdogTimeout  int    `yaml:"watchdogTimeout,omitempty"`  // default: 120 (seconds after last callback)
+	// default: 1; ADRF V0 accepts exactly 1 fetch-correlation-id per GET — do not set above 1
+	FetchBatchSize  int `yaml:"fetchBatchSize,omitempty"`
+	RetrainWindow   int `yaml:"retrainWindow,omitempty"`   // default: 1800 (seconds of history to fetch)
+	WatchdogTimeout int `yaml:"watchdogTimeout,omitempty"` // default: 120 (seconds after last callback)
 }
 
 func (a *AdrfConfig) AdrfEnabled() bool {

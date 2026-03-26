@@ -191,7 +191,10 @@ func (m *MtlfService) runFetchLoop(
 	fetchBatchSize := adrfCfg.FetchBatchSizeOrDefault()
 	daisyClient := consumer.NewDaisyClient(mtlfCfg.Endpoint)
 
+	var totalIDs, fetched, uploaded int
+
 	for ids := range job.fetchCh {
+		totalIDs += len(ids)
 		for i := 0; i < len(ids); i += fetchBatchSize {
 			end := i + fetchBatchSize
 			if end > len(ids) {
@@ -211,6 +214,7 @@ func (m *MtlfService) runFetchLoop(
 			if record.DataNotif == nil || len(record.DataNotif.UpfEventNotifs) == 0 {
 				continue
 			}
+			fetched++
 
 			supi := ""
 			if len(record.DataSub) > 0 && record.DataSub[0].SmfDataSub != nil {
@@ -223,9 +227,14 @@ func (m *MtlfService) runFetchLoop(
 
 			if uploadErr := daisyClient.UploadData(job.tid, groupId, record.DataNotif.UpfEventNotifs); uploadErr != nil {
 				mtlfLog.Errorf("runFetchLoop TID=%s: UploadData failed: %v", job.tid, uploadErr)
+			} else {
+				uploaded++
 			}
 		}
 	}
+
+	mtlfLog.Infof("runFetchLoop TID=%s complete: ids=%d fetched=%d uploaded=%d",
+		job.tid, totalIDs, fetched, uploaded)
 
 	// fetchCh closed: cleanup subscriptions then trigger training
 	cleanupSubscriptions(job, adrfClient)
@@ -251,7 +260,11 @@ func (m *MtlfService) HandleAdrfRetrievalNotify(notifCorrId string, fetchCorrIds
 	}
 	allTermReceived := job.termCount >= job.totalSubs && job.totalSubs > 0
 	isClosed := job.closed
+	termCount, totalSubs := job.termCount, job.totalSubs
 	job.mu.Unlock()
+
+	mtlfLog.Infof("RetrievalNotify TID=%s: ids=%d terminationReq=%t termCount=%d/%d",
+		notifCorrId, len(fetchCorrIds), terminationReq, termCount, totalSubs)
 
 	if len(fetchCorrIds) > 0 && !isClosed {
 		job.fetchCh <- fetchCorrIds
