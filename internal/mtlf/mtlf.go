@@ -29,6 +29,9 @@ type MtlfService struct {
 	// Populated when an async training request is accepted by Daisy;
 	// cleared when HandleTrainingComplete is called.
 	inFlight sync.Map
+	// activeJobs tracks in-progress ADRF-assisted retrain jobs.
+	// Key: TID (string) → Value: *retrainJob
+	activeJobs sync.Map
 }
 
 // NewMtlfService creates a new MtlfService instance.

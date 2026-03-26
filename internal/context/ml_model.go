@@ -172,3 +172,14 @@ func (s *SharedModelInfo) SetModelId(modelId string) {
 	s.Unlock()
 	s.LoadDone()
 }
+
+// GetSubscriberIDs returns a snapshot of all subscriber IDs for this model.
+func (s *SharedModelInfo) GetSubscriberIDs() []string {
+	s.RLock()
+	defer s.RUnlock()
+	ids := make([]string, 0, len(s.Subscribers))
+	for id := range s.Subscribers {
+		ids = append(ids, id)
+	}
+	return ids
+}

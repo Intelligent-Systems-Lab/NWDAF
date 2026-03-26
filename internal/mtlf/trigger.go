@@ -65,7 +65,7 @@ func (m *MtlfService) checkConsecutiveTrigger(
 		if count >= required {
 			store.ResetBreaches()
 			store.SetRetraining(true)
-			m.TriggerRetraining(modelUrl, store)
+			m.startRetrainWorkflow(modelUrl, store)
 		}
 	} else {
 		store.ResetBreaches()
@@ -92,6 +92,6 @@ func (m *MtlfService) checkEMATrigger(
 		mtlfLog.Warnf("EMA degradation [%s]: ema=%.4f > threshold=%.2f",
 			modelUrl, ema, threshold)
 		store.SetRetraining(true)
-		m.TriggerRetraining(modelUrl, store)
+		m.startRetrainWorkflow(modelUrl, store)
 	}
 }

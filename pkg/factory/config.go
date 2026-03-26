@@ -182,11 +182,13 @@ type AccuracyMonitorConfig struct {
 // AdrfConfig holds connection settings for the ADRF (Analytics Data Repository Function).
 // Per TS 29.575: ADRF stores and retrieves analytics/data records.
 // StorageThreshold is used by the processor ADRF buffer.
-// FetchBatchSize is used by MTLF retrieval (Phase E3).
+// FetchBatchSize, RetrainWindow, WatchdogTimeout are used by MTLF retrieval (Phase E3).
 type AdrfConfig struct {
 	Url              string `yaml:"url,omitempty"`
 	StorageThreshold int    `yaml:"storageThreshold,omitempty"` // default: 1
-	FetchBatchSize   int    `yaml:"fetchBatchSize,omitempty"`   // default: 30
+	FetchBatchSize   int    `yaml:"fetchBatchSize,omitempty"`   // default: 1; ADRF V0 enforces exactly 1 ID per GET request — do not set above 1
+	RetrainWindow    int    `yaml:"retrainWindow,omitempty"`    // default: 1800 (seconds of history to fetch)
+	WatchdogTimeout  int    `yaml:"watchdogTimeout,omitempty"`  // default: 120 (seconds after last callback)
 }
 
 func (a *AdrfConfig) AdrfEnabled() bool {
@@ -202,9 +204,23 @@ func (a *AdrfConfig) StorageThresholdOrDefault() int {
 
 func (a *AdrfConfig) FetchBatchSizeOrDefault() int {
 	if a == nil || a.FetchBatchSize <= 0 {
-		return 30
+		return 1
 	}
 	return a.FetchBatchSize
+}
+
+func (a *AdrfConfig) RetrainWindowOrDefault() int {
+	if a == nil || a.RetrainWindow <= 0 {
+		return 1800
+	}
+	return a.RetrainWindow
+}
+
+func (a *AdrfConfig) WatchdogTimeoutOrDefault() int {
+	if a == nil || a.WatchdogTimeout <= 0 {
+		return 120
+	}
+	return a.WatchdogTimeout
 }
 
 // SmfConfig configuration for SMF data collection

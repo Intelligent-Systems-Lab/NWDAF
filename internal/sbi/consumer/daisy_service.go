@@ -16,6 +16,9 @@ const (
 	// DaisyPublishTaskPath is the REST API endpoint to trigger FL training on Daisy master
 	DaisyPublishTaskPath = "/publish_task"
 
+	// DaisyUploadDataPath is the REST API endpoint to upload historical training data
+	DaisyUploadDataPath = "/upload_data"
+
 	// DaisyTIDKey is the task ID key in the task payload (per Daisy convention)
 	DaisyTIDKey = "TID"
 
@@ -25,7 +28,17 @@ const (
 	// DaisyAsyncTimeout is the timeout for the initial POST to Daisy.
 	// Daisy should respond 202 immediately; no need for a long timeout.
 	DaisyAsyncTimeout = 10 * time.Second
+
+	// DaisyUploadTimeout is the timeout for uploading a data batch to Daisy.
+	DaisyUploadTimeout = 10 * time.Second
 )
+
+// DaisyUploadDataRequest is the payload for POST /upload_data.
+type DaisyUploadDataRequest struct {
+	TID            string            `json:"TID"`
+	GroupId        string            `json:"group_id"`
+	UpfEventNotifs []json.RawMessage `json:"upfEventNotifs"`
+}
 
 // DaisyClient handles Daisy FL framework REST API interactions
 // Used to trigger federated learning training tasks on the Daisy master node
@@ -52,9 +65,18 @@ func NewDaisyClient(endpoint string) *DaisyClient {
 // TriggerTrainingAsync sends a training task to Daisy in async mode.
 // Daisy should respond 202 Accepted immediately and call back NWDAF at callbackURL
 // when training completes. Returns the task ID (TID) on success.
-func (c *DaisyClient) TriggerTrainingAsync(task map[string]any, callbackURL string) (string, error) {
-	// Always use a fresh UUID so each async request has a unique tracking key.
-	tidStr := uuid.New().String()
+// tidOverride: if non-empty, uses this TID (ADRF path, must match the TID used for UploadData).
+//
+//	If empty, generates a fresh UUID.
+func (c *DaisyClient) TriggerTrainingAsync(
+	task map[string]any, callbackURL string, tidOverride string,
+) (string, error) {
+	var tidStr string
+	if tidOverride != "" {
+		tidStr = tidOverride
+	} else {
+		tidStr = uuid.New().String()
+	}
 	task[DaisyTIDKey] = tidStr
 
 	if callbackURL != "" {
@@ -99,6 +121,54 @@ func (c *DaisyClient) TriggerTrainingAsync(task map[string]any, callbackURL stri
 
 	consumerLog.Infof("Daisy async training accepted: TID=%s", tidStr)
 	return tidStr, nil
+}
+
+// UploadData sends a batch of historical UPF records to Daisy for the retrain dataset.
+// Each call corresponds to one NadrfDataStoreRecord fetched from ADRF.
+func (c *DaisyClient) UploadData(tid, groupId string, upfEventNotifs []json.RawMessage) error {
+	payload := DaisyUploadDataRequest{
+		TID:            tid,
+		GroupId:        groupId,
+		UpfEventNotifs: upfEventNotifs,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal DaisyUploadDataRequest: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), DaisyUploadTimeout)
+	defer cancel()
+
+	url := c.endpoint + DaisyUploadDataPath
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(body))
+	if err != nil {
+		return fmt.Errorf("build UploadData request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("POST %s: %w", url, err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			consumerLog.Debugf("failed to close UploadData response body: %v", closeErr)
+		}
+	}()
+
+	statusOK := resp.StatusCode == http.StatusOK ||
+		resp.StatusCode == http.StatusCreated ||
+		resp.StatusCode == http.StatusNoContent
+	if !statusOK {
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return fmt.Errorf("daisy UploadData returned %d", resp.StatusCode)
+		}
+		return fmt.Errorf("daisy UploadData returned %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	return nil
 }
 
 // GetEndpoint returns the configured endpoint

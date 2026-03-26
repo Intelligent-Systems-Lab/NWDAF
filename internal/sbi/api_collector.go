@@ -25,6 +25,12 @@ func (s *Server) getCollectorRoutes() []Route {
 			Pattern: "/upf-notify",
 			APIFunc: s.HandleUpfNotify,
 		},
+		{
+			Name:    "AdrfRetrievalNotify",
+			Method:  "POST",
+			Pattern: "/retrieval-notify",
+			APIFunc: s.HandleAdrfRetrievalNotify,
+		},
 	}
 }
 

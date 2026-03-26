@@ -55,10 +55,15 @@ func NewProcessor(nwdaf NwdafApp) *Processor {
 	})
 
 	// ADRF buffer: forward UPF notifications to ADRF for retrain dataset.
-	if adrf := p.nwdaf.Consumer().Adrf; adrf != nil {
-		threshold := factory.NwdafConfig.Configuration.Adrf.StorageThresholdOrDefault()
-		p.adrfBuffer = newAdrfBuffer(threshold, adrf)
-		logger.ProcLog.Infof("ADRF buffer initialized: threshold=%d", threshold)
+	if c := p.nwdaf.Consumer(); c != nil {
+		if c.Adrf != nil {
+			threshold := 1
+			if factory.NwdafConfig != nil && factory.NwdafConfig.Configuration != nil {
+				threshold = factory.NwdafConfig.Configuration.Adrf.StorageThresholdOrDefault()
+			}
+			p.adrfBuffer = newAdrfBuffer(threshold, c.Adrf)
+			logger.ProcLog.Infof("ADRF buffer initialized: threshold=%d", threshold)
+		}
 	}
 
 	logger.ProcLog.Info("Processor initialized")
@@ -79,6 +84,11 @@ func (p *Processor) StartMtlfTrainingScheduler(wg *sync.WaitGroup) {
 // HandleDaisyCallback delegates an async Daisy training callback to MtlfService.
 func (p *Processor) HandleDaisyCallback(taskId, modelUrl, status, errMsg string) {
 	p.mtlf.HandleTrainingComplete(taskId, modelUrl, status, errMsg)
+}
+
+// HandleAdrfRetrievalNotify delegates an ADRF retrieval callback to MtlfService.
+func (p *Processor) HandleAdrfRetrievalNotify(notifCorrId string, fetchCorrIds []string, terminationReq bool) {
+	p.mtlf.HandleAdrfRetrievalNotify(notifCorrId, fetchCorrIds, terminationReq)
 }
 
 // InitializeMlModel delegates to AnlfService and then starts accuracy monitoring.

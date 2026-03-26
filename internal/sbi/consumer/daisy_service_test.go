@@ -48,7 +48,7 @@ func TestTriggerTrainingAsync_Success(t *testing.T) {
 	client := NewDaisyClient(server.URL)
 	task := map[string]any{"NUM_ROUNDS": float64(2)}
 
-	taskId, err := client.TriggerTrainingAsync(task, cbURL)
+	taskId, err := client.TriggerTrainingAsync(task, cbURL, "")
 	if err != nil {
 		t.Fatalf("TriggerTrainingAsync() error = %v", err)
 	}
@@ -78,7 +78,7 @@ func TestTriggerTrainingAsync_Rejected(t *testing.T) {
 	defer server.Close()
 
 	client := NewDaisyClient(server.URL)
-	_, err := client.TriggerTrainingAsync(map[string]any{}, "http://callback")
+	_, err := client.TriggerTrainingAsync(map[string]any{}, "http://callback", "")
 	if err == nil {
 		t.Error("TriggerTrainingAsync() should return error when server rejects")
 	}
@@ -97,7 +97,7 @@ func TestTriggerTrainingAsync_NoCallbackURL(t *testing.T) {
 	defer server.Close()
 
 	client := NewDaisyClient(server.URL)
-	_, err := client.TriggerTrainingAsync(map[string]any{}, "")
+	_, err := client.TriggerTrainingAsync(map[string]any{}, "", "")
 	if err != nil {
 		t.Fatalf("TriggerTrainingAsync() error = %v", err)
 	}

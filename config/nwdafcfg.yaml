@@ -121,7 +121,9 @@ configuration:
   adrf:
     url: http://127.0.0.1:9888
     storageThreshold: 1   # per-UE: flush every N notifications from the same UE; 1 = immediate
-    fetchBatchSize: 30    # max fetchCorrIds per retrieval request
+    fetchBatchSize: 1     # IDs per RetrievalRequest GET; ADRF V0 enforces exactly 1 — do not change
+    retrainWindow: 1800   # seconds of history to fetch for retrain (30 min)
+    watchdogTimeout: 120  # seconds after last callback before watchdog fires
 
 logger:
   enable: true

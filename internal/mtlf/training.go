@@ -24,9 +24,8 @@ type inFlightEntry struct {
 	store *nwdaf_context.ModelAccuracyStore
 }
 
-// buildCallbackURL constructs the NWDAF callback URL that Daisy will POST to
-// when async training completes.
-func buildCallbackURL() string {
+// buildNwdafURL constructs a full NWDAF URL for the given path.
+func buildNwdafURL(urlPath string) string {
 	cfg := factory.NwdafConfig
 	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.Sbi == nil {
 		return ""
@@ -36,7 +35,13 @@ func buildCallbackURL() string {
 	if ip == "" {
 		ip = sbi.BindingIPv4
 	}
-	return fmt.Sprintf("%s://%s:%d/mtlf/training-complete", cfg.GetSbiScheme(), ip, sbi.Port)
+	return fmt.Sprintf("%s://%s:%d%s", cfg.GetSbiScheme(), ip, sbi.Port, urlPath)
+}
+
+// buildCallbackURL constructs the NWDAF callback URL that Daisy will POST to
+// when async training completes.
+func buildCallbackURL() string {
+	return buildNwdafURL("/mtlf/training-complete")
 }
 
 // StartTrainingScheduler starts background MTLF training scheduler.
@@ -75,13 +80,13 @@ func (m *MtlfService) runDelayedTraining(delaySec int, mtlfCfg *factory.MtlfConf
 	}
 
 	mtlfLog.Infof("Triggering MTLF training via Daisy: endpoint=%s", mtlfCfg.Endpoint)
-	m.triggerTrainingAsync(mtlfCfg, mtlfCfg.StaticModelUrl, nil)
+	m.submitDaisyTask(mtlfCfg, "", mtlfCfg.StaticModelUrl, nil)
 }
 
-// TriggerRetraining initiates retraining for a degraded model (called by accuracy monitor).
+// startRetrainWorkflow decides the retrain path and dispatches accordingly.
 // Per TS 23.288 §5C: AnLF reports accuracy degradation → MTLF decides to retrain.
 // store.SetRetraining(false) is called on failure so the monitor can re-trigger later.
-func (m *MtlfService) TriggerRetraining(
+func (m *MtlfService) startRetrainWorkflow(
 	oldModelUrl string,
 	store *nwdaf_context.ModelAccuracyStore,
 ) {
@@ -92,14 +97,25 @@ func (m *MtlfService) TriggerRetraining(
 	}
 	mtlfCfg := cfg.Configuration.Mtlf
 
+	// ADRF path: fetch historical data before submitting to Daisy
+	if cfg.Configuration.Adrf.AdrfEnabled() {
+		mtlfLog.Infof("ADRF enabled: starting data retrieval before retrain for model=%s", oldModelUrl)
+		go m.runAdrfRetrainWorkflow(mtlfCfg, cfg.Configuration.Adrf, oldModelUrl, store)
+		return
+	}
+
 	mtlfLog.Infof("Triggering retraining due to accuracy degradation for model: %s", oldModelUrl)
-	go m.triggerTrainingAsync(mtlfCfg, oldModelUrl, store)
+	go m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
 }
 
-// triggerTrainingAsync sends an async training request to Daisy and stores the
+// submitDaisyTask sends an async training request to Daisy and stores the
 // in-flight entry. When Daisy calls back, HandleTrainingComplete completes the swap.
-func (m *MtlfService) triggerTrainingAsync(
+// tid: if non-empty, uses this TID (ADRF path, must match UploadData TID);
+//
+//	if empty, generates a fresh UUID.
+func (m *MtlfService) submitDaisyTask(
 	mtlfCfg *factory.MtlfConfig,
+	tid string,
 	oldModelUrl string,
 	store *nwdaf_context.ModelAccuracyStore,
 ) {
@@ -117,7 +133,7 @@ func (m *MtlfService) triggerTrainingAsync(
 	maps.Copy(taskCopy, task)
 
 	client := consumer.NewDaisyClient(mtlfCfg.Endpoint)
-	taskId, err := client.TriggerTrainingAsync(taskCopy, cbURL)
+	taskId, err := client.TriggerTrainingAsync(taskCopy, cbURL, tid)
 	if err != nil {
 		mtlfLog.Errorf("Failed to send async training request to Daisy: %v", err)
 		if store != nil {

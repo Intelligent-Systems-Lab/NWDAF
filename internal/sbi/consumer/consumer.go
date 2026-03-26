@@ -29,7 +29,8 @@ func NewConsumer() (*Consumer, error) {
 	// Initialize MTLF service with the consumer reference
 	c.NmtlfService = NewNmtlfService(c)
 
-	if factory.NwdafConfig.Configuration.Adrf.AdrfEnabled() {
+	if factory.NwdafConfig != nil && factory.NwdafConfig.Configuration != nil &&
+		factory.NwdafConfig.Configuration.Adrf.AdrfEnabled() {
 		c.Adrf = NewAdrfClient(factory.NwdafConfig.Configuration.Adrf.Url)
 		consumerLog.Infof("ADRF client initialized: url=%s", factory.NwdafConfig.Configuration.Adrf.Url)
 	}
