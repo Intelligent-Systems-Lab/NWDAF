@@ -166,13 +166,22 @@ func (p *Processor) HandleUpfNotification(notif *UpfNotificationData) error {
 		p.processUpfNotificationItemUnified(ctx, bucket, item)
 	}
 
-	// Forward to ADRF buffer if configured
+	// Forward to ADRF buffer if configured.
+	// Each NotificationItem is stored as a separate ADRF record so that
+	// ADRF time-window filtering can match individual startTime values precisely.
 	if p.adrfBuffer != nil {
 		if info := ctx.GetAdrfSmfInfo(correlationId); info != nil {
-			if notifJSON, err := json.Marshal(notif); err == nil {
-				p.adrfBuffer.add(info, notifJSON)
-			} else {
-				logger.ProcLog.Warnf("Failed to marshal UPF notification for ADRF: %v", err)
+			for i := range notif.NotificationItems {
+				singleNotif := UpfNotificationData{
+					CorrelationId:     notif.CorrelationId,
+					EventNotifyUri:    notif.EventNotifyUri,
+					NotificationItems: []UpfNotificationItem{notif.NotificationItems[i]},
+				}
+				if notifJSON, err := json.Marshal(singleNotif); err == nil {
+					p.adrfBuffer.add(info, notifJSON)
+				} else {
+					logger.ProcLog.Warnf("Failed to marshal UPF notification item for ADRF: %v", err)
+				}
 			}
 		}
 	}
