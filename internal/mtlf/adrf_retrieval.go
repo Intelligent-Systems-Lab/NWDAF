@@ -202,16 +202,19 @@ func (m *MtlfService) runFetchLoop(
 			}
 			chunk := ids[i:end]
 
+			mtlfLog.Debugf("runFetchLoop TID=%s: fetching id=%s", job.tid, chunk[0])
 			record, err := adrfClient.RetrievalRequest(chunk)
 			if err != nil {
 				mtlfLog.Errorf("runFetchLoop TID=%s: RetrievalRequest failed: %v", job.tid, err)
 				continue
 			}
 			if record == nil {
+				mtlfLog.Debugf("runFetchLoop TID=%s: id=%s no data (204)", job.tid, chunk[0])
 				continue
 			}
 
 			if record.DataNotif == nil || len(record.DataNotif.UpfEventNotifs) == 0 {
+				mtlfLog.Debugf("runFetchLoop TID=%s: id=%s empty dataNotif", job.tid, chunk[0])
 				continue
 			}
 			fetched++
@@ -228,6 +231,7 @@ func (m *MtlfService) runFetchLoop(
 			if uploadErr := daisyClient.UploadData(job.tid, groupId, record.DataNotif.UpfEventNotifs); uploadErr != nil {
 				mtlfLog.Errorf("runFetchLoop TID=%s: UploadData failed: %v", job.tid, uploadErr)
 			} else {
+				mtlfLog.Debugf("runFetchLoop TID=%s: uploaded id=%s supi=%s groupId=%s", job.tid, chunk[0], supi, groupId)
 				uploaded++
 			}
 		}
