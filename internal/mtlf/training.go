@@ -104,7 +104,6 @@ func (m *MtlfService) startRetrainWorkflow(
 		return
 	}
 
-	mtlfLog.Infof("Triggering retraining due to accuracy degradation for model: %s", oldModelUrl)
 	go m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
 }
 
@@ -119,6 +118,7 @@ func (m *MtlfService) submitDaisyTask(
 	oldModelUrl string,
 	store *nwdaf_context.ModelAccuracyStore,
 ) {
+	mtlfLog.Infof("Submitting training task to Daisy: model=%s tid=%s", oldModelUrl, tid)
 	cbURL := buildCallbackURL()
 	if cbURL == "" {
 		mtlfLog.Warn("callback URL is empty; Daisy cannot notify completion")
