@@ -73,6 +73,8 @@ configuration:
       deviationThreshold: 0.3   # sMAPE [0,2] > 0.3 triggers retraining
       minSamples: 5             # min ground truth samples before evaluation
       warmupDuration: 155       # seconds to skip checks after start (model cold-start)
+      csvDumpEnabled: true      # write scope-level accuracy observations to CSV
+      csvDumpDir: log/accuracy  # directory for metrics/pairs CSV files
       triggerStrategy: consecutive  # "consecutive" or "ema"
       consecutiveBreaches: 3    # required consecutive checks (for consecutive)
       emaAlpha: 0.3             # EMA smoothing factor 0-1 (for ema)

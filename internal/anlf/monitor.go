@@ -84,6 +84,9 @@ func (a *AnlfService) runModelAccuracyLoop(
 		warmup = 120
 	}
 	anlfLog.Infof("Accuracy monitor warmup: model=%s, waiting %ds", modelUrl, warmup)
+	if _, err := getAccuracyCSVWriter(a.nwdaf.CancelContext(), accCfg); err != nil {
+		anlfLog.Warnf("Accuracy CSV initialization failed: %v", err)
+	}
 	select {
 	case <-time.After(time.Duration(warmup) * time.Second):
 		anlfLog.Infof("Accuracy monitor warmup complete: model=%s", modelUrl)
@@ -129,6 +132,7 @@ func (a *AnlfService) checkModelAccuracy(
 	accCfg *factory.AccuracyMonitorConfig,
 ) {
 	nwdafCtx := nwdaf_context.GetSelf()
+	checkTime := time.Now()
 
 	si := time.Duration(getUeCommunicationModelParams().SamplingIntervalOrDefault()) * time.Second
 	mature := store.ConsumeMaturePredictions(2 * si)
@@ -137,16 +141,29 @@ func (a *AnlfService) checkModelAccuracy(
 	}
 
 	var pairs []matchedPair
+	pairRows := make([]pairCSVRecord, 0, len(mature))
 	scopedPairs := make(map[string]*scopedPairAccumulator)
 	unscopedMatches := 0
 	gtCounts := make([]string, 0, len(mature))
 	for _, pred := range mature {
 		actual := a.lookupGroundTruth(nwdafCtx, pred)
+		row := pairCSVRecord{
+			CheckTime:   checkTime,
+			ModelURL:    modelUrl,
+			ScopeKey:    pred.ScopeKey,
+			NwdafSubID:  pred.NwdafSubId,
+			PredictedAt: pred.PredictedAt,
+			TargetTime:  pred.TargetTime,
+			PredUl:      pred.PredUlVol,
+			PredDl:      pred.PredDlVol,
+		}
 		if actual != nil {
 			pair := matchedPair{
 				predUl: pred.PredUlVol, predDl: pred.PredDlVol,
 				actualUl: actual.ulVol, actualDl: actual.dlVol,
 			}
+			row.ActualUl = &actual.ulVol
+			row.ActualDl = &actual.dlVol
 			pairs = append(pairs, pair)
 			if pred.ScopeKey != "" {
 				recordScopedPair(scopedPairs, pred, pair)
@@ -157,6 +174,7 @@ func (a *AnlfService) checkModelAccuracy(
 		} else {
 			gtCounts = append(gtCounts, "0")
 		}
+		pairRows = append(pairRows, row)
 	}
 	anlfLog.Debugf("Ground truth [%d mature → %d matched]: %s",
 		len(mature), len(pairs), strings.Join(gtCounts, ","))
@@ -170,6 +188,7 @@ func (a *AnlfService) checkModelAccuracy(
 	inferenceNum := store.GetAndResetInferenceNum()
 	store.UpdateDeviation(deviation)
 	reports := buildAccuracyReports(modelUrl, scopedPairs, inferenceNum)
+	a.dumpAccuracyCSV(accCfg, checkTime, reports, pairRows)
 
 	pseudoAccuracy := int(math.Max(0, 100-deviation*50))
 	anlfLog.Infof("Accuracy [%s]: deviation=%.4f, accuracy=%d%%, samples=%d, inferences=%d",
@@ -199,6 +218,31 @@ func (a *AnlfService) checkModelAccuracy(
 	// Report to MTLF — MTLF decides whether to retrain (TS 23.288 §6.2E)
 	if a.onDeviationReport != nil {
 		a.onDeviationReport(modelUrl, deviation, store)
+	}
+}
+
+func (a *AnlfService) dumpAccuracyCSV(
+	accCfg *factory.AccuracyMonitorConfig,
+	checkTime time.Time,
+	reports []AccuracyReport,
+	pairRows []pairCSVRecord,
+) {
+	writer, err := getAccuracyCSVWriter(a.nwdaf.CancelContext(), accCfg)
+	if err != nil {
+		anlfLog.Warnf("Accuracy CSV unavailable: %v", err)
+		return
+	}
+	if writer == nil {
+		return
+	}
+
+	writeErr := writer.WritePairs(pairRows)
+	if writeErr != nil {
+		anlfLog.Warnf("Accuracy pairs CSV write failed: %v", writeErr)
+	}
+	writeErr = writer.WriteMetrics(checkTime, reports)
+	if writeErr != nil {
+		anlfLog.Warnf("Accuracy metrics CSV write failed: %v", writeErr)
 	}
 }
 
