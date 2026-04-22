@@ -25,14 +25,9 @@ type ModelAccuracyStore struct {
 
 	modelUrl     string
 	predictions  []PredictionRecord // Pending predictions awaiting ground truth
-	deviation    float64            // Latest computed deviation (NRMSE)
+	deviation    float64            // Latest computed model-level deviation for debug/observability
 	inferenceNum int                // Total inferences since last check
 	lastCheck    time.Time          // Last accuracy check time
-
-	// Trigger strategy state
-	consecutiveBreaches int     // Count of consecutive threshold breaches
-	emaDeviation        float64 // Exponential moving average of deviation
-	emaInitialized      bool    // Whether EMA has been seeded
 
 	// Goroutine lifecycle (per-model)
 	cancelFunc context.CancelFunc // Stops this model's monitor goroutine
@@ -128,7 +123,7 @@ func (s *ModelAccuracyStore) TryStartMonitor(cancel context.CancelFunc) bool {
 }
 
 // SetRetraining marks whether a retrain is currently in flight.
-// While true, HandleDeviationReport will skip further trigger evaluation.
+// While true, MTLF will skip further trigger evaluation for this model.
 func (s *ModelAccuracyStore) SetRetraining(v bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -151,41 +146,4 @@ func (s *ModelAccuracyStore) StopMonitor() {
 		s.cancelFunc = nil
 	}
 	s.running = false
-}
-
-// --- Trigger Strategy State ---
-
-// IncrementBreaches increments consecutive breach counter, returns new count
-func (s *ModelAccuracyStore) IncrementBreaches() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.consecutiveBreaches++
-	return s.consecutiveBreaches
-}
-
-// ResetBreaches resets the consecutive breach counter to zero
-func (s *ModelAccuracyStore) ResetBreaches() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.consecutiveBreaches = 0
-}
-
-// UpdateEMA updates the EMA deviation and returns the new value
-func (s *ModelAccuracyStore) UpdateEMA(deviation, alpha float64) float64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.emaInitialized {
-		s.emaDeviation = deviation
-		s.emaInitialized = true
-	} else {
-		s.emaDeviation = alpha*deviation + (1-alpha)*s.emaDeviation
-	}
-	return s.emaDeviation
-}
-
-// GetEMA returns the current EMA deviation value
-func (s *ModelAccuracyStore) GetEMA() float64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.emaDeviation
 }

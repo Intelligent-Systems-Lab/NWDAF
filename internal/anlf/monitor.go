@@ -45,7 +45,7 @@ func (a *AnlfService) StartAccuracyMonitorForModel(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		a.runModelAccuracyLoop(monCtx, modelUrl, store, accCfg)
+		a.runModelAccuracyLoop(monCtx, modelUrl, store, accCfg, a.acquireStartupWarmupDuration(accCfg))
 	}()
 
 	anlfLog.Infof("Accuracy monitor started: model=%s, interval=%ds", modelUrl, interval)
@@ -78,31 +78,31 @@ func (a *AnlfService) runModelAccuracyLoop(
 	modelUrl string,
 	store *nwdaf_context.ModelAccuracyStore,
 	accCfg *factory.AccuracyMonitorConfig,
+	warmup int,
 ) {
-	warmup := accCfg.WarmupDuration
-	if warmup <= 0 {
-		warmup = 120
-	}
-	anlfLog.Infof("Accuracy monitor warmup: model=%s, waiting %ds", modelUrl, warmup)
 	if _, err := getAccuracyCSVWriter(a.nwdaf.CancelContext(), accCfg); err != nil {
 		anlfLog.Warnf("Accuracy CSV initialization failed: %v", err)
 	}
-	select {
-	case <-time.After(time.Duration(warmup) * time.Second):
-		anlfLog.Infof("Accuracy monitor warmup complete: model=%s", modelUrl)
-	case <-ctx.Done():
-		anlfLog.Infof("Accuracy monitor exiting during warmup: model=%s", modelUrl)
-		return
-	}
+	if warmup > 0 {
+		anlfLog.Infof("Accuracy monitor warmup: model=%s, waiting %ds", modelUrl, warmup)
+		select {
+		case <-time.After(time.Duration(warmup) * time.Second):
+			anlfLog.Infof("Accuracy monitor warmup complete: model=%s", modelUrl)
+		case <-ctx.Done():
+			anlfLog.Infof("Accuracy monitor exiting during warmup: model=%s", modelUrl)
+			return
+		}
 
-	// Discard predictions and inference counter accumulated during warmup —
-	// they reflect model behaviour before it stabilized and should not
-	// influence accuracy scoring.
-	if drained := store.ConsumeMaturePredictions(0); len(drained) > 0 {
-		anlfLog.Infof("Accuracy monitor: discarded %d warmup predictions for model=%s",
-			len(drained), modelUrl)
+		// Startup warmup discards pre-stabilization predictions and inference
+		// counters. Post-swap monitors intentionally skip this path.
+		if drained := store.ConsumeMaturePredictions(0); len(drained) > 0 {
+			anlfLog.Infof("Accuracy monitor: discarded %d warmup predictions for model=%s",
+				len(drained), modelUrl)
+		}
+		store.GetAndResetInferenceNum() // discard warmup inference count
+	} else {
+		anlfLog.Infof("Accuracy monitor warmup skipped: model=%s", modelUrl)
 	}
-	store.GetAndResetInferenceNum() // discard warmup inference count
 
 	interval := accCfg.CheckInterval
 	if interval <= 0 {
@@ -447,19 +447,33 @@ func computeWAPE(pairs []matchedPair) float64 {
 	}
 
 	var sumAbsErr float64
-	var sumAbsActual float64
 	for _, p := range pairs {
 		sumAbsErr += math.Abs(float64(p.predUl - p.actualUl))
 		sumAbsErr += math.Abs(float64(p.predDl - p.actualDl))
-		sumAbsActual += math.Abs(float64(p.actualUl))
-		sumAbsActual += math.Abs(float64(p.actualDl))
 	}
 
+	sumAbsActual := computeSumAbsActual(pairs)
 	if sumAbsActual == 0 {
 		return 0
 	}
 
 	return sumAbsErr / sumAbsActual
+}
+
+func computeSumAbsActual(pairs []matchedPair) float64 {
+	var sumAbsActual float64
+	for _, p := range pairs {
+		sumAbsActual += math.Abs(float64(p.actualUl))
+		sumAbsActual += math.Abs(float64(p.actualDl))
+	}
+	return sumAbsActual
+}
+
+func computeMeanAbsActual(pairs []matchedPair) float64 {
+	if len(pairs) == 0 {
+		return 0
+	}
+	return computeSumAbsActual(pairs) / float64(len(pairs)*2)
 }
 
 // computeNRMSE calculates Normalized Root Mean Squared Error across UL and DL channels.
@@ -469,13 +483,7 @@ func computeNRMSE(pairs []matchedPair) float64 {
 		return 0
 	}
 
-	var sumAbsActual float64
-	for _, p := range pairs {
-		sumAbsActual += math.Abs(float64(p.actualUl))
-		sumAbsActual += math.Abs(float64(p.actualDl))
-	}
-
-	meanAbsActual := sumAbsActual / float64(len(pairs)*2)
+	meanAbsActual := computeMeanAbsActual(pairs)
 	if meanAbsActual == 0 {
 		return 0
 	}
@@ -547,6 +555,7 @@ func buildAccuracyReports(
 			ScopeKey:     scopeKey,
 			NwdafSubID:   singleNwdafSubID(acc.nwdafSubIDs),
 			Metrics:      computeAll(acc.pairs),
+			TrafficScale: computeMeanAbsActual(acc.pairs),
 			SampleCount:  len(acc.pairs),
 			InferenceNum: inferenceNum,
 			WindowStart:  acc.windowStart,

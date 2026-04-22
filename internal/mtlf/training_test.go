@@ -1,9 +1,13 @@
 package mtlf
 
 import (
+	"sync"
 	"testing"
+	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/nwdaf/pkg/factory"
+	"github.com/free5gc/openapi/models"
 )
 
 // TestHandleTrainingComplete_UnknownTaskId verifies that an unknown taskId is a no-op.
@@ -89,4 +93,50 @@ func TestHandleTrainingComplete_DuplicateCallback(t *testing.T) {
 	m.HandleTrainingComplete(taskId, "", "failure", "err")
 	// Second call with same taskId — should be a no-op
 	m.HandleTrainingComplete(taskId, "", "failure", "err")
+}
+
+func TestSwapModelAfterRetrain_DeletesOldMonitorState(t *testing.T) {
+	oldCfg := factory.NwdafConfig
+	factory.NwdafConfig = &factory.Config{
+		Configuration: &factory.Configuration{},
+	}
+	t.Cleanup(func() {
+		factory.NwdafConfig = oldCfg
+	})
+
+	nwdaf_context.Init()
+	ctx := nwdaf_context.GetSelf()
+
+	oldModelURL := "file:///old-model.pth"
+	newModelURL := "file:///new-model.pth"
+
+	oldShared, _ := ctx.GetOrCreateSharedModel(oldModelURL, models.NwdafEvent_UE_COMMUNICATION)
+	oldShared.SetModelId("old-model-id")
+
+	m := NewMtlfService(nil)
+	m.onModelSwapReady = func(newModelUrl, oldModelId string) (string, error) {
+		if newModelUrl != newModelURL {
+			t.Fatalf("newModelUrl = %s, want %s", newModelUrl, newModelURL)
+		}
+		if oldModelId != "old-model-id" {
+			t.Fatalf("oldModelId = %s, want old-model-id", oldModelId)
+		}
+		return "new-model-id", nil
+	}
+	m.onModelSwapped = func(modelUrl string, wg *sync.WaitGroup) {}
+
+	scope := m.stateStore.GetOrCreateScope(oldModelURL, "group:test", 3, 3)
+	scope.RecordMetric("MAE", 100, time.Now())
+
+	m.swapModelAfterRetrain(oldModelURL, newModelURL)
+
+	if m.stateStore.ModelExists(oldModelURL) {
+		t.Fatal("old model state should be deleted after successful swap")
+	}
+	if ctx.GetSharedModel(oldModelURL) != nil {
+		t.Fatal("old shared model should be deleted after successful swap")
+	}
+	if ctx.GetSharedModel(newModelURL) == nil {
+		t.Fatal("new shared model should be created after successful swap")
+	}
 }

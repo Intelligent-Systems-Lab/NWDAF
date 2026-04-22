@@ -282,6 +282,9 @@ func TestBuildAccuracyReports_PerScope(t *testing.T) {
 	if reports[0].InferenceNum != 7 {
 		t.Fatalf("reports[0].InferenceNum = %d, want 7", reports[0].InferenceNum)
 	}
+	if reports[0].TrafficScale != 150 {
+		t.Fatalf("reports[0].TrafficScale = %.2f, want 150", reports[0].TrafficScale)
+	}
 	if reports[0].WindowStart != now.Add(-2*time.Minute) {
 		t.Fatalf("reports[0].WindowStart = %v, want %v", reports[0].WindowStart, now.Add(-2*time.Minute))
 	}
@@ -293,6 +296,9 @@ func TestBuildAccuracyReports_PerScope(t *testing.T) {
 	}
 	if reports[1].ScopeKey != "supi:imsi-001" {
 		t.Fatalf("reports[1].ScopeKey = %q, want %q", reports[1].ScopeKey, "supi:imsi-001")
+	}
+	if reports[1].TrafficScale != 150 {
+		t.Fatalf("reports[1].TrafficScale = %.2f, want 150", reports[1].TrafficScale)
 	}
 }
 
@@ -539,5 +545,77 @@ func TestCheckModelAccuracy_CSVEnabledDoesNotAffectLegacyDeviation(t *testing.T)
 	}
 	if len(metricsBytes) == 0 {
 		t.Fatal("metrics CSV is empty")
+	}
+}
+
+func TestAcquireStartupWarmupDuration_OnlyOnce(t *testing.T) {
+	service := NewAnlfService(testNwdafApp{ctx: context.Background()})
+	accCfg := &factory.AccuracyMonitorConfig{WarmupDuration: 7}
+
+	if got := service.acquireStartupWarmupDuration(accCfg); got != 7 {
+		t.Fatalf("first acquireStartupWarmupDuration() = %d, want 7", got)
+	}
+	if got := service.acquireStartupWarmupDuration(accCfg); got != 0 {
+		t.Fatalf("second acquireStartupWarmupDuration() = %d, want 0", got)
+	}
+}
+
+func TestAcquireStartupWarmupDuration_UsesDefaultOnce(t *testing.T) {
+	service := NewAnlfService(testNwdafApp{ctx: context.Background()})
+	accCfg := &factory.AccuracyMonitorConfig{}
+
+	if got := service.acquireStartupWarmupDuration(accCfg); got != 120 {
+		t.Fatalf("first acquireStartupWarmupDuration() = %d, want 120", got)
+	}
+	if got := service.acquireStartupWarmupDuration(accCfg); got != 0 {
+		t.Fatalf("second acquireStartupWarmupDuration() = %d, want 0", got)
+	}
+}
+
+func TestRunModelAccuracyLoop_ZeroWarmupKeepsPredictionsUntilTicker(t *testing.T) {
+	resetAccuracyCSVManagerForTest(t)
+	t.Cleanup(func() {
+		resetAccuracyCSVManagerForTest(t)
+	})
+
+	service := NewAnlfService(testNwdafApp{ctx: context.Background()})
+	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
+	target := time.Now().Add(-30 * time.Second)
+	store.AddPrediction(nwdaf_context.PredictionRecord{
+		ModelUrl:    "file:///test/model.pth",
+		PredictedAt: target.Add(-5 * time.Second),
+		TargetTime:  target,
+		PredUlVol:   110,
+		PredDlVol:   210,
+		NwdafSubId:  "sub-1",
+		ScopeKey:    groupAScopeKey,
+	})
+
+	accCfg := &factory.AccuracyMonitorConfig{
+		CheckInterval: 30,
+		MinSamples:    1,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		service.runModelAccuracyLoop(ctx, "file:///test/model.pth", store, accCfg, 0)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("runModelAccuracyLoop did not exit after cancel")
+	}
+
+	if got := len(store.ConsumeMaturePredictions(0)); got != 1 {
+		t.Fatalf("remaining mature predictions after zero-warmup loop = %d, want 1", got)
+	}
+	if got := store.GetAndResetInferenceNum(); got != 1 {
+		t.Fatalf("remaining inference count after zero-warmup loop = %d, want 1", got)
 	}
 }

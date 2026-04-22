@@ -232,6 +232,9 @@ func (m *MtlfService) swapModelAfterRetrain(oldModelUrl, newModelUrl string) {
 
 	// 5. Restart accuracy monitor for the new model (wired via callback by processor)
 	nwdafCtx.DeleteModelAccuracyStore(oldModelUrl)
+	if m.stateStore != nil {
+		m.stateStore.DeleteModel(oldModelUrl)
+	}
 
 	if m.onModelSwapped != nil {
 		m.onModelSwapped(newModelUrl, m.wg)

@@ -5,9 +5,11 @@ package anlf
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
 // NwdafApp defines the app-level dependencies needed by AnLF.
@@ -20,16 +22,19 @@ type AnlfService struct {
 	nwdaf             NwdafApp
 	onDeviationReport func(modelUrl string, deviation float64, store *nwdaf_context.ModelAccuracyStore)
 	onAccuracyReports func(modelUrl string, reports []AccuracyReport, store *nwdaf_context.ModelAccuracyStore)
+	warmupMu          sync.Mutex
+	startupWarmupDone bool
 }
 
 // AccuracyReport is the internal AnLF output for one monitor round and one scope.
-// It is currently used for observability, while retrain decision still follows
-// the legacy deviation callback.
+// MTLF consumes these per-scope metrics for retrain policy evaluation and
+// CSV/log observability.
 type AccuracyReport struct {
 	ModelURL     string
 	ScopeKey     string
 	NwdafSubID   string
 	Metrics      map[string]float64
+	TrafficScale float64
 	SampleCount  int
 	InferenceNum int
 	WindowStart  time.Time
@@ -42,8 +47,8 @@ func NewAnlfService(nwdaf NwdafApp) *AnlfService {
 }
 
 // SetOnDeviationReport registers the callback invoked when AnLF finishes computing
-// accuracy for a model. Per TS 23.288 §6.2D: AnLF reports Analytics Accuracy
-// Information to MTLF, which then decides whether to retrain.
+// model-level deviation for a model. This callback is kept for legacy
+// compatibility while the report-based MTLF policy path is active.
 func (a *AnlfService) SetOnDeviationReport(
 	fn func(modelUrl string, deviation float64, store *nwdaf_context.ModelAccuracyStore),
 ) {
@@ -56,4 +61,20 @@ func (a *AnlfService) SetOnAccuracyReports(
 	fn func(modelUrl string, reports []AccuracyReport, store *nwdaf_context.ModelAccuracyStore),
 ) {
 	a.onAccuracyReports = fn
+}
+
+func (a *AnlfService) acquireStartupWarmupDuration(accCfg *factory.AccuracyMonitorConfig) int {
+	a.warmupMu.Lock()
+	defer a.warmupMu.Unlock()
+
+	if a.startupWarmupDone {
+		return 0
+	}
+	a.startupWarmupDone = true
+
+	warmup := accCfg.WarmupDuration
+	if warmup <= 0 {
+		warmup = 120
+	}
+	return warmup
 }

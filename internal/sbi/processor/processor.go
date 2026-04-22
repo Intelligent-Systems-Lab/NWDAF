@@ -34,13 +34,13 @@ func NewProcessor(nwdaf NwdafApp) *Processor {
 
 	// Wire 1: AnLF reports deviation → MTLF decides whether to retrain.
 	// Per TS 23.288 §6.2D→§6.2E: AnLF produces Analytics Accuracy Information;
-	// MTLF receives it and determines retraining necessity.
-	p.anlf.SetOnDeviationReport(func(
+	// MTLF receives per-scope reports and determines retraining necessity.
+	p.anlf.SetOnAccuracyReports(func(
 		modelUrl string,
-		deviation float64,
+		reports []anlf.AccuracyReport,
 		store *nwdaf_context.ModelAccuracyStore,
 	) {
-		p.mtlf.HandleDeviationReport(modelUrl, deviation, store)
+		p.mtlf.HandleAccuracyReports(modelUrl, reports, store)
 	})
 
 	// Wire 2: MTLF requests ML Service operations during hot-swap → AnLF executes them.
