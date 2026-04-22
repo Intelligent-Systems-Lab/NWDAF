@@ -125,7 +125,7 @@ func TestSwapModelAfterRetrain_DeletesOldMonitorState(t *testing.T) {
 	}
 	m.onModelSwapped = func(modelUrl string, wg *sync.WaitGroup) {}
 
-	scope := m.stateStore.GetOrCreateScope(oldModelURL, "group:test", 3)
+	scope := m.stateStore.GetOrCreateScope(oldModelURL, "group:test", 3, 3)
 	scope.RecordMetric("MAE", 100, time.Now())
 
 	m.swapModelAfterRetrain(oldModelURL, newModelURL)

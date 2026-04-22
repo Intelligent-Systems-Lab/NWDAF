@@ -282,6 +282,9 @@ func TestBuildAccuracyReports_PerScope(t *testing.T) {
 	if reports[0].InferenceNum != 7 {
 		t.Fatalf("reports[0].InferenceNum = %d, want 7", reports[0].InferenceNum)
 	}
+	if reports[0].TrafficScale != 150 {
+		t.Fatalf("reports[0].TrafficScale = %.2f, want 150", reports[0].TrafficScale)
+	}
 	if reports[0].WindowStart != now.Add(-2*time.Minute) {
 		t.Fatalf("reports[0].WindowStart = %v, want %v", reports[0].WindowStart, now.Add(-2*time.Minute))
 	}
@@ -293,6 +296,9 @@ func TestBuildAccuracyReports_PerScope(t *testing.T) {
 	}
 	if reports[1].ScopeKey != "supi:imsi-001" {
 		t.Fatalf("reports[1].ScopeKey = %q, want %q", reports[1].ScopeKey, "supi:imsi-001")
+	}
+	if reports[1].TrafficScale != 150 {
+		t.Fatalf("reports[1].TrafficScale = %.2f, want 150", reports[1].TrafficScale)
 	}
 }
 

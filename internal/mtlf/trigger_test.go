@@ -33,11 +33,20 @@ func setTestAccuracyMonitorConfig(t *testing.T, cfg *factory.AccuracyMonitorConf
 }
 
 func testAccuracyReport(modelURL, scopeKey string, current float64) anlf.AccuracyReport {
+	return testAccuracyReportWithMetrics(modelURL, scopeKey, map[string]float64{"MAE": current}, 0)
+}
+
+func testAccuracyReportWithMetrics(
+	modelURL, scopeKey string,
+	metrics map[string]float64,
+	trafficScale float64,
+) anlf.AccuracyReport {
 	return anlf.AccuracyReport{
-		ModelURL:    modelURL,
-		ScopeKey:    scopeKey,
-		Metrics:     map[string]float64{"MAE": current},
-		SampleCount: 5,
+		ModelURL:     modelURL,
+		ScopeKey:     scopeKey,
+		Metrics:      metrics,
+		TrafficScale: trafficScale,
+		SampleCount:  5,
 	}
 }
 
@@ -121,7 +130,7 @@ func TestHandleAccuracyReports_BaselineReadyRequiresRelGate(t *testing.T) {
 	modelURL := testModelURL
 	scopeKey := testScopeKey
 
-	scope := m.stateStore.GetOrCreateScope(modelURL, scopeKey, 5)
+	scope := m.stateStore.GetOrCreateScope(modelURL, scopeKey, 5, 2)
 	prefillScope(scope, 150, 150, 150)
 
 	m.HandleAccuracyReports(modelURL, []anlf.AccuracyReport{
@@ -198,16 +207,17 @@ func TestHandleAccuracyReports_TriggersOnlyAfterBaselineReady(t *testing.T) {
 	}
 }
 
-func TestHandleAccuracyReports_ResetBreachOnGoodRound(t *testing.T) {
+func TestHandleAccuracyReports_DecisionWindowRetainsRecentHits(t *testing.T) {
 	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
-		Enabled:             true,
-		PrimaryMetric:       "MAE",
-		RecentBufferSize:    5,
-		MinBufferSamples:    3,
-		MinStd:              1,
-		FixedFloor:          100,
-		ZScoreThreshold:     3,
-		ConsecutiveBreaches: 3,
+		Enabled:              true,
+		PrimaryMetric:        "MAE",
+		RecentBufferSize:     5,
+		MinBufferSamples:     3,
+		MinStd:               1,
+		FixedFloor:           100,
+		ZScoreThreshold:      3,
+		DecisionWindowSize:   3,
+		RequiredHitsInWindow: 3,
 	})
 
 	m := NewMtlfService(nil)
@@ -215,7 +225,7 @@ func TestHandleAccuracyReports_ResetBreachOnGoodRound(t *testing.T) {
 	modelURL := testModelURL
 	scopeKey := testScopeKey
 
-	scope := m.stateStore.GetOrCreateScope(modelURL, scopeKey, 5)
+	scope := m.stateStore.GetOrCreateScope(modelURL, scopeKey, 5, 3)
 	prefillScope(scope, 150, 150, 150)
 
 	bad := testAccuracyReport(modelURL, scopeKey, 300)
@@ -228,13 +238,13 @@ func TestHandleAccuracyReports_ResetBreachOnGoodRound(t *testing.T) {
 	}
 
 	m.HandleAccuracyReports(modelURL, []anlf.AccuracyReport{good}, store)
-	if got := scope.BreachCount(); got != 0 {
-		t.Fatalf("BreachCount() after good round = %d, want 0", got)
+	if got := scope.BreachCount(); got != 1 {
+		t.Fatalf("BreachCount() after good round = %d, want 1 retained hit in window", got)
 	}
 
 	m.HandleAccuracyReports(modelURL, []anlf.AccuracyReport{badAgain}, store)
-	if got := scope.BreachCount(); got != 1 {
-		t.Fatalf("BreachCount() after second bad round = %d, want 1", got)
+	if got := scope.BreachCount(); got != 2 {
+		t.Fatalf("BreachCount() after second bad round = %d, want 2", got)
 	}
 }
 
@@ -280,8 +290,8 @@ func TestHandleAccuracyReports_MultiScopeIsolation(t *testing.T) {
 	m := NewMtlfService(nil)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 
-	scopeA := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5)
-	scopeB := m.stateStore.GetOrCreateScope(testModelURL, testScopeKeyB, 5)
+	scopeA := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 2)
+	scopeB := m.stateStore.GetOrCreateScope(testModelURL, testScopeKeyB, 5, 2)
 	prefillScope(scopeA, 150, 150, 150)
 	prefillScope(scopeB, 150, 150, 150)
 
@@ -316,8 +326,8 @@ func TestHandleAccuracyReports_AnyScopeTriggersRetrain(t *testing.T) {
 	m := NewMtlfService(nil)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 
-	scopeA := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5)
-	scopeB := m.stateStore.GetOrCreateScope(testModelURL, testScopeKeyB, 5)
+	scopeA := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 1)
+	scopeB := m.stateStore.GetOrCreateScope(testModelURL, testScopeKeyB, 5, 1)
 	prefillScope(scopeA, 150, 150, 150)
 	prefillScope(scopeB, 150, 150, 150)
 
@@ -389,7 +399,7 @@ func TestHandleAccuracyReports_ZeroHistoryStillRequiresAbsGate(t *testing.T) {
 
 	m := NewMtlfService(nil)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
-	scope := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5)
+	scope := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 1)
 	prefillScope(scope, 0, 0, 0)
 
 	m.HandleAccuracyReports(testModelURL, []anlf.AccuracyReport{
@@ -401,5 +411,148 @@ func TestHandleAccuracyReports_ZeroHistoryStillRequiresAbsGate(t *testing.T) {
 	}
 	if store.IsRetraining() {
 		t.Fatal("store.IsRetraining() = true, want false when absGate fails")
+	}
+}
+
+func TestHandleAccuracyReports_DecisionWindowToleratesMisses(t *testing.T) {
+	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+		Enabled:              true,
+		PrimaryMetric:        "MAE",
+		RecentBufferSize:     5,
+		MinBufferSamples:     3,
+		MinStd:               1,
+		FixedFloor:           100,
+		ZScoreThreshold:      3,
+		DecisionWindowSize:   5,
+		RequiredHitsInWindow: 3,
+	})
+
+	m := NewMtlfService(nil)
+	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	triggered := 0
+	m.onRetrainTriggered = func(modelURL string, store *nwdaf_context.ModelAccuracyStore) {
+		triggered++
+	}
+
+	scope := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 5)
+	prefillScope(scope, 150, 150, 150)
+
+	reports := []anlf.AccuracyReport{
+		testAccuracyReport(testModelURL, testScopeKey, 300),
+		testAccuracyReport(testModelURL, testScopeKey, 150),
+		testAccuracyReport(testModelURL, testScopeKey, 400),
+		testAccuracyReport(testModelURL, testScopeKey, 150),
+		testAccuracyReport(testModelURL, testScopeKey, 700),
+	}
+	for i, report := range reports {
+		m.HandleAccuracyReports(testModelURL, []anlf.AccuracyReport{report}, store)
+		if i < len(reports)-1 && triggered != 0 {
+			t.Fatalf("triggered early at round %d", i+1)
+		}
+	}
+
+	if triggered != 1 {
+		t.Fatalf("triggered = %d, want 1 after 3 hits in latest 5 rounds", triggered)
+	}
+}
+
+func TestHandleAccuracyReports_ChronicPathTriggersWithoutDegradation(t *testing.T) {
+	enabled := true
+	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+		Enabled:              true,
+		PrimaryMetric:        "MAE",
+		RecentBufferSize:     5,
+		MinBufferSamples:     3,
+		MinStd:               1,
+		FixedFloor:           1000,
+		ZScoreThreshold:      3,
+		DecisionWindowSize:   3,
+		RequiredHitsInWindow: 2,
+		ChronicPolicy: &factory.ChronicPolicyConfig{
+			Enabled:         &enabled,
+			Metric:          "WAPE",
+			Aggregator:      "percentile",
+			Percentile:      50,
+			Threshold:       0.8,
+			MinTrafficScale: 100,
+		},
+	})
+
+	m := NewMtlfService(nil)
+	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	triggered := 0
+	m.onRetrainTriggered = func(modelURL string, store *nwdaf_context.ModelAccuracyStore) {
+		triggered++
+	}
+
+	report := testAccuracyReportWithMetrics(testModelURL, testScopeKey, map[string]float64{
+		"MAE":  150,
+		"WAPE": 1.1,
+	}, 500)
+
+	for i := 0; i < 5; i++ {
+		m.HandleAccuracyReports(testModelURL, []anlf.AccuracyReport{report}, store)
+	}
+
+	scope := m.stateStore.GetScope(testModelURL, testScopeKey)
+	if scope == nil {
+		t.Fatal("scope state was not created")
+	}
+	if got := scope.BreachCount(); got != 0 {
+		t.Fatalf("degradation hits = %d, want 0", got)
+	}
+	if got := scope.ChronicHitCount(); got != 0 {
+		t.Fatalf("chronic hits after trigger reset = %d, want 0", got)
+	}
+	if triggered != 1 {
+		t.Fatalf("triggered = %d, want 1 from chronic path", triggered)
+	}
+	if !store.IsRetraining() {
+		t.Fatal("store.IsRetraining() = false, want true after chronic trigger")
+	}
+}
+
+func TestHandleAccuracyReports_ChronicPathRequiresTrafficScale(t *testing.T) {
+	enabled := true
+	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+		Enabled:              true,
+		PrimaryMetric:        "MAE",
+		RecentBufferSize:     5,
+		MinBufferSamples:     3,
+		MinStd:               1,
+		FixedFloor:           1000,
+		ZScoreThreshold:      3,
+		DecisionWindowSize:   3,
+		RequiredHitsInWindow: 1,
+		ChronicPolicy: &factory.ChronicPolicyConfig{
+			Enabled:         &enabled,
+			Metric:          "WAPE",
+			Aggregator:      "percentile",
+			Percentile:      50,
+			Threshold:       0.8,
+			MinTrafficScale: 1000,
+		},
+	})
+
+	m := NewMtlfService(nil)
+	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	report := testAccuracyReportWithMetrics(testModelURL, testScopeKey, map[string]float64{
+		"MAE":  150,
+		"WAPE": 1.1,
+	}, 100)
+
+	for i := 0; i < 4; i++ {
+		m.HandleAccuracyReports(testModelURL, []anlf.AccuracyReport{report}, store)
+	}
+
+	scope := m.stateStore.GetScope(testModelURL, testScopeKey)
+	if scope == nil {
+		t.Fatal("scope state was not created")
+	}
+	if got := scope.ChronicHitCount(); got != 0 {
+		t.Fatalf("chronic hits = %d, want 0 when traffic scale is below threshold", got)
+	}
+	if store.IsRetraining() {
+		t.Fatal("store.IsRetraining() = true, want false when chronic path is ineligible")
 	}
 }

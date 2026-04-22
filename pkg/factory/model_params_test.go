@@ -163,25 +163,54 @@ func TestAccuracyMonitorConfig_PolicyDefaults(t *testing.T) {
 	if got := cfg.ScopeStateTTLOrDefault(); got != 600 {
 		t.Errorf("ScopeStateTTLOrDefault() = %d, want 600", got)
 	}
+	if got := cfg.DecisionWindowSizeOrDefault(); got != 3 {
+		t.Errorf("DecisionWindowSizeOrDefault() = %d, want 3", got)
+	}
+	if got := cfg.RequiredHitsInWindowOrDefault(); got != 3 {
+		t.Errorf("RequiredHitsInWindowOrDefault() = %d, want 3", got)
+	}
 	if got := cfg.ConsecutiveBreachesOrDefault(); got != 3 {
 		t.Errorf("ConsecutiveBreachesOrDefault() = %d, want 3", got)
 	}
 	if got := cfg.MetricsToRecordOrDefault(); len(got) != 5 {
 		t.Errorf("MetricsToRecordOrDefault() length = %d, want 5", len(got))
 	}
+	if cfg.ChronicPolicy.EnabledOrDefault() {
+		t.Error("ChronicPolicy.EnabledOrDefault() = true, want false")
+	}
+	if got := cfg.ChronicPolicy.MetricOrDefault(); got != "WAPE" {
+		t.Errorf("ChronicPolicy.MetricOrDefault() = %q, want %q", got, "WAPE")
+	}
+	if got := cfg.ChronicPolicy.AggregatorOrDefault(); got != "percentile" {
+		t.Errorf("ChronicPolicy.AggregatorOrDefault() = %q, want %q", got, "percentile")
+	}
+	if got := cfg.ChronicPolicy.PercentileOrDefault(); got != 75 {
+		t.Errorf("ChronicPolicy.PercentileOrDefault() = %d, want 75", got)
+	}
 }
 
 func TestAccuracyMonitorConfig_PolicyExplicitValues(t *testing.T) {
+	enabled := true
 	cfg := &factory.AccuracyMonitorConfig{
-		MetricsToRecord:     []string{"MAE", "WAPE"},
-		PrimaryMetric:       "WAPE",
-		RecentBufferSize:    12,
-		MinBufferSamples:    4,
-		MinStd:              0.5,
-		FixedFloor:          2048,
-		ZScoreThreshold:     2.5,
-		ScopeStateTTL:       120,
-		ConsecutiveBreaches: 5,
+		MetricsToRecord:      []string{"MAE", "WAPE"},
+		PrimaryMetric:        "WAPE",
+		RecentBufferSize:     12,
+		MinBufferSamples:     4,
+		MinStd:               0.5,
+		FixedFloor:           2048,
+		ZScoreThreshold:      2.5,
+		DecisionWindowSize:   6,
+		RequiredHitsInWindow: 4,
+		ScopeStateTTL:        120,
+		ConsecutiveBreaches:  5,
+		ChronicPolicy: &factory.ChronicPolicyConfig{
+			Enabled:         &enabled,
+			Metric:          "nrmse",
+			Aggregator:      "mean",
+			Percentile:      50,
+			Threshold:       1.5,
+			MinTrafficScale: 4096,
+		},
 	}
 
 	if got := cfg.PrimaryMetricOrDefault(); got != "WAPE" {
@@ -205,11 +234,35 @@ func TestAccuracyMonitorConfig_PolicyExplicitValues(t *testing.T) {
 	if got := cfg.ScopeStateTTLOrDefault(); got != 120 {
 		t.Errorf("ScopeStateTTLOrDefault() = %d, want 120", got)
 	}
+	if got := cfg.DecisionWindowSizeOrDefault(); got != 6 {
+		t.Errorf("DecisionWindowSizeOrDefault() = %d, want 6", got)
+	}
+	if got := cfg.RequiredHitsInWindowOrDefault(); got != 4 {
+		t.Errorf("RequiredHitsInWindowOrDefault() = %d, want 4", got)
+	}
 	if got := cfg.ConsecutiveBreachesOrDefault(); got != 5 {
 		t.Errorf("ConsecutiveBreachesOrDefault() = %d, want 5", got)
 	}
 	gotMetrics := cfg.MetricsToRecordOrDefault()
 	if len(gotMetrics) != 2 || gotMetrics[0] != "MAE" || gotMetrics[1] != "WAPE" {
 		t.Errorf("MetricsToRecordOrDefault() = %v, want [MAE WAPE]", gotMetrics)
+	}
+	if !cfg.ChronicPolicy.EnabledOrDefault() {
+		t.Error("ChronicPolicy.EnabledOrDefault() = false, want true")
+	}
+	if got := cfg.ChronicPolicy.MetricOrDefault(); got != "NRMSE" {
+		t.Errorf("ChronicPolicy.MetricOrDefault() = %q, want %q", got, "NRMSE")
+	}
+	if got := cfg.ChronicPolicy.AggregatorOrDefault(); got != "mean" {
+		t.Errorf("ChronicPolicy.AggregatorOrDefault() = %q, want %q", got, "mean")
+	}
+	if got := cfg.ChronicPolicy.PercentileOrDefault(); got != 50 {
+		t.Errorf("ChronicPolicy.PercentileOrDefault() = %d, want 50", got)
+	}
+	if got := cfg.ChronicPolicy.ThresholdOrDefault(); got != 1.5 {
+		t.Errorf("ChronicPolicy.ThresholdOrDefault() = %.1f, want 1.5", got)
+	}
+	if got := cfg.ChronicPolicy.MinTrafficScaleOrDefault(); got != 4096 {
+		t.Errorf("ChronicPolicy.MinTrafficScaleOrDefault() = %.0f, want 4096", got)
 	}
 }

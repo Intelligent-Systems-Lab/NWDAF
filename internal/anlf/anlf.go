@@ -34,6 +34,7 @@ type AccuracyReport struct {
 	ScopeKey     string
 	NwdafSubID   string
 	Metrics      map[string]float64
+	TrafficScale float64
 	SampleCount  int
 	InferenceNum int
 	WindowStart  time.Time

@@ -2,6 +2,7 @@ package factory
 
 import (
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -171,19 +172,46 @@ type AccuracyMonitorConfig struct {
 	CheckInterval int  `yaml:"checkInterval,omitempty"` // Seconds between checks (default: 60)
 	MinSamples    int  `yaml:"minSamples,omitempty"`    // Min samples before evaluation (default: 5)
 	// Seconds to skip checks after start (default: 120).
-	WarmupDuration      int      `yaml:"warmupDuration,omitempty"`
-	CSVDumpDir          string   `yaml:"csvDumpDir,omitempty"`          // Directory for accuracy CSV output
-	CSVDumpEnabled      *bool    `yaml:"csvDumpEnabled,omitempty"`      // Whether to write accuracy CSV output
-	MetricsToRecord     []string `yaml:"metricsToRecord,omitempty"`     // Candidate metrics retained for observability
-	PrimaryMetric       string   `yaml:"primaryMetric,omitempty"`       // Metric used for retrain decision
-	RecentBufferSize    int      `yaml:"recentBufferSize,omitempty"`    // Per-scope history length
-	MinBufferSamples    int      `yaml:"minBufferSamples,omitempty"`    // Buffer samples required before z-score gate
-	MinStd              float64  `yaml:"minStd,omitempty"`              // Standard-deviation floor for z-score
-	FixedFloor          float64  `yaml:"fixedFloor,omitempty"`          // Absolute gate floor for the primary metric
-	ZScoreThreshold     float64  `yaml:"zScoreThreshold,omitempty"`     // Relative anomaly threshold
-	ScopeStateTTL       int      `yaml:"scopeStateTTL,omitempty"`       // Scope state GC threshold in seconds
-	ConsecutiveBreaches int      `yaml:"consecutiveBreaches,omitempty"` // Consecutive triggered rounds before retrain
+	WarmupDuration int `yaml:"warmupDuration,omitempty"`
+	// Directory for accuracy CSV output.
+	CSVDumpDir string `yaml:"csvDumpDir,omitempty"`
+	// Whether to write accuracy CSV output.
+	CSVDumpEnabled *bool `yaml:"csvDumpEnabled,omitempty"`
+	// Candidate metrics retained for observability.
+	MetricsToRecord []string `yaml:"metricsToRecord,omitempty"`
+	// Metric used for retrain decision.
+	PrimaryMetric string `yaml:"primaryMetric,omitempty"`
+	// Per-scope history length.
+	RecentBufferSize int `yaml:"recentBufferSize,omitempty"`
+	// Buffer samples required before z-score gate.
+	MinBufferSamples int `yaml:"minBufferSamples,omitempty"`
+	// Standard-deviation floor for z-score.
+	MinStd float64 `yaml:"minStd,omitempty"`
+	// Absolute gate floor for the primary metric.
+	FixedFloor float64 `yaml:"fixedFloor,omitempty"`
+	// Relative anomaly threshold.
+	ZScoreThreshold float64 `yaml:"zScoreThreshold,omitempty"`
+	// Decision window length M.
+	DecisionWindowSize int `yaml:"decisionWindowSize,omitempty"`
+	// Required hits N in the latest M rounds.
+	RequiredHitsInWindow int `yaml:"requiredHitsInWindow,omitempty"`
+	// Scope state GC threshold in seconds.
+	ScopeStateTTL int `yaml:"scopeStateTTL,omitempty"`
+	// Backward-compatible fallback for strict consecutive behavior.
+	ConsecutiveBreaches int                  `yaml:"consecutiveBreaches,omitempty"`
+	ChronicPolicy       *ChronicPolicyConfig `yaml:"chronicPolicy,omitempty"`
 }
+
+type ChronicPolicyConfig struct {
+	Enabled         *bool   `yaml:"enabled,omitempty"`
+	Metric          string  `yaml:"metric,omitempty"`
+	Aggregator      string  `yaml:"aggregator,omitempty"`
+	Percentile      int     `yaml:"percentile,omitempty"`
+	Threshold       float64 `yaml:"threshold,omitempty"`
+	MinTrafficScale float64 `yaml:"minTrafficScale,omitempty"`
+}
+
+const chronicAggregatorPercentile = "percentile"
 
 func (a *AccuracyMonitorConfig) CSVDumpEnabledOrDefault() bool {
 	if a == nil || a.CSVDumpEnabled == nil {
@@ -255,11 +283,98 @@ func (a *AccuracyMonitorConfig) ScopeStateTTLOrDefault() int {
 	return a.ScopeStateTTL
 }
 
+func (a *AccuracyMonitorConfig) DecisionWindowSizeOrDefault() int {
+	if a == nil {
+		return 3
+	}
+	if a.DecisionWindowSize > 0 {
+		return a.DecisionWindowSize
+	}
+	if a.ConsecutiveBreaches > 0 {
+		return a.ConsecutiveBreaches
+	}
+	return 3
+}
+
+func (a *AccuracyMonitorConfig) RequiredHitsInWindowOrDefault() int {
+	windowSize := a.DecisionWindowSizeOrDefault()
+	required := 0
+	switch {
+	case a == nil:
+		required = 3
+	case a.RequiredHitsInWindow > 0:
+		required = a.RequiredHitsInWindow
+	case a.ConsecutiveBreaches > 0:
+		required = a.ConsecutiveBreaches
+	default:
+		required = 3
+	}
+	if required > windowSize {
+		return windowSize
+	}
+	return required
+}
+
 func (a *AccuracyMonitorConfig) ConsecutiveBreachesOrDefault() int {
 	if a == nil || a.ConsecutiveBreaches <= 0 {
 		return 3
 	}
 	return a.ConsecutiveBreaches
+}
+
+func (c *ChronicPolicyConfig) EnabledOrDefault() bool {
+	if c == nil || c.Enabled == nil {
+		return false
+	}
+	return *c.Enabled
+}
+
+func (c *ChronicPolicyConfig) MetricOrDefault() string {
+	if c == nil {
+		return "WAPE"
+	}
+	switch strings.ToUpper(strings.TrimSpace(c.Metric)) {
+	case "WAPE", "NRMSE", "MAE":
+		return strings.ToUpper(strings.TrimSpace(c.Metric))
+	default:
+		return "WAPE"
+	}
+}
+
+func (c *ChronicPolicyConfig) AggregatorOrDefault() string {
+	if c == nil {
+		return chronicAggregatorPercentile
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Aggregator)) {
+	case "mean", chronicAggregatorPercentile:
+		return strings.ToLower(strings.TrimSpace(c.Aggregator))
+	default:
+		return chronicAggregatorPercentile
+	}
+}
+
+func (c *ChronicPolicyConfig) PercentileOrDefault() int {
+	if c == nil || c.Percentile <= 0 {
+		return 75
+	}
+	if c.Percentile > 99 {
+		return 99
+	}
+	return c.Percentile
+}
+
+func (c *ChronicPolicyConfig) ThresholdOrDefault() float64 {
+	if c == nil || c.Threshold <= 0 {
+		return 1.0
+	}
+	return c.Threshold
+}
+
+func (c *ChronicPolicyConfig) MinTrafficScaleOrDefault() float64 {
+	if c == nil || c.MinTrafficScale <= 0 {
+		return 1024
+	}
+	return c.MinTrafficScale
 }
 
 // AdrfConfig holds connection settings for the ADRF (Analytics Data Repository Function).

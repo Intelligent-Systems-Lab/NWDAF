@@ -2,6 +2,7 @@ package mtlf
 
 import (
 	"math"
+	"sort"
 	"sync"
 	"time"
 )
@@ -11,11 +12,24 @@ type ringBuffer struct {
 	next   int
 }
 
+type hitWindow struct {
+	values    []bool
+	next      int
+	trueCount int
+}
+
 func newRingBuffer(size int) *ringBuffer {
 	if size <= 0 {
 		size = 1
 	}
 	return &ringBuffer{values: make([]float64, 0, size)}
+}
+
+func newHitWindow(size int) *hitWindow {
+	if size <= 0 {
+		size = 1
+	}
+	return &hitWindow{values: make([]bool, 0, size)}
 }
 
 func (r *ringBuffer) Add(v float64) {
@@ -44,20 +58,55 @@ func (r *ringBuffer) Snapshot() []float64 {
 	return out
 }
 
-type ScopeState struct {
-	scopeKey      string
-	bufferSize    int
-	metricBuffers map[string]*ringBuffer
-	breachCount   int
-	lastUpdate    time.Time
-	mu            sync.RWMutex
+func (w *hitWindow) Add(hit bool) int {
+	if len(w.values) < cap(w.values) {
+		w.values = append(w.values, hit)
+		if hit {
+			w.trueCount++
+		}
+		return w.trueCount
+	}
+
+	if w.values[w.next] {
+		w.trueCount--
+	}
+	w.values[w.next] = hit
+	if hit {
+		w.trueCount++
+	}
+	w.next = (w.next + 1) % cap(w.values)
+	return w.trueCount
 }
 
-func newScopeState(scopeKey string, bufferSize int) *ScopeState {
+func (w *hitWindow) TrueCount() int {
+	return w.trueCount
+}
+
+func (w *hitWindow) Reset() {
+	w.values = w.values[:0]
+	w.next = 0
+	w.trueCount = 0
+}
+
+type ScopeState struct {
+	scopeKey           string
+	bufferSize         int
+	decisionWindowSize int
+	metricBuffers      map[string]*ringBuffer
+	degradationWindow  *hitWindow
+	chronicWindow      *hitWindow
+	lastUpdate         time.Time
+	mu                 sync.RWMutex
+}
+
+func newScopeState(scopeKey string, bufferSize, decisionWindowSize int) *ScopeState {
 	return &ScopeState{
-		scopeKey:      scopeKey,
-		bufferSize:    bufferSize,
-		metricBuffers: make(map[string]*ringBuffer),
+		scopeKey:           scopeKey,
+		bufferSize:         bufferSize,
+		decisionWindowSize: decisionWindowSize,
+		metricBuffers:      make(map[string]*ringBuffer),
+		degradationWindow:  newHitWindow(decisionWindowSize),
+		chronicWindow:      newHitWindow(decisionWindowSize),
 	}
 }
 
@@ -114,6 +163,30 @@ func (s *ScopeState) Std(metric string) float64 {
 	return math.Sqrt(sumSq / float64(len(values)))
 }
 
+func (s *ScopeState) Percentile(metric string, percentile int) float64 {
+	values := s.metricValues(metric)
+	if len(values) == 0 {
+		return 0
+	}
+	sort.Float64s(values)
+
+	if percentile <= 0 {
+		return values[0]
+	}
+	if percentile >= 100 {
+		return values[len(values)-1]
+	}
+
+	position := (float64(percentile) / 100.0) * float64(len(values)-1)
+	lower := int(math.Floor(position))
+	upper := int(math.Ceil(position))
+	if lower == upper {
+		return values[lower]
+	}
+	weight := position - float64(lower)
+	return values[lower] + (values[upper]-values[lower])*weight
+}
+
 func (s *ScopeState) Min(metric string) float64 {
 	values := s.metricValues(metric)
 	if len(values) == 0 {
@@ -143,22 +216,44 @@ func (s *ScopeState) Max(metric string) float64 {
 }
 
 func (s *ScopeState) IncrementBreach() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.breachCount++
-	return s.breachCount
+	return s.RecordDegradationOutcome(true)
 }
 
 func (s *ScopeState) ResetBreach() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.breachCount = 0
+	s.degradationWindow.Reset()
 }
 
 func (s *ScopeState) BreachCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.breachCount
+	return s.degradationWindow.TrueCount()
+}
+
+func (s *ScopeState) RecordDegradationOutcome(hit bool) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.degradationWindow.Add(hit)
+}
+
+func (s *ScopeState) RecordChronicOutcome(hit bool) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.chronicWindow.Add(hit)
+}
+
+func (s *ScopeState) ChronicHitCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.chronicWindow.TrueCount()
+}
+
+func (s *ScopeState) ResetDecisionWindows() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.degradationWindow.Reset()
+	s.chronicWindow.Reset()
 }
 
 func (s *ScopeState) LastUpdate() time.Time {
@@ -193,7 +288,10 @@ func NewMonitorStateStore() *MonitorStateStore {
 	}
 }
 
-func (s *MonitorStateStore) GetOrCreateScope(modelURL, scopeKey string, bufferSize int) *ScopeState {
+func (s *MonitorStateStore) GetOrCreateScope(
+	modelURL, scopeKey string,
+	bufferSize, decisionWindowSize int,
+) *ScopeState {
 	s.mu.RLock()
 	modelState := s.models[modelURL]
 	s.mu.RUnlock()
@@ -219,7 +317,7 @@ func (s *MonitorStateStore) GetOrCreateScope(modelURL, scopeKey string, bufferSi
 	defer modelState.mu.Unlock()
 	scopeState = modelState.scopes[scopeKey]
 	if scopeState == nil {
-		scopeState = newScopeState(scopeKey, bufferSize)
+		scopeState = newScopeState(scopeKey, bufferSize, decisionWindowSize)
 		modelState.scopes[scopeKey] = scopeState
 	}
 	return scopeState
@@ -267,7 +365,7 @@ func (s *MonitorStateStore) ResetModelBreaches(modelURL string) {
 	modelState.mu.RUnlock()
 
 	for _, scope := range scopes {
-		scope.ResetBreach()
+		scope.ResetDecisionWindows()
 	}
 }
 

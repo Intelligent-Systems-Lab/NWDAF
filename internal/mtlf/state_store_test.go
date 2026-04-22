@@ -7,7 +7,7 @@ import (
 )
 
 func TestScopeState_RecordMetricAndStats(t *testing.T) {
-	scope := newScopeState("scope-a", 3)
+	scope := newScopeState("scope-a", 3, 3)
 	now := time.Now()
 
 	scope.RecordMetric("MAE", 10, now)
@@ -47,10 +47,25 @@ func TestScopeState_RecordMetricAndStats(t *testing.T) {
 	}
 }
 
+func TestScopeState_Percentile(t *testing.T) {
+	scope := newScopeState("scope-a", 5, 3)
+	now := time.Now()
+	for _, value := range []float64{10, 20, 30, 40} {
+		scope.RecordMetric("WAPE", value, now)
+	}
+
+	if got := scope.Percentile("WAPE", 50); got != 25 {
+		t.Fatalf("Percentile(50) = %.2f, want 25", got)
+	}
+	if got := scope.Percentile("WAPE", 75); got != 32.5 {
+		t.Fatalf("Percentile(75) = %.2f, want 32.5", got)
+	}
+}
+
 func TestMonitorStateStore_GCExpiredScopes(t *testing.T) {
 	store := NewMonitorStateStore()
 	modelURL := "file:///test/model.pth"
-	scope := store.GetOrCreateScope(modelURL, "scope-a", 3)
+	scope := store.GetOrCreateScope(modelURL, "scope-a", 3, 3)
 
 	oldNow := time.Now().Add(-2 * time.Minute)
 	scope.RecordMetric("MAE", 10, oldNow)

@@ -447,19 +447,33 @@ func computeWAPE(pairs []matchedPair) float64 {
 	}
 
 	var sumAbsErr float64
-	var sumAbsActual float64
 	for _, p := range pairs {
 		sumAbsErr += math.Abs(float64(p.predUl - p.actualUl))
 		sumAbsErr += math.Abs(float64(p.predDl - p.actualDl))
-		sumAbsActual += math.Abs(float64(p.actualUl))
-		sumAbsActual += math.Abs(float64(p.actualDl))
 	}
 
+	sumAbsActual := computeSumAbsActual(pairs)
 	if sumAbsActual == 0 {
 		return 0
 	}
 
 	return sumAbsErr / sumAbsActual
+}
+
+func computeSumAbsActual(pairs []matchedPair) float64 {
+	var sumAbsActual float64
+	for _, p := range pairs {
+		sumAbsActual += math.Abs(float64(p.actualUl))
+		sumAbsActual += math.Abs(float64(p.actualDl))
+	}
+	return sumAbsActual
+}
+
+func computeMeanAbsActual(pairs []matchedPair) float64 {
+	if len(pairs) == 0 {
+		return 0
+	}
+	return computeSumAbsActual(pairs) / float64(len(pairs)*2)
 }
 
 // computeNRMSE calculates Normalized Root Mean Squared Error across UL and DL channels.
@@ -469,13 +483,7 @@ func computeNRMSE(pairs []matchedPair) float64 {
 		return 0
 	}
 
-	var sumAbsActual float64
-	for _, p := range pairs {
-		sumAbsActual += math.Abs(float64(p.actualUl))
-		sumAbsActual += math.Abs(float64(p.actualDl))
-	}
-
-	meanAbsActual := sumAbsActual / float64(len(pairs)*2)
+	meanAbsActual := computeMeanAbsActual(pairs)
 	if meanAbsActual == 0 {
 		return 0
 	}
@@ -547,6 +555,7 @@ func buildAccuracyReports(
 			ScopeKey:     scopeKey,
 			NwdafSubID:   singleNwdafSubID(acc.nwdafSubIDs),
 			Metrics:      computeAll(acc.pairs),
+			TrafficScale: computeMeanAbsActual(acc.pairs),
 			SampleCount:  len(acc.pairs),
 			InferenceNum: inferenceNum,
 			WindowStart:  acc.windowStart,

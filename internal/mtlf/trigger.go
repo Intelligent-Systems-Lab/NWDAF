@@ -10,6 +10,8 @@ import (
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
+const trafficScaleMetricName = "__traffic_scale__"
+
 // HandleAccuracyReports receives per-scope accuracy information from AnLF and
 // decides whether to trigger model retraining.
 // Per TS 23.288 §6.2E: MTLF analyzes accuracy degradation reported by AnLF and
@@ -47,7 +49,9 @@ func (m *MtlfService) HandleAccuracyReports(
 	minStd := accCfg.MinStdOrDefault()
 	fixedFloor := accCfg.FixedFloorOrDefault()
 	zThreshold := accCfg.ZScoreThresholdOrDefault()
-	required := accCfg.ConsecutiveBreachesOrDefault()
+	windowSize := accCfg.DecisionWindowSizeOrDefault()
+	requiredHits := accCfg.RequiredHitsInWindowOrDefault()
+	chronicCfg := accCfg.ChronicPolicy
 
 	for _, report := range reports {
 		if report.ScopeKey == "" {
@@ -62,7 +66,7 @@ func (m *MtlfService) HandleAccuracyReports(
 			continue
 		}
 
-		scopeState := m.stateStore.GetOrCreateScope(modelUrl, report.ScopeKey, bufferSize)
+		scopeState := m.stateStore.GetOrCreateScope(modelUrl, report.ScopeKey, bufferSize, windowSize)
 		historyCount := scopeState.SampleCount(primaryMetric)
 		mean := scopeState.Mean(primaryMetric)
 		std := scopeState.Std(primaryMetric)
@@ -70,6 +74,9 @@ func (m *MtlfService) HandleAccuracyReports(
 
 		for metric, value := range report.Metrics {
 			scopeState.RecordMetric(metric, value, now)
+		}
+		if report.TrafficScale > 0 {
+			scopeState.RecordMetric(trafficScaleMetricName, report.TrafficScale, now)
 		}
 
 		absGate := current > fixedFloor
@@ -82,18 +89,51 @@ func (m *MtlfService) HandleAccuracyReports(
 			relGateState = fmt.Sprintf("%t", relGate)
 		}
 
-		breach := 0
+		degradationTriggered := baselineReady && absGate && relGate
+		degradationHits := scopeState.BreachCount()
 		if !baselineReady {
 			scopeState.ResetBreach()
-		} else if absGate && relGate {
-			breach = scopeState.IncrementBreach()
 		} else {
-			scopeState.ResetBreach()
+			degradationHits = scopeState.RecordDegradationOutcome(degradationTriggered)
+		}
+
+		chronicEnabled := chronicCfg != nil && chronicCfg.EnabledOrDefault()
+		chronicEligible := false
+		chronicTriggered := false
+		chronicValue := 0.0
+		trafficScale := scopeState.Mean(trafficScaleMetricName)
+		chronicHits := scopeState.ChronicHitCount()
+		if chronicEnabled && baselineReady {
+			chronicEligible = trafficScale >= chronicCfg.MinTrafficScaleOrDefault()
+			if chronicEligible {
+				switch chronicCfg.AggregatorOrDefault() {
+				case "mean":
+					chronicValue = scopeState.Mean(chronicCfg.MetricOrDefault())
+				default:
+					chronicValue = scopeState.Percentile(
+						chronicCfg.MetricOrDefault(),
+						chronicCfg.PercentileOrDefault(),
+					)
+				}
+				chronicTriggered = chronicValue > chronicCfg.ThresholdOrDefault()
+			}
+			chronicHits = scopeState.RecordChronicOutcome(chronicTriggered)
+		}
+
+		triggerReason := "none"
+		switch {
+		case degradationTriggered && chronicTriggered:
+			triggerReason = "both"
+		case degradationTriggered:
+			triggerReason = "degradation"
+		case chronicTriggered:
+			triggerReason = "chronic"
 		}
 
 		mtlfLog.Infof(
 			"Accuracy policy [%s]: scope=%s metric=%s current=%.4f mean=%.4f std=%.4f "+
-				"zscore=%.4f absGate=%t relGate=%s baselineReady=%t breach=%d/%d",
+				"zscore=%.4f absGate=%t relGate=%s baselineReady=%t trafficScale=%.4f "+
+				"chronicEligible=%t chronicValue=%.4f degradationHits=%d/%d chronicHits=%d/%d triggerReason=%s",
 			modelUrl,
 			report.ScopeKey,
 			primaryMetric,
@@ -104,13 +144,27 @@ func (m *MtlfService) HandleAccuracyReports(
 			absGate,
 			relGateState,
 			baselineReady,
-			breach,
-			required,
+			trafficScale,
+			chronicEligible,
+			chronicValue,
+			degradationHits,
+			requiredHits,
+			chronicHits,
+			requiredHits,
+			triggerReason,
 		)
 
-		if breach >= required {
-			mtlfLog.Warnf("Retrain trigger [%s]: scope=%s metric=%s current=%.4f breach=%d/%d",
-				modelUrl, report.ScopeKey, primaryMetric, current, breach, required)
+		if degradationHits >= requiredHits || chronicHits >= requiredHits {
+			mtlfLog.Warnf(
+				"Retrain trigger [%s]: scope=%s metric=%s current=%.4f degradationHits=%d/%d chronicHits=%d/%d reason=%s",
+				modelUrl,
+				report.ScopeKey,
+				primaryMetric,
+				current,
+				degradationHits, requiredHits,
+				chronicHits, requiredHits,
+				triggerReason,
+			)
 			m.stateStore.ResetModelBreaches(modelUrl)
 			store.SetRetraining(true)
 			m.dispatchRetrain(modelUrl, store)
