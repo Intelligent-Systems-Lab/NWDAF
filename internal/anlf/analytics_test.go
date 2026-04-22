@@ -5,6 +5,7 @@ import (
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/openapi/models"
 )
 
 // makeDP builds an UpfDataPoint with only the fields used by tests.
@@ -46,7 +47,148 @@ func setRawUpfData(ctx *nwdaf_context.NWDAFContext, corrId, ip string, pts []nwd
 	td.Unlock()
 }
 
+func makeUeCommunicationSub(
+	id string,
+	tgtUe *models.TargetUeInformation,
+) *nwdaf_context.Subscription {
+	return &nwdaf_context.Subscription{
+		ID: id,
+		EventSubs: []models.NwdafEventsSubscriptionEventSubscription{
+			{
+				Event: models.NwdafEvent_UE_COMMUNICATION,
+				TgtUe: tgtUe,
+			},
+		},
+	}
+}
+
 // --- tests ---
+
+func TestResolveMonitoringScope_SupisSortedAndCompacted(t *testing.T) {
+	ctx := setupCtx(t)
+	sub := makeUeCommunicationSub("sub-supis", &models.TargetUeInformation{
+		Supis: []string{"imsi-002", "imsi-001", "imsi-002", "  imsi-001  "},
+	})
+	ctx.AddSubscription(sub)
+
+	scopeKey, ok := resolveMonitoringScope(sub.ID, ctx)
+	if !ok {
+		t.Fatal("resolveMonitoringScope() returned ok=false, want true")
+	}
+	if scopeKey != "supis:imsi-001,imsi-002" {
+		t.Fatalf("resolveMonitoringScope() = %q, want %q",
+			scopeKey, "supis:imsi-001,imsi-002")
+	}
+}
+
+func TestResolveMonitoringScope_GroupsSortedAndCompacted(t *testing.T) {
+	ctx := setupCtx(t)
+	sub := makeUeCommunicationSub("sub-groups", &models.TargetUeInformation{
+		IntGroupIds: []string{"group-b", "group-a", "group-b", " group-a "},
+	})
+	ctx.AddSubscription(sub)
+
+	scopeKey, ok := resolveMonitoringScope(sub.ID, ctx)
+	if !ok {
+		t.Fatal("resolveMonitoringScope() returned ok=false, want true")
+	}
+	if scopeKey != "groups:group-a,group-b" {
+		t.Fatalf("resolveMonitoringScope() = %q, want %q",
+			scopeKey, "groups:group-a,group-b")
+	}
+}
+
+func TestResolveMonitoringScope_MixedTargets(t *testing.T) {
+	ctx := setupCtx(t)
+	sub := makeUeCommunicationSub("sub-mixed", &models.TargetUeInformation{
+		IntGroupIds: []string{"group-b", "group-a"},
+		Supis:       []string{"imsi-002", "imsi-001"},
+	})
+	ctx.AddSubscription(sub)
+
+	scopeKey, ok := resolveMonitoringScope(sub.ID, ctx)
+	if !ok {
+		t.Fatal("resolveMonitoringScope() returned ok=false, want true")
+	}
+	if scopeKey != "target:groups=group-a,group-b;supis=imsi-001,imsi-002" {
+		t.Fatalf("resolveMonitoringScope() = %q, want %q",
+			scopeKey, "target:groups=group-a,group-b;supis=imsi-001,imsi-002")
+	}
+}
+
+func TestResolveMonitoringScope_FallsBackToTrackedResources(t *testing.T) {
+	ctx := setupCtx(t)
+	ctx.AddNwdafSubResource("sub-resource", nwdaf_context.NwdafSubResource{
+		Supi:            "imsi-group-001",
+		CorrelationId:   "corr-1",
+		OriginalGroupId: "group-a",
+	})
+	ctx.AddNwdafSubResource("sub-resource", nwdaf_context.NwdafSubResource{
+		Supi:            "imsi-group-002",
+		CorrelationId:   "corr-2",
+		OriginalGroupId: "group-a",
+	})
+
+	scopeKey, ok := resolveMonitoringScope("sub-resource", ctx)
+	if !ok {
+		t.Fatal("resolveMonitoringScope() returned ok=false, want true")
+	}
+	if scopeKey != "group:group-a" {
+		t.Fatalf("resolveMonitoringScope() = %q, want %q", scopeKey, "group:group-a")
+	}
+}
+
+func TestResolveMonitoringScope_AnyUeUnsupported(t *testing.T) {
+	ctx := setupCtx(t)
+	sub := makeUeCommunicationSub("sub-anyue", &models.TargetUeInformation{
+		AnyUe: true,
+	})
+	ctx.AddSubscription(sub)
+
+	scopeKey, ok := resolveMonitoringScope(sub.ID, ctx)
+	if ok {
+		t.Fatalf("resolveMonitoringScope() = %q, want unresolved scope", scopeKey)
+	}
+}
+
+func TestPredictionScopeKeySnapshotSurvivesSubscriptionUpdate(t *testing.T) {
+	ctx := setupCtx(t)
+	sub := makeUeCommunicationSub("sub-snapshot", &models.TargetUeInformation{
+		IntGroupIds: []string{"group-a"},
+	})
+	ctx.AddSubscription(sub)
+
+	scopeKey, ok := resolveMonitoringScope(sub.ID, ctx)
+	if !ok {
+		t.Fatal("resolveMonitoringScope() returned ok=false, want true")
+	}
+
+	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
+	store.AddPrediction(nwdaf_context.PredictionRecord{
+		ModelUrl:    "file:///test/model.pth",
+		PredictedAt: time.Now(),
+		TargetTime:  time.Now().Add(-time.Second),
+		PredUlVol:   100,
+		PredDlVol:   200,
+		NwdafSubId:  sub.ID,
+		ScopeKey:    scopeKey,
+	})
+
+	sub.EventSubs[0].TgtUe = &models.TargetUeInformation{
+		Supis: []string{"imsi-999"},
+	}
+	if !ctx.UpdateSubscription(sub) {
+		t.Fatal("UpdateSubscription() returned false, want true")
+	}
+
+	mature := store.ConsumeMaturePredictions(0)
+	if len(mature) != 1 {
+		t.Fatalf("ConsumeMaturePredictions() returned %d records, want 1", len(mature))
+	}
+	if mature[0].ScopeKey != "group:group-a" {
+		t.Fatalf("mature[0].ScopeKey = %q, want %q", mature[0].ScopeKey, "group:group-a")
+	}
+}
 
 // TestAggregateInMemory_NoCorrIds verifies that nil corrIds returns nil.
 func TestAggregateInMemory_NoCorrIds(t *testing.T) {

@@ -159,6 +159,15 @@ func generateMlBasedUeCommunication(
 	// Aggregate predicted steps
 	var totalUl, totalDl int64
 	var totalConfidence int32
+	scopeKey := ""
+	if isAccuracyMonitorEnabled() {
+		if resolvedScopeKey, ok := resolveMonitoringScope(nwdafSubId, ctx); ok {
+			scopeKey = resolvedScopeKey
+		} else {
+			anlfLog.Warnf("Accuracy monitoring scope unresolved, recording legacy prediction only: sub=%s",
+				nwdafSubId)
+		}
+	}
 	for i, pred := range resp.PredictedData {
 		totalUl += pred.TrafChar.UlVol
 		totalDl += pred.TrafChar.DlVol
@@ -178,6 +187,7 @@ func generateMlBasedUeCommunication(
 					PredUlVol:  pred.TrafChar.UlVol,
 					PredDlVol:  pred.TrafChar.DlVol,
 					NwdafSubId: nwdafSubId,
+					ScopeKey:   scopeKey,
 				})
 			}
 		}

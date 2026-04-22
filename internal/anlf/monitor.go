@@ -3,6 +3,7 @@ package anlf
 import (
 	"context"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -136,14 +137,22 @@ func (a *AnlfService) checkModelAccuracy(
 	}
 
 	var pairs []matchedPair
+	scopedPairs := make(map[string]*scopedPairAccumulator)
+	unscopedMatches := 0
 	gtCounts := make([]string, 0, len(mature))
 	for _, pred := range mature {
 		actual := a.lookupGroundTruth(nwdafCtx, pred)
 		if actual != nil {
-			pairs = append(pairs, matchedPair{
+			pair := matchedPair{
 				predUl: pred.PredUlVol, predDl: pred.PredDlVol,
 				actualUl: actual.ulVol, actualDl: actual.dlVol,
-			})
+			}
+			pairs = append(pairs, pair)
+			if pred.ScopeKey != "" {
+				recordScopedPair(scopedPairs, pred, pair)
+			} else {
+				unscopedMatches++
+			}
 			gtCounts = append(gtCounts, strconv.Itoa(actual.count))
 		} else {
 			gtCounts = append(gtCounts, "0")
@@ -160,10 +169,19 @@ func (a *AnlfService) checkModelAccuracy(
 	deviation := computeSMAPE(pairs)
 	inferenceNum := store.GetAndResetInferenceNum()
 	store.UpdateDeviation(deviation)
+	reports := buildAccuracyReports(modelUrl, scopedPairs, inferenceNum)
 
 	pseudoAccuracy := int(math.Max(0, 100-deviation*50))
 	anlfLog.Infof("Accuracy [%s]: deviation=%.4f, accuracy=%d%%, samples=%d, inferences=%d",
 		modelUrl, deviation, pseudoAccuracy, len(pairs), inferenceNum)
+	for _, report := range reports {
+		anlfLog.Infof("Accuracy scope [%s]: scope=%s samples=%d metrics=%s",
+			modelUrl, report.ScopeKey, report.SampleCount, formatMetrics(report.Metrics))
+	}
+	if unscopedMatches > 0 {
+		anlfLog.Warnf("Accuracy scope skipped [%s]: %d matched predictions missing scopeKey",
+			modelUrl, unscopedMatches)
+	}
 
 	minSamples := accCfg.MinSamples
 	if minSamples <= 0 {
@@ -172,6 +190,10 @@ func (a *AnlfService) checkModelAccuracy(
 	if len(pairs) < minSamples {
 		anlfLog.Debugf("Not enough samples [%s]: %d < %d", modelUrl, len(pairs), minSamples)
 		return
+	}
+
+	if len(reports) > 0 && a.onAccuracyReports != nil {
+		a.onAccuracyReports(modelUrl, reports, store)
 	}
 
 	// Report to MTLF — MTLF decides whether to retrain (TS 23.288 §6.2E)
@@ -309,6 +331,13 @@ type matchedPair struct {
 	actualUl, actualDl int64
 }
 
+type scopedPairAccumulator struct {
+	pairs       []matchedPair
+	nwdafSubIDs map[string]struct{}
+	windowStart time.Time
+	windowEnd   time.Time
+}
+
 // computeSMAPE calculates Symmetric Mean Absolute Percentage Error.
 // Each UL and DL channel is treated as an independent sample.
 // Result is in [0, 2]; when both actual and pred are zero the sample contributes 0.
@@ -333,4 +362,183 @@ func computeSMAPE(pairs []matchedPair) float64 {
 	}
 
 	return sumSMAPE / n
+}
+
+// computeMAE calculates Mean Absolute Error across UL and DL channels.
+func computeMAE(pairs []matchedPair) float64 {
+	if len(pairs) == 0 {
+		return 0
+	}
+
+	var sumAbsErr float64
+	for _, p := range pairs {
+		sumAbsErr += math.Abs(float64(p.predUl - p.actualUl))
+		sumAbsErr += math.Abs(float64(p.predDl - p.actualDl))
+	}
+
+	return sumAbsErr / float64(len(pairs)*2)
+}
+
+// computeMSE calculates Mean Squared Error across UL and DL channels.
+func computeMSE(pairs []matchedPair) float64 {
+	if len(pairs) == 0 {
+		return 0
+	}
+
+	var sumSqErr float64
+	for _, p := range pairs {
+		ulErr := float64(p.predUl - p.actualUl)
+		dlErr := float64(p.predDl - p.actualDl)
+		sumSqErr += ulErr * ulErr
+		sumSqErr += dlErr * dlErr
+	}
+
+	return sumSqErr / float64(len(pairs)*2)
+}
+
+// computeWAPE calculates Weighted Absolute Percentage Error across UL and DL channels.
+func computeWAPE(pairs []matchedPair) float64 {
+	if len(pairs) == 0 {
+		return 0
+	}
+
+	var sumAbsErr float64
+	var sumAbsActual float64
+	for _, p := range pairs {
+		sumAbsErr += math.Abs(float64(p.predUl - p.actualUl))
+		sumAbsErr += math.Abs(float64(p.predDl - p.actualDl))
+		sumAbsActual += math.Abs(float64(p.actualUl))
+		sumAbsActual += math.Abs(float64(p.actualDl))
+	}
+
+	if sumAbsActual == 0 {
+		return 0
+	}
+
+	return sumAbsErr / sumAbsActual
+}
+
+// computeNRMSE calculates Normalized Root Mean Squared Error across UL and DL channels.
+// RMSE is normalized by the mean absolute actual volume of all channels.
+func computeNRMSE(pairs []matchedPair) float64 {
+	if len(pairs) == 0 {
+		return 0
+	}
+
+	var sumAbsActual float64
+	for _, p := range pairs {
+		sumAbsActual += math.Abs(float64(p.actualUl))
+		sumAbsActual += math.Abs(float64(p.actualDl))
+	}
+
+	meanAbsActual := sumAbsActual / float64(len(pairs)*2)
+	if meanAbsActual == 0 {
+		return 0
+	}
+
+	return math.Sqrt(computeMSE(pairs)) / meanAbsActual
+}
+
+func computeAll(pairs []matchedPair) map[string]float64 {
+	return map[string]float64{
+		"sMAPE": computeSMAPE(pairs),
+		"MAE":   computeMAE(pairs),
+		"MSE":   computeMSE(pairs),
+		"WAPE":  computeWAPE(pairs),
+		"NRMSE": computeNRMSE(pairs),
+	}
+}
+
+func recordScopedPair(
+	scopedPairs map[string]*scopedPairAccumulator,
+	pred nwdaf_context.PredictionRecord,
+	pair matchedPair,
+) {
+	acc := scopedPairs[pred.ScopeKey]
+	if acc == nil {
+		acc = &scopedPairAccumulator{
+			nwdafSubIDs: make(map[string]struct{}),
+			windowStart: pred.TargetTime,
+			windowEnd:   pred.TargetTime,
+		}
+		scopedPairs[pred.ScopeKey] = acc
+	}
+
+	acc.pairs = append(acc.pairs, pair)
+	if pred.NwdafSubId != "" {
+		acc.nwdafSubIDs[pred.NwdafSubId] = struct{}{}
+	}
+	if pred.TargetTime.Before(acc.windowStart) {
+		acc.windowStart = pred.TargetTime
+	}
+	if pred.TargetTime.After(acc.windowEnd) {
+		acc.windowEnd = pred.TargetTime
+	}
+}
+
+func buildAccuracyReports(
+	modelURL string,
+	scopedPairs map[string]*scopedPairAccumulator,
+	inferenceNum int,
+) []AccuracyReport {
+	if len(scopedPairs) == 0 {
+		return nil
+	}
+
+	scopeKeys := make([]string, 0, len(scopedPairs))
+	for scopeKey := range scopedPairs {
+		scopeKeys = append(scopeKeys, scopeKey)
+	}
+	slices.Sort(scopeKeys)
+
+	reports := make([]AccuracyReport, 0, len(scopeKeys))
+	for _, scopeKey := range scopeKeys {
+		acc := scopedPairs[scopeKey]
+		if acc == nil || len(acc.pairs) == 0 {
+			continue
+		}
+
+		report := AccuracyReport{
+			ModelURL:     modelURL,
+			ScopeKey:     scopeKey,
+			NwdafSubID:   singleNwdafSubID(acc.nwdafSubIDs),
+			Metrics:      computeAll(acc.pairs),
+			SampleCount:  len(acc.pairs),
+			InferenceNum: inferenceNum,
+			WindowStart:  acc.windowStart,
+			WindowEnd:    acc.windowEnd,
+		}
+		reports = append(reports, report)
+	}
+
+	return reports
+}
+
+func singleNwdafSubID(ids map[string]struct{}) string {
+	if len(ids) != 1 {
+		return ""
+	}
+	for id := range ids {
+		return id
+	}
+	return ""
+}
+
+func formatMetrics(metrics map[string]float64) string {
+	if len(metrics) == 0 {
+		return ""
+	}
+
+	keys := make([]string, 0, len(metrics))
+	for key := range metrics {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+strconv.FormatFloat(metrics[key], 'f', 4, 64))
+	}
+
+	return strings.Join(parts, ",")
 }
