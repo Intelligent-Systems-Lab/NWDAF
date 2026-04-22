@@ -1,14 +1,84 @@
 package anlf
 
 import (
+	"context"
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
 const groupAScopeKey = "group:group-a"
+
+type testNwdafApp struct {
+	ctx context.Context
+}
+
+func (a testNwdafApp) CancelContext() context.Context {
+	return a.ctx
+}
+
+func setTestMonitorConfig(
+	t *testing.T,
+	samplingInterval int,
+	csvEnabled bool,
+	csvDir string,
+) *factory.AccuracyMonitorConfig {
+	t.Helper()
+
+	oldCfg := factory.NwdafConfig
+	factory.NwdafConfig = &factory.Config{
+		Configuration: &factory.Configuration{
+			Mtlf: &factory.MtlfConfig{
+				Enabled: true,
+				AccuracyMonitor: &factory.AccuracyMonitorConfig{
+					Enabled:        true,
+					CSVDumpEnabled: &csvEnabled,
+					CSVDumpDir:     csvDir,
+				},
+			},
+			Analytics: &factory.AnalyticsConfig{
+				UeCommunication: &factory.ModelParams{
+					SamplingInterval: samplingInterval,
+				},
+			},
+		},
+	}
+	t.Cleanup(func() {
+		factory.NwdafConfig = oldCfg
+	})
+
+	return factory.NwdafConfig.Configuration.Mtlf.AccuracyMonitor
+}
+
+func resetAccuracyCSVManagerForTest(t *testing.T) {
+	t.Helper()
+
+	if globalAccuracyCSVManager.writer != nil {
+		if err := globalAccuracyCSVManager.writer.Close(); err != nil {
+			t.Fatalf("resetAccuracyCSVManagerForTest close error = %v", err)
+		}
+	}
+	globalAccuracyCSVManager = accuracyCSVManager{}
+}
+
+func addGroundTruthRecord(
+	ctx *nwdaf_context.NWDAFContext,
+	nwdafSubID, corrID, ip string,
+	targetTime time.Time,
+	actualUL, actualDL int64,
+) {
+	ctx.AddNwdafSubResource(nwdafSubID, nwdaf_context.NwdafSubResource{
+		CorrelationId: corrID,
+	})
+	setRawUpfData(ctx, corrID, ip, []nwdaf_context.UpfDataPoint{
+		makeDP(targetTime.Unix(), actualUL, actualDL),
+	})
+}
 
 // ============================================================================
 // computeSMAPE — Unit Tests
@@ -280,5 +350,194 @@ func TestRecordScopedPair_TracksWindowAndSubID(t *testing.T) {
 	}
 	if _, ok := acc.nwdafSubIDs["sub-a"]; !ok {
 		t.Fatal("acc.nwdafSubIDs missing sub-a")
+	}
+}
+
+func TestCheckModelAccuracy_LegacyDeviationUsesAllMatchedPairs(t *testing.T) {
+	ctx := setupCtx(t)
+	accCfg := setTestMonitorConfig(t, 5, false, "")
+	accCfg.MinSamples = 1
+	resetAccuracyCSVManagerForTest(t)
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	service := NewAnlfService(testNwdafApp{ctx: cancelCtx})
+	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
+	now := time.Now()
+
+	target1 := now.Add(-30 * time.Second)
+	target2 := now.Add(-25 * time.Second)
+	addGroundTruthRecord(ctx, "sub-1", "corr-1", "10.0.0.1", target1, 100, 200)
+	addGroundTruthRecord(ctx, "sub-2", "corr-2", "10.0.0.2", target2, 300, 400)
+
+	store.AddPrediction(nwdaf_context.PredictionRecord{
+		ModelUrl:    "file:///test/model.pth",
+		PredictedAt: target1.Add(-5 * time.Second),
+		TargetTime:  target1,
+		PredUlVol:   110,
+		PredDlVol:   210,
+		NwdafSubId:  "sub-1",
+		ScopeKey:    groupAScopeKey,
+	})
+	store.AddPrediction(nwdaf_context.PredictionRecord{
+		ModelUrl:    "file:///test/model.pth",
+		PredictedAt: target2.Add(-5 * time.Second),
+		TargetTime:  target2,
+		PredUlVol:   330,
+		PredDlVol:   440,
+		NwdafSubId:  "sub-2",
+		ScopeKey:    "",
+	})
+
+	var gotDeviation float64
+	var gotDeviationCalls int
+	var gotReports []AccuracyReport
+	service.SetOnDeviationReport(func(modelURL string, deviation float64, store *nwdaf_context.ModelAccuracyStore) {
+		gotDeviationCalls++
+		gotDeviation = deviation
+	})
+	service.SetOnAccuracyReports(func(modelURL string, reports []AccuracyReport, store *nwdaf_context.ModelAccuracyStore) {
+		gotReports = append([]AccuracyReport(nil), reports...)
+	})
+
+	service.checkModelAccuracy("file:///test/model.pth", store, accCfg)
+
+	if gotDeviationCalls != 1 {
+		t.Fatalf("deviation callback calls = %d, want 1", gotDeviationCalls)
+	}
+
+	wantDeviation := computeSMAPE([]matchedPair{
+		{predUl: 110, predDl: 210, actualUl: 100, actualDl: 200},
+		{predUl: 330, predDl: 440, actualUl: 300, actualDl: 400},
+	})
+	if math.Abs(gotDeviation-wantDeviation) > 1e-9 {
+		t.Fatalf("deviation = %.10f, want %.10f", gotDeviation, wantDeviation)
+	}
+	if math.Abs(store.GetDeviation()-wantDeviation) > 1e-9 {
+		t.Fatalf("store.GetDeviation() = %.10f, want %.10f", store.GetDeviation(), wantDeviation)
+	}
+
+	if len(gotReports) != 1 {
+		t.Fatalf("len(gotReports) = %d, want 1", len(gotReports))
+	}
+	if gotReports[0].ScopeKey != groupAScopeKey {
+		t.Fatalf("gotReports[0].ScopeKey = %q, want %q", gotReports[0].ScopeKey, groupAScopeKey)
+	}
+	if gotReports[0].SampleCount != 1 {
+		t.Fatalf("gotReports[0].SampleCount = %d, want 1", gotReports[0].SampleCount)
+	}
+}
+
+func TestCheckModelAccuracy_MinSamplesSkipsCallbacks(t *testing.T) {
+	ctx := setupCtx(t)
+	accCfg := setTestMonitorConfig(t, 5, false, "")
+	accCfg.MinSamples = 2
+	resetAccuracyCSVManagerForTest(t)
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	service := NewAnlfService(testNwdafApp{ctx: cancelCtx})
+	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
+	target := time.Now().Add(-30 * time.Second)
+	addGroundTruthRecord(ctx, "sub-1", "corr-1", "10.0.0.1", target, 100, 200)
+
+	store.AddPrediction(nwdaf_context.PredictionRecord{
+		ModelUrl:    "file:///test/model.pth",
+		PredictedAt: target.Add(-5 * time.Second),
+		TargetTime:  target,
+		PredUlVol:   110,
+		PredDlVol:   210,
+		NwdafSubId:  "sub-1",
+		ScopeKey:    groupAScopeKey,
+	})
+
+	var deviationCalls int
+	var reportCalls int
+	service.SetOnDeviationReport(func(modelURL string, deviation float64, store *nwdaf_context.ModelAccuracyStore) {
+		deviationCalls++
+	})
+	service.SetOnAccuracyReports(func(modelURL string, reports []AccuracyReport, store *nwdaf_context.ModelAccuracyStore) {
+		reportCalls++
+	})
+
+	service.checkModelAccuracy("file:///test/model.pth", store, accCfg)
+
+	if deviationCalls != 0 {
+		t.Fatalf("deviation callback calls = %d, want 0", deviationCalls)
+	}
+	if reportCalls != 0 {
+		t.Fatalf("report callback calls = %d, want 0", reportCalls)
+	}
+}
+
+func TestCheckModelAccuracy_CSVEnabledDoesNotAffectLegacyDeviation(t *testing.T) {
+	ctx := setupCtx(t)
+	csvDir := t.TempDir()
+	accCfg := setTestMonitorConfig(t, 5, true, csvDir)
+	accCfg.MinSamples = 1
+	resetAccuracyCSVManagerForTest(t)
+	t.Cleanup(func() {
+		resetAccuracyCSVManagerForTest(t)
+	})
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	service := NewAnlfService(testNwdafApp{ctx: cancelCtx})
+	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
+	target := time.Now().Add(-30 * time.Second)
+	addGroundTruthRecord(ctx, "sub-1", "corr-1", "10.0.0.1", target, 100, 200)
+
+	store.AddPrediction(nwdaf_context.PredictionRecord{
+		ModelUrl:    "file:///test/model.pth",
+		PredictedAt: target.Add(-5 * time.Second),
+		TargetTime:  target,
+		PredUlVol:   110,
+		PredDlVol:   210,
+		NwdafSubId:  "sub-1",
+		ScopeKey:    groupAScopeKey,
+	})
+
+	var deviationCalls int
+	var reportCalls int
+	service.SetOnDeviationReport(func(modelURL string, deviation float64, store *nwdaf_context.ModelAccuracyStore) {
+		deviationCalls++
+	})
+	service.SetOnAccuracyReports(func(modelURL string, reports []AccuracyReport, store *nwdaf_context.ModelAccuracyStore) {
+		reportCalls++
+	})
+
+	service.checkModelAccuracy("file:///test/model.pth", store, accCfg)
+
+	if deviationCalls != 1 {
+		t.Fatalf("deviation callback calls = %d, want 1", deviationCalls)
+	}
+	if reportCalls != 1 {
+		t.Fatalf("report callback calls = %d, want 1", reportCalls)
+	}
+
+	metricsFiles, err := filepath.Glob(filepath.Join(csvDir, "metrics_*.csv"))
+	if err != nil {
+		t.Fatalf("Glob(metrics) error = %v", err)
+	}
+	if len(metricsFiles) != 1 {
+		t.Fatalf("len(metricsFiles) = %d, want 1", len(metricsFiles))
+	}
+	pairsFiles, err := filepath.Glob(filepath.Join(csvDir, "pairs_*.csv"))
+	if err != nil {
+		t.Fatalf("Glob(pairs) error = %v", err)
+	}
+	if len(pairsFiles) != 1 {
+		t.Fatalf("len(pairsFiles) = %d, want 1", len(pairsFiles))
+	}
+
+	metricsBytes, err := os.ReadFile(metricsFiles[0])
+	if err != nil {
+		t.Fatalf("ReadFile(metrics) error = %v", err)
+	}
+	if len(metricsBytes) == 0 {
+		t.Fatal("metrics CSV is empty")
 	}
 }
