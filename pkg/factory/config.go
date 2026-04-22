@@ -172,11 +172,27 @@ type AccuracyMonitorConfig struct {
 	DeviationThreshold float64 `yaml:"deviationThreshold,omitempty"` // sMAPE retrain threshold in [0,2] (default: 0.3)
 	MinSamples         int     `yaml:"minSamples,omitempty"`         // Min samples before evaluation (default: 5)
 	WarmupDuration     int     `yaml:"warmupDuration,omitempty"`     // Seconds to skip checks after start (default: 120)
+	CSVDumpDir         string  `yaml:"csvDumpDir,omitempty"`         // Directory for accuracy CSV output
+	CSVDumpEnabled     *bool   `yaml:"csvDumpEnabled,omitempty"`     // Whether to write accuracy CSV output
 
 	// Trigger strategy: "consecutive" or "ema" (default: "consecutive")
 	TriggerStrategy     string  `yaml:"triggerStrategy,omitempty"`
 	ConsecutiveBreaches int     `yaml:"consecutiveBreaches,omitempty"` // Consecutive checks above threshold (default: 3)
 	EmaAlpha            float64 `yaml:"emaAlpha,omitempty"`            // EMA smoothing factor 0-1 (default: 0.3)
+}
+
+func (a *AccuracyMonitorConfig) CSVDumpEnabledOrDefault() bool {
+	if a == nil || a.CSVDumpEnabled == nil {
+		return true
+	}
+	return *a.CSVDumpEnabled
+}
+
+func (a *AccuracyMonitorConfig) CSVDumpDirOrDefault() string {
+	if a == nil || a.CSVDumpDir == "" {
+		return "log/accuracy"
+	}
+	return a.CSVDumpDir
 }
 
 // AdrfConfig holds connection settings for the ADRF (Analytics Data Repository Function).

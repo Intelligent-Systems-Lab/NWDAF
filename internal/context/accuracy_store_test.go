@@ -19,6 +19,7 @@ func TestModelAccuracyStore_AddPrediction(t *testing.T) {
 		PredUlVol:   100,
 		PredDlVol:   200,
 		NwdafSubId:  "sub-001",
+		ScopeKey:    "group:group-a",
 	})
 
 	store.AddPrediction(PredictionRecord{
@@ -28,6 +29,7 @@ func TestModelAccuracyStore_AddPrediction(t *testing.T) {
 		PredUlVol:   150,
 		PredDlVol:   250,
 		NwdafSubId:  "sub-001",
+		ScopeKey:    "supi:imsi-001",
 	})
 
 	num := store.GetAndResetInferenceNum()
@@ -39,6 +41,29 @@ func TestModelAccuracyStore_AddPrediction(t *testing.T) {
 	num = store.GetAndResetInferenceNum()
 	if num != 0 {
 		t.Errorf("GetAndResetInferenceNum() after reset = %d, want 0", num)
+	}
+}
+
+func TestModelAccuracyStore_PreservesScopeKey(t *testing.T) {
+	store := NewModelAccuracyStore("file:///test/model.pth")
+	scopeKey := "group:group-a"
+
+	store.AddPrediction(PredictionRecord{
+		ModelUrl:    "file:///test/model.pth",
+		PredictedAt: time.Now(),
+		TargetTime:  time.Now().Add(-time.Second),
+		PredUlVol:   100,
+		PredDlVol:   200,
+		NwdafSubId:  "sub-001",
+		ScopeKey:    scopeKey,
+	})
+
+	mature := store.ConsumeMaturePredictions(0)
+	if len(mature) != 1 {
+		t.Fatalf("ConsumeMaturePredictions() returned %d, want 1", len(mature))
+	}
+	if mature[0].ScopeKey != scopeKey {
+		t.Fatalf("mature[0].ScopeKey = %q, want %q", mature[0].ScopeKey, scopeKey)
 	}
 }
 

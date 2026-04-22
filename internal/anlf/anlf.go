@@ -5,6 +5,7 @@ package anlf
 
 import (
 	"context"
+	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 )
@@ -18,6 +19,21 @@ type NwdafApp interface {
 type AnlfService struct {
 	nwdaf             NwdafApp
 	onDeviationReport func(modelUrl string, deviation float64, store *nwdaf_context.ModelAccuracyStore)
+	onAccuracyReports func(modelUrl string, reports []AccuracyReport, store *nwdaf_context.ModelAccuracyStore)
+}
+
+// AccuracyReport is the internal AnLF output for one monitor round and one scope.
+// It is currently used for observability, while retrain decision still follows
+// the legacy deviation callback.
+type AccuracyReport struct {
+	ModelURL     string
+	ScopeKey     string
+	NwdafSubID   string
+	Metrics      map[string]float64
+	SampleCount  int
+	InferenceNum int
+	WindowStart  time.Time
+	WindowEnd    time.Time
 }
 
 // NewAnlfService creates a new AnlfService instance.
@@ -32,4 +48,12 @@ func (a *AnlfService) SetOnDeviationReport(
 	fn func(modelUrl string, deviation float64, store *nwdaf_context.ModelAccuracyStore),
 ) {
 	a.onDeviationReport = fn
+}
+
+// SetOnAccuracyReports registers the callback invoked when AnLF finishes
+// computing per-scope accuracy metrics for one monitor round.
+func (a *AnlfService) SetOnAccuracyReports(
+	fn func(modelUrl string, reports []AccuracyReport, store *nwdaf_context.ModelAccuracyStore),
+) {
+	a.onAccuracyReports = fn
 }

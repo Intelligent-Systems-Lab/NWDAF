@@ -15,6 +15,7 @@ type PredictionRecord struct {
 	PredUlVol   int64     // Predicted UL volume
 	PredDlVol   int64     // Predicted DL volume
 	NwdafSubId  string    // Subscription that generated this prediction
+	ScopeKey    string    // Canonical monitoring scope snapshotted at prediction time
 }
 
 // ModelAccuracyStore manages prediction records and accuracy state for one model.
