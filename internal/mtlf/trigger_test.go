@@ -47,7 +47,7 @@ func prefillScope(scope *ScopeState, values ...float64) {
 	}
 }
 
-func TestHandleAccuracyReports_ColdStartUsesAbsGate(t *testing.T) {
+func TestHandleAccuracyReports_ColdStartBuildsBaselineWithoutTrigger(t *testing.T) {
 	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:             true,
 		PrimaryMetric:       "MAE",
@@ -76,22 +76,31 @@ func TestHandleAccuracyReports_ColdStartUsesAbsGate(t *testing.T) {
 	if scope == nil {
 		t.Fatal("scope state was not created")
 	}
-	if got := scope.BreachCount(); got != 1 {
-		t.Fatalf("BreachCount() after first cold-start trigger = %d, want 1", got)
+	if got := scope.BreachCount(); got != 0 {
+		t.Fatalf("BreachCount() after first cold-start report = %d, want 0", got)
+	}
+	if got := scope.SampleCount("MAE"); got != 1 {
+		t.Fatalf("SampleCount() after first cold-start report = %d, want 1", got)
 	}
 	if triggered != 0 {
-		t.Fatalf("triggered = %d, want 0 after first report", triggered)
+		t.Fatalf("triggered = %d, want 0 while baseline is not ready", triggered)
 	}
 
-	m.HandleAccuracyReports(modelURL, []anlf.AccuracyReport{report}, store)
-	if triggered != 1 {
-		t.Fatalf("triggered = %d, want 1 after second report", triggered)
+	for i := 0; i < 3; i++ {
+		m.HandleAccuracyReports(modelURL, []anlf.AccuracyReport{report}, store)
 	}
-	if !store.IsRetraining() {
-		t.Fatal("store.IsRetraining() = false, want true after retrain trigger")
-	}
+
 	if got := scope.BreachCount(); got != 0 {
-		t.Fatalf("BreachCount() after retrain trigger = %d, want 0", got)
+		t.Fatalf("BreachCount() after baseline fill = %d, want 0", got)
+	}
+	if got := scope.SampleCount("MAE"); got != 4 {
+		t.Fatalf("SampleCount() after baseline fill = %d, want 4", got)
+	}
+	if triggered != 0 {
+		t.Fatalf("triggered = %d, want 0 before baseline becomes ready", triggered)
+	}
+	if store.IsRetraining() {
+		t.Fatal("store.IsRetraining() = true, want false while baseline is not ready")
 	}
 }
 
@@ -124,6 +133,68 @@ func TestHandleAccuracyReports_BaselineReadyRequiresRelGate(t *testing.T) {
 	}
 	if store.IsRetraining() {
 		t.Fatal("store.IsRetraining() = true, want false when relative gate fails")
+	}
+}
+
+func TestHandleAccuracyReports_TriggersOnlyAfterBaselineReady(t *testing.T) {
+	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+		Enabled:             true,
+		PrimaryMetric:       "MAE",
+		RecentBufferSize:    5,
+		MinBufferSamples:    3,
+		MinStd:              1,
+		FixedFloor:          100,
+		ZScoreThreshold:     3,
+		ConsecutiveBreaches: 2,
+	})
+
+	m := NewMtlfService(nil)
+	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	triggered := 0
+	m.onRetrainTriggered = func(modelURL string, store *nwdaf_context.ModelAccuracyStore) {
+		triggered++
+	}
+
+	baseline := testAccuracyReport(testModelURL, testScopeKey, 150)
+	high := testAccuracyReport(testModelURL, testScopeKey, 300)
+	higher := testAccuracyReport(testModelURL, testScopeKey, 700)
+	for i := 0; i < 2; i++ {
+		m.HandleAccuracyReports(testModelURL, []anlf.AccuracyReport{baseline}, store)
+	}
+
+	scope := m.stateStore.GetScope(testModelURL, testScopeKey)
+	if scope == nil {
+		t.Fatal("scope state was not created")
+	}
+	if got := scope.BreachCount(); got != 0 {
+		t.Fatalf("BreachCount() before baseline ready = %d, want 0", got)
+	}
+	if triggered != 0 {
+		t.Fatalf("triggered before baseline ready = %d, want 0", triggered)
+	}
+
+	m.HandleAccuracyReports(testModelURL, []anlf.AccuracyReport{baseline}, store)
+	if got := scope.BreachCount(); got != 0 {
+		t.Fatalf("BreachCount() when baseline just became ready = %d, want 0", got)
+	}
+	if triggered != 0 {
+		t.Fatalf("triggered when baseline just became ready = %d, want 0", triggered)
+	}
+
+	m.HandleAccuracyReports(testModelURL, []anlf.AccuracyReport{high}, store)
+	if got := scope.BreachCount(); got != 1 {
+		t.Fatalf("BreachCount() after first baseline-ready breach = %d, want 1", got)
+	}
+	if triggered != 0 {
+		t.Fatalf("triggered after first baseline-ready breach = %d, want 0", triggered)
+	}
+
+	m.HandleAccuracyReports(testModelURL, []anlf.AccuracyReport{higher}, store)
+	if triggered != 1 {
+		t.Fatalf("triggered = %d, want 1 after second baseline-ready breach", triggered)
+	}
+	if !store.IsRetraining() {
+		t.Fatal("store.IsRetraining() = false, want true after retrain trigger")
 	}
 }
 

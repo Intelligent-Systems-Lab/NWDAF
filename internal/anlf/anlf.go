@@ -5,9 +5,11 @@ package anlf
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
 // NwdafApp defines the app-level dependencies needed by AnLF.
@@ -20,6 +22,8 @@ type AnlfService struct {
 	nwdaf             NwdafApp
 	onDeviationReport func(modelUrl string, deviation float64, store *nwdaf_context.ModelAccuracyStore)
 	onAccuracyReports func(modelUrl string, reports []AccuracyReport, store *nwdaf_context.ModelAccuracyStore)
+	warmupMu          sync.Mutex
+	startupWarmupDone bool
 }
 
 // AccuracyReport is the internal AnLF output for one monitor round and one scope.
@@ -56,4 +60,20 @@ func (a *AnlfService) SetOnAccuracyReports(
 	fn func(modelUrl string, reports []AccuracyReport, store *nwdaf_context.ModelAccuracyStore),
 ) {
 	a.onAccuracyReports = fn
+}
+
+func (a *AnlfService) acquireStartupWarmupDuration(accCfg *factory.AccuracyMonitorConfig) int {
+	a.warmupMu.Lock()
+	defer a.warmupMu.Unlock()
+
+	if a.startupWarmupDone {
+		return 0
+	}
+	a.startupWarmupDone = true
+
+	warmup := accCfg.WarmupDuration
+	if warmup <= 0 {
+		warmup = 120
+	}
+	return warmup
 }

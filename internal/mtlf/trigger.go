@@ -68,6 +68,10 @@ func (m *MtlfService) HandleAccuracyReports(
 		std := scopeState.Std(primaryMetric)
 		baselineReady := historyCount >= minBufferSamples
 
+		for metric, value := range report.Metrics {
+			scopeState.RecordMetric(metric, value, now)
+		}
+
 		absGate := current > fixedFloor
 		relGate := false
 		relGateState := "skipped"
@@ -78,14 +82,10 @@ func (m *MtlfService) HandleAccuracyReports(
 			relGateState = fmt.Sprintf("%t", relGate)
 		}
 
-		triggered := absGate && (!baselineReady || relGate)
-
-		for metric, value := range report.Metrics {
-			scopeState.RecordMetric(metric, value, now)
-		}
-
 		breach := 0
-		if triggered {
+		if !baselineReady {
+			scopeState.ResetBreach()
+		} else if absGate && relGate {
 			breach = scopeState.IncrementBreach()
 		} else {
 			scopeState.ResetBreach()

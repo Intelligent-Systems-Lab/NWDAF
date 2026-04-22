@@ -45,7 +45,7 @@ func (a *AnlfService) StartAccuracyMonitorForModel(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		a.runModelAccuracyLoop(monCtx, modelUrl, store, accCfg)
+		a.runModelAccuracyLoop(monCtx, modelUrl, store, accCfg, a.acquireStartupWarmupDuration(accCfg))
 	}()
 
 	anlfLog.Infof("Accuracy monitor started: model=%s, interval=%ds", modelUrl, interval)
@@ -78,31 +78,31 @@ func (a *AnlfService) runModelAccuracyLoop(
 	modelUrl string,
 	store *nwdaf_context.ModelAccuracyStore,
 	accCfg *factory.AccuracyMonitorConfig,
+	warmup int,
 ) {
-	warmup := accCfg.WarmupDuration
-	if warmup <= 0 {
-		warmup = 120
-	}
-	anlfLog.Infof("Accuracy monitor warmup: model=%s, waiting %ds", modelUrl, warmup)
 	if _, err := getAccuracyCSVWriter(a.nwdaf.CancelContext(), accCfg); err != nil {
 		anlfLog.Warnf("Accuracy CSV initialization failed: %v", err)
 	}
-	select {
-	case <-time.After(time.Duration(warmup) * time.Second):
-		anlfLog.Infof("Accuracy monitor warmup complete: model=%s", modelUrl)
-	case <-ctx.Done():
-		anlfLog.Infof("Accuracy monitor exiting during warmup: model=%s", modelUrl)
-		return
-	}
+	if warmup > 0 {
+		anlfLog.Infof("Accuracy monitor warmup: model=%s, waiting %ds", modelUrl, warmup)
+		select {
+		case <-time.After(time.Duration(warmup) * time.Second):
+			anlfLog.Infof("Accuracy monitor warmup complete: model=%s", modelUrl)
+		case <-ctx.Done():
+			anlfLog.Infof("Accuracy monitor exiting during warmup: model=%s", modelUrl)
+			return
+		}
 
-	// Discard predictions and inference counter accumulated during warmup —
-	// they reflect model behaviour before it stabilized and should not
-	// influence accuracy scoring.
-	if drained := store.ConsumeMaturePredictions(0); len(drained) > 0 {
-		anlfLog.Infof("Accuracy monitor: discarded %d warmup predictions for model=%s",
-			len(drained), modelUrl)
+		// Startup warmup discards pre-stabilization predictions and inference
+		// counters. Post-swap monitors intentionally skip this path.
+		if drained := store.ConsumeMaturePredictions(0); len(drained) > 0 {
+			anlfLog.Infof("Accuracy monitor: discarded %d warmup predictions for model=%s",
+				len(drained), modelUrl)
+		}
+		store.GetAndResetInferenceNum() // discard warmup inference count
+	} else {
+		anlfLog.Infof("Accuracy monitor warmup skipped: model=%s", modelUrl)
 	}
-	store.GetAndResetInferenceNum() // discard warmup inference count
 
 	interval := accCfg.CheckInterval
 	if interval <= 0 {
