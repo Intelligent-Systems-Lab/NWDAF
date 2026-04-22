@@ -23,8 +23,8 @@ type AnlfService struct {
 }
 
 // AccuracyReport is the internal AnLF output for one monitor round and one scope.
-// It is currently used for observability, while retrain decision still follows
-// the legacy deviation callback.
+// MTLF consumes these per-scope metrics for retrain policy evaluation and
+// CSV/log observability.
 type AccuracyReport struct {
 	ModelURL     string
 	ScopeKey     string
@@ -42,8 +42,8 @@ func NewAnlfService(nwdaf NwdafApp) *AnlfService {
 }
 
 // SetOnDeviationReport registers the callback invoked when AnLF finishes computing
-// accuracy for a model. Per TS 23.288 §6.2D: AnLF reports Analytics Accuracy
-// Information to MTLF, which then decides whether to retrain.
+// model-level deviation for a model. This callback is kept for legacy
+// compatibility while the report-based MTLF policy path is active.
 func (a *AnlfService) SetOnDeviationReport(
 	fn func(modelUrl string, deviation float64, store *nwdaf_context.ModelAccuracyStore),
 ) {

@@ -7,6 +7,7 @@ import (
 	"context"
 	"sync"
 
+	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 )
 
@@ -20,6 +21,7 @@ type NwdafApp interface {
 type MtlfService struct {
 	nwdaf          NwdafApp
 	wg             *sync.WaitGroup
+	stateStore     *MonitorStateStore
 	onModelSwapped func(modelUrl string, wg *sync.WaitGroup)
 	// onModelSwapReady is called by swapModelAfterRetrain to delegate ML Service
 	// operations (load new model, unload old model) to AnLF.
@@ -32,11 +34,17 @@ type MtlfService struct {
 	// activeJobs tracks in-progress ADRF-assisted retrain jobs.
 	// Key: TID (string) → Value: *retrainJob
 	activeJobs sync.Map
+	// onRetrainTriggered allows tests to intercept retrain dispatch without
+	// starting the external workflow.
+	onRetrainTriggered func(modelUrl string, store *nwdaf_context.ModelAccuracyStore)
 }
 
 // NewMtlfService creates a new MtlfService instance.
 func NewMtlfService(nwdaf NwdafApp) *MtlfService {
-	return &MtlfService{nwdaf: nwdaf}
+	return &MtlfService{
+		nwdaf:      nwdaf,
+		stateStore: NewMonitorStateStore(),
+	}
 }
 
 // SetWaitGroup stores the application WaitGroup for goroutine lifecycle management.

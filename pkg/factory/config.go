@@ -167,18 +167,22 @@ type MtlfConfig struct {
 // AccuracyMonitorConfig controls accuracy monitoring behavior
 // Per TS 23.288 §5C: accuracy determined by comparing predictions against ground truth
 type AccuracyMonitorConfig struct {
-	Enabled            bool    `yaml:"enabled"`
-	CheckInterval      int     `yaml:"checkInterval,omitempty"`      // Seconds between checks (default: 60)
-	DeviationThreshold float64 `yaml:"deviationThreshold,omitempty"` // sMAPE retrain threshold in [0,2] (default: 0.3)
-	MinSamples         int     `yaml:"minSamples,omitempty"`         // Min samples before evaluation (default: 5)
-	WarmupDuration     int     `yaml:"warmupDuration,omitempty"`     // Seconds to skip checks after start (default: 120)
-	CSVDumpDir         string  `yaml:"csvDumpDir,omitempty"`         // Directory for accuracy CSV output
-	CSVDumpEnabled     *bool   `yaml:"csvDumpEnabled,omitempty"`     // Whether to write accuracy CSV output
-
-	// Trigger strategy: "consecutive" or "ema" (default: "consecutive")
-	TriggerStrategy     string  `yaml:"triggerStrategy,omitempty"`
-	ConsecutiveBreaches int     `yaml:"consecutiveBreaches,omitempty"` // Consecutive checks above threshold (default: 3)
-	EmaAlpha            float64 `yaml:"emaAlpha,omitempty"`            // EMA smoothing factor 0-1 (default: 0.3)
+	Enabled       bool `yaml:"enabled"`
+	CheckInterval int  `yaml:"checkInterval,omitempty"` // Seconds between checks (default: 60)
+	MinSamples    int  `yaml:"minSamples,omitempty"`    // Min samples before evaluation (default: 5)
+	// Seconds to skip checks after start (default: 120).
+	WarmupDuration      int      `yaml:"warmupDuration,omitempty"`
+	CSVDumpDir          string   `yaml:"csvDumpDir,omitempty"`          // Directory for accuracy CSV output
+	CSVDumpEnabled      *bool    `yaml:"csvDumpEnabled,omitempty"`      // Whether to write accuracy CSV output
+	MetricsToRecord     []string `yaml:"metricsToRecord,omitempty"`     // Candidate metrics retained for observability
+	PrimaryMetric       string   `yaml:"primaryMetric,omitempty"`       // Metric used for retrain decision
+	RecentBufferSize    int      `yaml:"recentBufferSize,omitempty"`    // Per-scope history length
+	MinBufferSamples    int      `yaml:"minBufferSamples,omitempty"`    // Buffer samples required before z-score gate
+	MinStd              float64  `yaml:"minStd,omitempty"`              // Standard-deviation floor for z-score
+	FixedFloor          float64  `yaml:"fixedFloor,omitempty"`          // Absolute gate floor for the primary metric
+	ZScoreThreshold     float64  `yaml:"zScoreThreshold,omitempty"`     // Relative anomaly threshold
+	ScopeStateTTL       int      `yaml:"scopeStateTTL,omitempty"`       // Scope state GC threshold in seconds
+	ConsecutiveBreaches int      `yaml:"consecutiveBreaches,omitempty"` // Consecutive triggered rounds before retrain
 }
 
 func (a *AccuracyMonitorConfig) CSVDumpEnabledOrDefault() bool {
@@ -193,6 +197,69 @@ func (a *AccuracyMonitorConfig) CSVDumpDirOrDefault() string {
 		return "log/accuracy"
 	}
 	return a.CSVDumpDir
+}
+
+func (a *AccuracyMonitorConfig) MetricsToRecordOrDefault() []string {
+	if a == nil || len(a.MetricsToRecord) == 0 {
+		return []string{"sMAPE", "MAE", "MSE", "WAPE", "NRMSE"}
+	}
+	return append([]string(nil), a.MetricsToRecord...)
+}
+
+func (a *AccuracyMonitorConfig) PrimaryMetricOrDefault() string {
+	if a == nil || a.PrimaryMetric == "" {
+		return "MAE"
+	}
+	return a.PrimaryMetric
+}
+
+func (a *AccuracyMonitorConfig) RecentBufferSizeOrDefault() int {
+	if a == nil || a.RecentBufferSize <= 0 {
+		return 20
+	}
+	return a.RecentBufferSize
+}
+
+func (a *AccuracyMonitorConfig) MinBufferSamplesOrDefault() int {
+	if a == nil || a.MinBufferSamples <= 0 {
+		return 8
+	}
+	return a.MinBufferSamples
+}
+
+func (a *AccuracyMonitorConfig) MinStdOrDefault() float64 {
+	if a == nil || a.MinStd <= 0 {
+		return 0.01
+	}
+	return a.MinStd
+}
+
+func (a *AccuracyMonitorConfig) FixedFloorOrDefault() float64 {
+	if a == nil || a.FixedFloor <= 0 {
+		return 1024
+	}
+	return a.FixedFloor
+}
+
+func (a *AccuracyMonitorConfig) ZScoreThresholdOrDefault() float64 {
+	if a == nil || a.ZScoreThreshold <= 0 {
+		return 3.0
+	}
+	return a.ZScoreThreshold
+}
+
+func (a *AccuracyMonitorConfig) ScopeStateTTLOrDefault() int {
+	if a == nil || a.ScopeStateTTL <= 0 {
+		return 600
+	}
+	return a.ScopeStateTTL
+}
+
+func (a *AccuracyMonitorConfig) ConsecutiveBreachesOrDefault() int {
+	if a == nil || a.ConsecutiveBreaches <= 0 {
+		return 3
+	}
+	return a.ConsecutiveBreaches
 }
 
 // AdrfConfig holds connection settings for the ADRF (Analytics Data Repository Function).

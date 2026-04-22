@@ -138,3 +138,78 @@ func TestAccuracyMonitorConfig_CSVDumpExplicitValues(t *testing.T) {
 		t.Errorf("CSVDumpDirOrDefault() = %q, want %q", got, "custom/accuracy")
 	}
 }
+
+func TestAccuracyMonitorConfig_PolicyDefaults(t *testing.T) {
+	cfg := &factory.AccuracyMonitorConfig{}
+
+	if got := cfg.PrimaryMetricOrDefault(); got != "MAE" {
+		t.Errorf("PrimaryMetricOrDefault() = %q, want %q", got, "MAE")
+	}
+	if got := cfg.RecentBufferSizeOrDefault(); got != 20 {
+		t.Errorf("RecentBufferSizeOrDefault() = %d, want 20", got)
+	}
+	if got := cfg.MinBufferSamplesOrDefault(); got != 8 {
+		t.Errorf("MinBufferSamplesOrDefault() = %d, want 8", got)
+	}
+	if got := cfg.MinStdOrDefault(); got != 0.01 {
+		t.Errorf("MinStdOrDefault() = %.2f, want 0.01", got)
+	}
+	if got := cfg.FixedFloorOrDefault(); got != 1024 {
+		t.Errorf("FixedFloorOrDefault() = %.0f, want 1024", got)
+	}
+	if got := cfg.ZScoreThresholdOrDefault(); got != 3.0 {
+		t.Errorf("ZScoreThresholdOrDefault() = %.1f, want 3.0", got)
+	}
+	if got := cfg.ScopeStateTTLOrDefault(); got != 600 {
+		t.Errorf("ScopeStateTTLOrDefault() = %d, want 600", got)
+	}
+	if got := cfg.ConsecutiveBreachesOrDefault(); got != 3 {
+		t.Errorf("ConsecutiveBreachesOrDefault() = %d, want 3", got)
+	}
+	if got := cfg.MetricsToRecordOrDefault(); len(got) != 5 {
+		t.Errorf("MetricsToRecordOrDefault() length = %d, want 5", len(got))
+	}
+}
+
+func TestAccuracyMonitorConfig_PolicyExplicitValues(t *testing.T) {
+	cfg := &factory.AccuracyMonitorConfig{
+		MetricsToRecord:     []string{"MAE", "WAPE"},
+		PrimaryMetric:       "WAPE",
+		RecentBufferSize:    12,
+		MinBufferSamples:    4,
+		MinStd:              0.5,
+		FixedFloor:          2048,
+		ZScoreThreshold:     2.5,
+		ScopeStateTTL:       120,
+		ConsecutiveBreaches: 5,
+	}
+
+	if got := cfg.PrimaryMetricOrDefault(); got != "WAPE" {
+		t.Errorf("PrimaryMetricOrDefault() = %q, want %q", got, "WAPE")
+	}
+	if got := cfg.RecentBufferSizeOrDefault(); got != 12 {
+		t.Errorf("RecentBufferSizeOrDefault() = %d, want 12", got)
+	}
+	if got := cfg.MinBufferSamplesOrDefault(); got != 4 {
+		t.Errorf("MinBufferSamplesOrDefault() = %d, want 4", got)
+	}
+	if got := cfg.MinStdOrDefault(); got != 0.5 {
+		t.Errorf("MinStdOrDefault() = %.1f, want 0.5", got)
+	}
+	if got := cfg.FixedFloorOrDefault(); got != 2048 {
+		t.Errorf("FixedFloorOrDefault() = %.0f, want 2048", got)
+	}
+	if got := cfg.ZScoreThresholdOrDefault(); got != 2.5 {
+		t.Errorf("ZScoreThresholdOrDefault() = %.1f, want 2.5", got)
+	}
+	if got := cfg.ScopeStateTTLOrDefault(); got != 120 {
+		t.Errorf("ScopeStateTTLOrDefault() = %d, want 120", got)
+	}
+	if got := cfg.ConsecutiveBreachesOrDefault(); got != 5 {
+		t.Errorf("ConsecutiveBreachesOrDefault() = %d, want 5", got)
+	}
+	gotMetrics := cfg.MetricsToRecordOrDefault()
+	if len(gotMetrics) != 2 || gotMetrics[0] != "MAE" || gotMetrics[1] != "WAPE" {
+		t.Errorf("MetricsToRecordOrDefault() = %v, want [MAE WAPE]", gotMetrics)
+	}
+}

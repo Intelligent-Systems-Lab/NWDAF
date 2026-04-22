@@ -70,14 +70,24 @@ configuration:
     accuracyMonitor:
       enabled: true            # Trigger retraining on accuracy degradation
       checkInterval: 50         # seconds between accuracy checks
-      deviationThreshold: 0.3   # sMAPE [0,2] > 0.3 triggers retraining
       minSamples: 5             # min ground truth samples before evaluation
       warmupDuration: 155       # seconds to skip checks after start (model cold-start)
       csvDumpEnabled: true      # write scope-level accuracy observations to CSV
       csvDumpDir: log/accuracy  # directory for metrics/pairs CSV files
-      triggerStrategy: consecutive  # "consecutive" or "ema"
-      consecutiveBreaches: 3    # required consecutive checks (for consecutive)
-      emaAlpha: 0.3             # EMA smoothing factor 0-1 (for ema)
+      metricsToRecord:
+        - sMAPE
+        - MAE
+        - MSE
+        - WAPE
+        - NRMSE
+      primaryMetric: MAE        # decision metric for retrain policy
+      recentBufferSize: 20      # per-scope retained report history
+      minBufferSamples: 8       # samples required before enabling z-score gate
+      minStd: 0.01              # floor on std to avoid unstable z-scores
+      fixedFloor: 1024          # provisional absolute MAE gate in bytes
+      zScoreThreshold: 3.0      # relative anomaly threshold
+      scopeStateTTL: 600        # seconds before inactive scope state is GC'd
+      consecutiveBreaches: 3    # required consecutive triggered rounds
     task:
       TID: "nwdaf_fl_training"
       NUM_ROUNDS: 30
