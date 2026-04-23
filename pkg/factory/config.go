@@ -187,7 +187,7 @@ type AccuracyMonitorConfig struct {
 	MinBufferSamples int `yaml:"minBufferSamples,omitempty"`
 	// Standard-deviation floor for z-score.
 	MinStd float64 `yaml:"minStd,omitempty"`
-	// Absolute gate floor for the primary metric.
+	// Degradation eligibility floor for the primary metric.
 	FixedFloor float64 `yaml:"fixedFloor,omitempty"`
 	// Relative anomaly threshold.
 	ZScoreThreshold float64 `yaml:"zScoreThreshold,omitempty"`

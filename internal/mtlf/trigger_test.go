@@ -407,10 +407,10 @@ func TestHandleAccuracyReports_ZeroHistoryStillRequiresAbsGate(t *testing.T) {
 	}, store)
 
 	if got := scope.BreachCount(); got != 0 {
-		t.Fatalf("BreachCount() = %d, want 0 when absGate fails despite high relative change", got)
+		t.Fatalf("BreachCount() = %d, want 0 when degradation eligibility fails despite high relative change", got)
 	}
 	if store.IsRetraining() {
-		t.Fatal("store.IsRetraining() = true, want false when absGate fails")
+		t.Fatal("store.IsRetraining() = true, want false when degradation eligibility fails")
 	}
 }
 

@@ -79,27 +79,28 @@ func (m *MtlfService) HandleAccuracyReports(
 			scopeState.RecordMetric(trafficScaleMetricName, report.TrafficScale, now)
 		}
 
-		absGate := current > fixedFloor
-		relGate := false
-		relGateState := "skipped"
+		degradationEligible := current > fixedFloor
+		degradationSignal := false
+		degradationSignalState := "skipped"
 		zscore := 0.0
 		if baselineReady {
 			zscore = (current - mean) / math.Max(std, minStd)
-			relGate = zscore > zThreshold
-			relGateState = fmt.Sprintf("%t", relGate)
+			degradationSignal = zscore > zThreshold
+			degradationSignalState = fmt.Sprintf("%t", degradationSignal)
 		}
 
-		degradationTriggered := baselineReady && absGate && relGate
+		degradationHit := baselineReady && degradationEligible && degradationSignal
 		degradationHits := scopeState.BreachCount()
 		if !baselineReady {
 			scopeState.ResetBreach()
 		} else {
-			degradationHits = scopeState.RecordDegradationOutcome(degradationTriggered)
+			degradationHits = scopeState.RecordDegradationOutcome(degradationHit)
 		}
 
 		chronicEnabled := chronicCfg != nil && chronicCfg.EnabledOrDefault()
 		chronicEligible := false
-		chronicTriggered := false
+		chronicSignal := false
+		chronicHit := false
 		chronicValue := 0.0
 		trafficScale := scopeState.Mean(trafficScaleMetricName)
 		chronicHits := scopeState.ChronicHitCount()
@@ -115,25 +116,26 @@ func (m *MtlfService) HandleAccuracyReports(
 						chronicCfg.PercentileOrDefault(),
 					)
 				}
-				chronicTriggered = chronicValue > chronicCfg.ThresholdOrDefault()
+				chronicSignal = chronicValue > chronicCfg.ThresholdOrDefault()
 			}
-			chronicHits = scopeState.RecordChronicOutcome(chronicTriggered)
+			chronicHit = chronicEligible && chronicSignal
+			chronicHits = scopeState.RecordChronicOutcome(chronicHit)
 		}
 
-		triggerReason := "none"
+		hitReason := "none"
 		switch {
-		case degradationTriggered && chronicTriggered:
-			triggerReason = "both"
-		case degradationTriggered:
-			triggerReason = "degradation"
-		case chronicTriggered:
-			triggerReason = "chronic"
+		case degradationHit && chronicHit:
+			hitReason = "both"
+		case degradationHit:
+			hitReason = "degradation"
+		case chronicHit:
+			hitReason = "chronic"
 		}
 
 		mtlfLog.Infof(
 			"Accuracy policy [%s]: scope=%s metric=%s current=%.4f mean=%.4f std=%.4f "+
-				"zscore=%.4f absGate=%t relGate=%s baselineReady=%t trafficScale=%.4f "+
-				"chronicEligible=%t chronicValue=%.4f degradationHits=%d/%d chronicHits=%d/%d triggerReason=%s",
+				"zscore=%.4f degradationEligible=%t degradationSignal=%s baselineReady=%t trafficScale=%.4f "+
+				"chronicEligible=%t chronicSignal=%t chronicValue=%.4f degradationHits=%d/%d chronicHits=%d/%d hitReason=%s",
 			modelUrl,
 			report.ScopeKey,
 			primaryMetric,
@@ -141,17 +143,18 @@ func (m *MtlfService) HandleAccuracyReports(
 			mean,
 			std,
 			zscore,
-			absGate,
-			relGateState,
+			degradationEligible,
+			degradationSignalState,
 			baselineReady,
 			trafficScale,
 			chronicEligible,
+			chronicSignal,
 			chronicValue,
 			degradationHits,
 			requiredHits,
 			chronicHits,
 			requiredHits,
-			triggerReason,
+			hitReason,
 		)
 
 		if degradationHits >= requiredHits || chronicHits >= requiredHits {
@@ -163,7 +166,7 @@ func (m *MtlfService) HandleAccuracyReports(
 				current,
 				degradationHits, requiredHits,
 				chronicHits, requiredHits,
-				triggerReason,
+				hitReason,
 			)
 			m.stateStore.ResetModelBreaches(modelUrl)
 			store.SetRetraining(true)
