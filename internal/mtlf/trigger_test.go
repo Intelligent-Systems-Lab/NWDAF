@@ -56,6 +56,18 @@ func prefillScope(scope *ScopeState, values ...float64) {
 	}
 }
 
+func TestSignalState(t *testing.T) {
+	if got := signalState(false, true); got != "skipped" {
+		t.Fatalf("signalState(false, true) = %q, want %q", got, "skipped")
+	}
+	if got := signalState(true, true); got != "true" {
+		t.Fatalf("signalState(true, true) = %q, want %q", got, "true")
+	}
+	if got := signalState(true, false); got != "false" {
+		t.Fatalf("signalState(true, false) = %q, want %q", got, "false")
+	}
+}
+
 func TestHandleAccuracyReports_ColdStartBuildsBaselineWithoutTrigger(t *testing.T) {
 	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:             true,

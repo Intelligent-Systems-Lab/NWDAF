@@ -12,6 +12,13 @@ import (
 
 const trafficScaleMetricName = "__traffic_scale__"
 
+func signalState(baselineReady bool, signal bool) string {
+	if !baselineReady {
+		return "skipped"
+	}
+	return fmt.Sprintf("%t", signal)
+}
+
 // HandleAccuracyReports receives per-scope accuracy information from AnLF and
 // decides whether to trigger model retraining.
 // Per TS 23.288 §6.2E: MTLF analyzes accuracy degradation reported by AnLF and
@@ -81,20 +88,19 @@ func (m *MtlfService) HandleAccuracyReports(
 
 		degradationEligible := current > fixedFloor
 		degradationSignal := false
-		degradationSignalState := "skipped"
 		zscore := 0.0
-		if baselineReady {
+		if historyCount > 0 {
 			zscore = (current - mean) / math.Max(std, minStd)
 			degradationSignal = zscore > zThreshold
-			degradationSignalState = fmt.Sprintf("%t", degradationSignal)
 		}
+		degradationSignalState := signalState(baselineReady, degradationSignal)
 
 		degradationHit := baselineReady && degradationEligible && degradationSignal
-		degradationHits := scopeState.BreachCount()
-		if !baselineReady {
-			scopeState.ResetBreach()
-		} else {
+		degradationHits := 0
+		if baselineReady {
 			degradationHits = scopeState.RecordDegradationOutcome(degradationHit)
+		} else {
+			scopeState.ResetDecisionWindows()
 		}
 
 		chronicEnabled := chronicCfg != nil && chronicCfg.EnabledOrDefault()
@@ -103,10 +109,12 @@ func (m *MtlfService) HandleAccuracyReports(
 		chronicHit := false
 		chronicValue := 0.0
 		trafficScale := scopeState.Mean(trafficScaleMetricName)
-		chronicHits := scopeState.ChronicHitCount()
-		if chronicEnabled && baselineReady {
+		chronicHits := 0
+		chronicMetricCount := 0
+		if chronicEnabled {
+			chronicMetricCount = scopeState.SampleCount(chronicCfg.MetricOrDefault())
 			chronicEligible = trafficScale >= chronicCfg.MinTrafficScaleOrDefault()
-			if chronicEligible {
+			if chronicMetricCount > 0 {
 				switch chronicCfg.AggregatorOrDefault() {
 				case "mean":
 					chronicValue = scopeState.Mean(chronicCfg.MetricOrDefault())
@@ -116,8 +124,11 @@ func (m *MtlfService) HandleAccuracyReports(
 						chronicCfg.PercentileOrDefault(),
 					)
 				}
-				chronicSignal = chronicValue > chronicCfg.ThresholdOrDefault()
 			}
+			chronicSignal = chronicValue > chronicCfg.ThresholdOrDefault()
+		}
+		chronicSignalState := signalState(baselineReady, chronicSignal)
+		if chronicEnabled && baselineReady {
 			chronicHit = chronicEligible && chronicSignal
 			chronicHits = scopeState.RecordChronicOutcome(chronicHit)
 		}
@@ -135,7 +146,7 @@ func (m *MtlfService) HandleAccuracyReports(
 		mtlfLog.Infof(
 			"Accuracy policy [%s]: scope=%s metric=%s current=%.4f mean=%.4f std=%.4f "+
 				"zscore=%.4f degradationEligible=%t degradationSignal=%s baselineReady=%t trafficScale=%.4f "+
-				"chronicEligible=%t chronicSignal=%t chronicValue=%.4f degradationHits=%d/%d chronicHits=%d/%d hitReason=%s",
+				"chronicEligible=%t chronicSignal=%s chronicValue=%.4f degradationHits=%d/%d chronicHits=%d/%d hitReason=%s",
 			modelUrl,
 			report.ScopeKey,
 			primaryMetric,
@@ -148,7 +159,7 @@ func (m *MtlfService) HandleAccuracyReports(
 			baselineReady,
 			trafficScale,
 			chronicEligible,
-			chronicSignal,
+			chronicSignalState,
 			chronicValue,
 			degradationHits,
 			requiredHits,

@@ -316,9 +316,9 @@ def parse_policy_row(timestamp: pd.Timestamp, model: str, body: str) -> dict[str
     degradation_hits, degradation_required = parse_hit_pair(kv.get("degradationHits"))
     chronic_hits, chronic_required = parse_hit_pair(kv.get("chronicHits"))
 
-    chronic_signal = parse_bool(kv.get("chronicSignal"))
-    if chronic_signal is None:
-        chronic_signal = hit_reason in {"chronic", "both"}
+    chronic_signal_raw = kv.get("chronicSignal")
+    if chronic_signal_raw is None:
+        chronic_signal_raw = "true" if hit_reason in {"chronic", "both"} else "false"
 
     return {
         "timestamp": timestamp,
@@ -334,7 +334,7 @@ def parse_policy_row(timestamp: pd.Timestamp, model: str, body: str) -> dict[str
         "baselineReady": parse_bool(kv.get("baselineReady")),
         "trafficScale": parse_float(kv.get("trafficScale")),
         "chronicEligible": parse_bool(kv.get("chronicEligible")),
-        "chronicSignal": chronic_signal,
+        "chronicSignal": chronic_signal_raw,
         "chronicValue": parse_float(kv.get("chronicValue")),
         "degradationHits": degradation_hits,
         "degradationRequired": degradation_required,
@@ -812,7 +812,7 @@ def add_policy_signal_markers(fig: go.Figure, policy_df: pd.DataFrame, y_value: 
     rows = []
     for _, row in policy_df.iterrows():
         degradation_signal = str(row.get("degradationSignal")).lower() == "true"
-        chronic_signal = bool(row.get("chronicSignal"))
+        chronic_signal = str(row.get("chronicSignal")).lower() == "true"
         label = row.get("scopeLabel", row.get("scope", "-"))
         if degradation_signal:
             rows.append({**row.to_dict(), "signal": "degradation", "label": label})
@@ -1068,7 +1068,7 @@ REPORT_TEMPLATE = Template(
 
   <section data-reorderable>
     <div class="section-header"><h2>Policy State Timeline</h2><div class="section-controls"><button onclick="moveSection(this, -1)">Up</button><button onclick="moveSection(this, 1)">Down</button></div></div>
-    <p class="note"><code>degradationSignal=skipped</code> is distinct from false and usually means baseline is not ready.</p>
+    <p class="note"><code>degradationSignal=skipped</code> and <code>chronicSignal=skipped</code> are distinct from false and usually mean baseline is not ready while the underlying metric values are still being recorded.</p>
     {{ figures.policy_signals }}
   </section>
 
