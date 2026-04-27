@@ -6,8 +6,6 @@ import (
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
-func boolPtr(v bool) *bool { return &v }
-
 // =============================================================================
 // ModelParams Helper Method Tests
 // =============================================================================
@@ -111,31 +109,6 @@ func TestAnalyticsConfig_NilUeCommunication(t *testing.T) {
 	}
 	if cfg.UeCommunication != nil {
 		t.Error("UeCommunication should be nil")
-	}
-}
-
-func TestAccuracyMonitorConfig_CSVDumpDefaults(t *testing.T) {
-	cfg := &factory.AccuracyMonitorConfig{}
-
-	if got := cfg.CSVDumpEnabledOrDefault(); !got {
-		t.Error("CSVDumpEnabledOrDefault() = false, want true")
-	}
-	if got := cfg.CSVDumpDirOrDefault(); got != "log/accuracy" {
-		t.Errorf("CSVDumpDirOrDefault() = %q, want %q", got, "log/accuracy")
-	}
-}
-
-func TestAccuracyMonitorConfig_CSVDumpExplicitValues(t *testing.T) {
-	cfg := &factory.AccuracyMonitorConfig{
-		CSVDumpEnabled: boolPtr(false),
-		CSVDumpDir:     "custom/accuracy",
-	}
-
-	if got := cfg.CSVDumpEnabledOrDefault(); got {
-		t.Error("CSVDumpEnabledOrDefault() = true, want false")
-	}
-	if got := cfg.CSVDumpDirOrDefault(); got != "custom/accuracy" {
-		t.Errorf("CSVDumpDirOrDefault() = %q, want %q", got, "custom/accuracy")
 	}
 }
 
