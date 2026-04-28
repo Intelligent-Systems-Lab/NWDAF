@@ -39,6 +39,7 @@ METRIC_ORDER = ["MAE", "WAPE", "NRMSE", "sMAPE", "MSE"]
 
 @dataclass
 class Inputs:
+    trace: Path | None
     log: Path | None
     config: Path | None
     out: Path
@@ -49,6 +50,7 @@ def parse_args() -> argparse.Namespace:
         description="Generate a NWDAF retrain monitoring HTML analysis report.",
     )
     parser.add_argument("--input", type=Path, help="Experiment directory.")
+    parser.add_argument("--trace", type=Path, help="Replay trace directory.")
     parser.add_argument("--log", type=Path, help="Path to nwdaf.log.")
     parser.add_argument("--config", type=Path, help="Path to nwdafcfg.yaml.")
     parser.add_argument("--out", type=Path, required=True, help="Output HTML path.")
@@ -57,10 +59,14 @@ def parse_args() -> argparse.Namespace:
 
 def discover_inputs(args: argparse.Namespace) -> Inputs:
     input_dir = args.input
+    trace_dir = args.trace
     log_path = args.log
     config_path = args.config
 
     if input_dir:
+        if not trace_dir:
+            if (input_dir / "manifest.json").exists() and (input_dir / "policy.parquet").exists():
+                trace_dir = input_dir
         if not log_path:
             candidate = input_dir / "nwdaf.log"
             if candidate.exists():
@@ -69,8 +75,13 @@ def discover_inputs(args: argparse.Namespace) -> Inputs:
             candidate = input_dir / "nwdafcfg.yaml"
             if candidate.exists():
                 config_path = candidate
+        if not config_path:
+            candidate = input_dir / "config.snapshot.yaml"
+            if candidate.exists():
+                config_path = candidate
 
     return Inputs(
+        trace=trace_dir,
         log=log_path,
         config=config_path,
         out=args.out,
@@ -81,6 +92,8 @@ def read_accuracy_config(path: Path | None) -> dict[str, Any]:
     if not path or not path.exists():
         return {}
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if "nwdafConfig" in data:
+        data = data.get("nwdafConfig") or {}
     cfg = (
         data.get("configuration", {})
         .get("mtlf", {})
@@ -489,6 +502,122 @@ def parse_log(path: Path | None) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFra
     return metrics_df, policy_df, events_df, traffic_df
 
 
+def load_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows = []
+    if not path.exists():
+        return rows
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        rows.append(json.loads(line))
+    return rows
+
+
+def parse_metrics_json(value: Any) -> dict[str, float | None]:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return {}
+    if isinstance(value, dict):
+        return {str(key): parse_float(raw) for key, raw in value.items()}
+    try:
+        parsed = json.loads(str(value))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(key): parse_float(raw) for key, raw in parsed.items()}
+
+
+def load_trace_dir(path: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    slots_path = path / "slots.parquet"
+    predictions_path = path / "predictions.parquet"
+    monitor_path = path / "monitor_rounds.parquet"
+    policy_path = path / "policy.parquet"
+    events_path = path / "events.jsonl"
+
+    slots_df = pd.read_parquet(slots_path) if slots_path.exists() else pd.DataFrame()
+    predictions_df = pd.read_parquet(predictions_path) if predictions_path.exists() else pd.DataFrame()
+    monitor_df = pd.read_parquet(monitor_path) if monitor_path.exists() else pd.DataFrame()
+    policy_df = pd.read_parquet(policy_path) if policy_path.exists() else pd.DataFrame()
+    events_df = pd.DataFrame(load_jsonl(events_path))
+
+    metric_rows: list[dict[str, Any]] = []
+    if not monitor_df.empty:
+        for _, row in monitor_df.iterrows():
+            metrics = parse_metrics_json(row.get("metricsJson"))
+            for metric, current in metrics.items():
+                metric_rows.append(
+                    {
+                        "timestamp": parse_timestamp(str(row.get("simTime"))),
+                        "model": row.get("modelVersion"),
+                        "scope": row.get("scope"),
+                        "metric": metric,
+                        "current": current,
+                        "sampleCount": parse_int(row.get("sampleCount")),
+                        "inferenceNum": parse_int(row.get("inferenceNum")),
+                        "windowStart": parse_timestamp(str(row.get("windowStart"))),
+                        "windowEnd": parse_timestamp(str(row.get("windowEnd"))),
+                    }
+                )
+    metrics_df = pd.DataFrame(metric_rows)
+
+    if not policy_df.empty:
+        if "timestamp" not in policy_df.columns and "simTime" in policy_df.columns:
+            policy_df = policy_df.rename(columns={"simTime": "timestamp"})
+        for column in ["timestamp"]:
+            if column in policy_df.columns:
+                policy_df[column] = policy_df[column].map(lambda value: parse_timestamp(str(value)))
+
+    if not events_df.empty:
+        if "timestamp" in events_df.columns:
+            events_df["timestamp"] = events_df["timestamp"].map(lambda value: parse_timestamp(str(value)))
+        if "modelVersion" in events_df.columns and "model" not in events_df.columns:
+            events_df["model"] = events_df["modelVersion"]
+
+    traffic_rows: list[dict[str, Any]] = []
+    if not slots_df.empty:
+        for _, row in slots_df.iterrows():
+            traffic_rows.append(
+                {
+                    "timestamp": parse_timestamp(str(row.get("slotStart"))),
+                    "logTimestamp": parse_timestamp(str(row.get("slotEnd"))),
+                    "source": "actual",
+                    "nwdafSubId": row.get("groupId"),
+                    "scope": f"group:{row.get('groupId')}",
+                    "ulVol": parse_float(row.get("actualUl")),
+                    "dlVol": parse_float(row.get("actualDl")),
+                    "steps": None,
+                    "confidence": None,
+                }
+            )
+    if not predictions_df.empty:
+        for _, row in predictions_df.iterrows():
+            traffic_rows.append(
+                {
+                    "timestamp": parse_timestamp(str(row.get("targetSimTime"))),
+                    "logTimestamp": parse_timestamp(str(row.get("predictedAtSimTime"))),
+                    "source": "predicted",
+                    "nwdafSubId": row.get("groupId"),
+                    "scope": row.get("scope"),
+                    "ulVol": parse_float(row.get("predUl")),
+                    "dlVol": parse_float(row.get("predDl")),
+                    "steps": 1,
+                    "confidence": parse_float(row.get("confidence")),
+                }
+            )
+    traffic_df = pd.DataFrame(traffic_rows)
+
+    if not metrics_df.empty:
+        metrics_df = add_model_labels(metrics_df).sort_values("timestamp")
+    if not policy_df.empty:
+        policy_df = add_model_labels(policy_df).sort_values("timestamp")
+    if not events_df.empty:
+        events_df = add_model_labels(events_df).sort_values("timestamp")
+    if not traffic_df.empty:
+        traffic_df = traffic_df.sort_values("timestamp")
+    return metrics_df, policy_df, events_df, traffic_df
+
+
 def config_value(cfg: dict[str, Any], path: str, default: Any = None) -> Any:
     cur: Any = cfg
     for part in path.split("."):
@@ -511,6 +640,7 @@ def make_summary(
         if not df.empty and "timestamp" in df.columns:
             timestamps.extend(df["timestamp"].dropna().tolist())
     return {
+        "inputTrace": str(inputs.trace) if inputs.trace else "-",
         "inputLog": str(inputs.log) if inputs.log else "-",
         "config": str(inputs.config) if inputs.config else "-",
         "timeStart": min(timestamps).isoformat() if timestamps else "-",
@@ -1178,7 +1308,10 @@ def main() -> None:
     args = parse_args()
     inputs = discover_inputs(args)
     cfg = read_accuracy_config(inputs.config)
-    metrics_df, policy_df, events_df, traffic_df = parse_log(inputs.log)
+    if inputs.trace:
+        metrics_df, policy_df, events_df, traffic_df = load_trace_dir(inputs.trace)
+    else:
+        metrics_df, policy_df, events_df, traffic_df = parse_log(inputs.log)
     model_map, scope_map = build_alias_maps([metrics_df, policy_df, events_df, traffic_df])
     metrics_df = apply_aliases(metrics_df, model_map, scope_map)
     policy_df = apply_aliases(policy_df, model_map, scope_map)

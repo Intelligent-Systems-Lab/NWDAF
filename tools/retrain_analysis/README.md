@@ -8,17 +8,25 @@ Directory mode:
 
 ```bash
 uv run retrain_report.py \
-  --input ../../.agent/tmp/0422-23 \
-  --out ../../.agent/tmp/0422-23/report.html
+  --input /path/to/experiment-dir \
+  --out /path/to/experiment-dir/report.html
 ```
 
 Explicit inputs:
 
 ```bash
 uv run retrain_report.py \
-  --log ../../.agent/tmp/0422-23/nwdaf.log \
-  --config ../../.agent/tmp/0422-23/nwdafcfg.yaml \
-  --out ../../.agent/tmp/0422-23/report.html
+  --log /path/to/nwdaf.log \
+  --config /path/to/nwdafcfg.yaml \
+  --out /path/to/report.html
+```
+
+Replay trace mode:
+
+```bash
+uv run retrain_report.py \
+  --input /path/to/replay-trace-dir \
+  --out /path/to/replay-trace-dir/report.html
 ```
 
 Run commands from this directory so `uv` uses `tools/retrain_analysis/pyproject.toml`.
@@ -27,14 +35,22 @@ Run commands from this directory so `uv` uses `tools/retrain_analysis/pyproject.
 
 - `nwdaf.log`: policy, lifecycle, raw traffic, and inference logs.
 - `nwdafcfg.yaml`: optional threshold/config metadata.
+- replay trace directory: optional structured trace output from `tools/retrain_replay`.
 
-The report is log-only. It derives its data from these log records:
+The report supports both runtime logs and replay structured traces.
+
+In log mode, it derives its data from these records:
 
 - `Accuracy scope`: metric time series by model and scope.
 - `Accuracy policy`: degradation/chronic policy state, signals, and hit counters.
 - `latest aggregated slot`: actual UL/DL traffic by subscription and group.
 - `ML inference`: predicted UL/DL traffic by subscription and group.
 - retrain/training/hot-swap lifecycle messages.
+
+If the input directory contains replay trace artifacts such as
+`manifest.json`, `slots.parquet`, `predictions.parquet`, `monitor_rounds.parquet`,
+and `policy.parquet`, the report switches to a trace backend instead of parsing
+runtime logs.
 
 ## Output
 
