@@ -50,6 +50,11 @@ def now_utc() -> pd.Timestamp:
     return pd.Timestamp.now(tz="UTC")
 
 
+def console_log(message: str) -> None:
+    ts = now_utc().strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"[retrain-replay] {ts} {message}", flush=True)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Offline NWDAF retrain replay tool.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -457,10 +462,12 @@ class DaisyManager:
     def ensure_started(self) -> None:
         self.callback_server.start()
         if self.reuse_existing and self._is_alive():
+            console_log(f"daisy reuse existing endpoint={self.endpoint}")
             return
         if not self.auto_manage:
             raise RuntimeError("Daisy endpoint is not reachable and auto_manage=false")
         if self._is_alive():
+            console_log(f"daisy endpoint already reachable endpoint={self.endpoint}")
             return
         parsed = urlparse(self.endpoint)
         endpoint_host = parsed.hostname or "127.0.0.1"
@@ -480,6 +487,10 @@ class DaisyManager:
             "--data_dirs",
             "ees_training_data",
         ]
+        console_log(
+            f"starting daisy master endpoint={self.endpoint} python={self.python_bin} "
+            f"log={log_path}"
+        )
         self.master_proc = subprocess.Popen(
             cmd,
             cwd=self.example_dir,
@@ -490,6 +501,7 @@ class DaisyManager:
         deadline = time.time() + 30
         while time.time() < deadline:
             if self._is_alive():
+                console_log(f"daisy master ready endpoint={self.endpoint}")
                 return
             time.sleep(1)
         raise RuntimeError("Timed out waiting for Daisy master to start")
@@ -556,6 +568,7 @@ class ReplayEngine:
         self.retrain_window_sec = parse_int(config_value(replay_cfg, "retrain.window_sec"), parse_int(config_value(nw_cfg, "configuration.adrf.retrainWindow"), 1800)) or 1800
         self.upload_batch_size = parse_int(config_value(replay_cfg, "retrain.upload_batch_size"), 500) or 500
         self.mock_training_duration_sec = parse_int(config_value(replay_cfg, "retrain.mock_training_duration_sec"), 120) or 120
+        self.progress_every_slots = parse_int(config_value(replay_cfg, "report.progress_every_slots"), 120) or 120
 
         self.acc_cfg = config_value(nw_cfg, "configuration.mtlf.accuracyMonitor", {}) or {}
         self.metrics_to_record = list(self.acc_cfg.get("metricsToRecord") or ["sMAPE", "MAE", "MSE", "WAPE", "NRMSE"])
@@ -602,12 +615,26 @@ class ReplayEngine:
         self.policy_rows: list[dict[str, Any]] = []
         self.retrain_rows: list[dict[str, Any]] = []
         self.event_rows: list[dict[str, Any]] = []
+        self.processed_live_slots = 0
+        self.total_live_slots = 0
+        self.next_progress_slot = self.progress_every_slots
+        self.monitor_round_count = 0
+
+    def log_progress(self, message: str) -> None:
+        console_log(message)
 
     def preload_history(self, slots: list[SlotObservation]) -> None:
+        if not slots:
+            return
+        self.log_progress(
+            f"warmstart preload begin slots={len(slots)} "
+            f"range={slots[0].slot_start.isoformat()}..{slots[-1].slot_end.isoformat()}"
+        )
         for slot in slots:
             self.record_slot(slot)
             history = self.history.setdefault(slot.group_id, deque(maxlen=max(self.current_model.input_window, 1)))
             history.append(slot.feature_row)
+        self.log_progress(f"warmstart preload complete slots={len(slots)} groups={len({slot.group_id for slot in slots})}")
 
     def clone_model_version(self, version_key: str, source: str) -> ModelVersion:
         return ModelVersion(
@@ -797,6 +824,10 @@ class ReplayEngine:
                 "detail": f"model swap activated: {self.current_model.key}",
             }
         )
+        self.log_progress(
+            f"hot swap complete model={self.current_model.key} sim_time={sim_time.isoformat()} "
+            f"scope={job['scope']} reason={job['reason']}"
+        )
         self.pending_activation = None
 
     def consume_mature_predictions(self, round_time: pd.Timestamp) -> list[PredictionRecord]:
@@ -817,6 +848,7 @@ class ReplayEngine:
         matured = self.consume_mature_predictions(round_time)
         if not matured:
             return
+        self.monitor_round_count += 1
         total_pairs = len(matured)
         grouped: dict[str, list[PredictionRecord]] = {}
         for pred in matured:
@@ -963,6 +995,11 @@ class ReplayEngine:
     def trigger_retrain(self, trigger_time: pd.Timestamp, scope: str, reason: str) -> None:
         tid = uuid.uuid4().hex
         training_docs = self.select_training_docs(trigger_time)
+        total_docs = sum(len(docs) for docs in training_docs.values())
+        self.log_progress(
+            f"retrain trigger tid={tid} scope={scope} reason={reason} sim_time={trigger_time.isoformat()} "
+            f"groups={len(training_docs)} docs={total_docs} model={self.current_model.key}"
+        )
         event = {
             "timestamp": trigger_time,
             "eventType": "retrain_trigger",
@@ -1033,14 +1070,20 @@ class ReplayEngine:
                     "detail": f"mock training done: tid={tid} durationSec={self.mock_training_duration_sec}",
                 }
             )
+            self.log_progress(
+                f"mock retrain scheduled tid={tid} effective_sim_time={effective_sim_time.isoformat()} "
+                f"duration_sec={self.mock_training_duration_sec}"
+            )
             return
 
         if not training_docs:
             retrain_row["status"] = "no_training_data"
+            self.log_progress(f"retrain skipped tid={tid} reason=no_training_data")
             return
 
         self.daisy.ensure_started()
         wall_start = now_utc()
+        self.log_progress(f"daisy training start tid={tid} wall_start={wall_start.isoformat()} groups={len(training_docs)} docs={total_docs}")
         self.event_rows.append(
             {
                 "timestamp": trigger_time,
@@ -1054,6 +1097,7 @@ class ReplayEngine:
         for group_id, docs in training_docs.items():
             self.daisy.upload_notifications(tid, group_id, docs, self.upload_batch_size)
         self.daisy.publish_task(tid)
+        self.log_progress(f"waiting daisy callback tid={tid}")
         callback_result = self.daisy.wait_for_result(tid)
         if callback_result.get("status") != "success":
             retrain_row["status"] = f"callback_{callback_result.get('status', 'unknown')}"
@@ -1078,6 +1122,10 @@ class ReplayEngine:
         self.pending_activation = PendingActivation(effective_sim_time=effective_sim_time, model_version=model_version, retrain_job=retrain_row)
         self.retraining_until = effective_sim_time
         self.monitor_state.reset_all()
+        self.log_progress(
+            f"daisy training complete tid={tid} duration_sec={duration_sec:.2f} "
+            f"effective_sim_time={effective_sim_time.isoformat()} model={model_version.key}"
+        )
         self.event_rows.append(
             {
                 "timestamp": effective_sim_time,
@@ -1117,7 +1165,15 @@ class ReplayEngine:
     def run(self, slots: list[SlotObservation], groups: list[str]) -> None:
         if not slots:
             raise RuntimeError("No slots loaded from dataset")
+        self.total_live_slots = len(slots)
+        self.processed_live_slots = 0
+        self.next_progress_slot = self.progress_every_slots
         next_monitor = slots[0].slot_start + pd.Timedelta(seconds=self.check_interval_sec)
+        self.log_progress(
+            f"live replay begin slots={len(slots)} groups={len(groups)} "
+            f"range={slots[0].slot_start.isoformat()}..{slots[-1].slot_end.isoformat()} "
+            f"sampling={self.sampling_interval}s check_interval={self.check_interval_sec}s"
+        )
         for slot in slots:
             self.maybe_activate_model(slot.slot_start)
             self.record_slot(slot)
@@ -1125,6 +1181,20 @@ class ReplayEngine:
             while next_monitor <= slot.slot_end:
                 self.run_monitor_round(next_monitor)
                 next_monitor += pd.Timedelta(seconds=self.check_interval_sec)
+            self.processed_live_slots += 1
+            if (
+                self.processed_live_slots == 1
+                or self.processed_live_slots >= self.next_progress_slot
+                or self.processed_live_slots == self.total_live_slots
+            ):
+                self.log_progress(
+                    f"progress slots={self.processed_live_slots}/{self.total_live_slots} "
+                    f"sim_time={slot.slot_end.isoformat()} model={self.current_model.key} "
+                    f"monitor_rounds={len(self.monitor_rows)} policy_rows={len(self.policy_rows)} "
+                    f"retrains={len(self.retrain_rows)}"
+                )
+                while self.processed_live_slots >= self.next_progress_slot:
+                    self.next_progress_slot += self.progress_every_slots
 
         manifest = {
             "kind": "retrain_replay_trace",
@@ -1153,6 +1223,11 @@ class ReplayEngine:
         }
         self.write_outputs(manifest)
         self.daisy.stop()
+        self.log_progress(
+            f"replay complete slots={len(self.slots_rows)} predictions={len(self.prediction_rows)} "
+            f"monitor_rounds={len(self.monitor_rows)} policy_rows={len(self.policy_rows)} "
+            f"retrain_jobs={len(self.retrain_rows)}"
+        )
 
 
 def load_replay_config(path: Path) -> dict[str, Any]:
@@ -1319,6 +1394,11 @@ def run_command(args: argparse.Namespace) -> None:
     max_slots = parse_int(config_value(replay_cfg, "dataset.max_slots"), None)
     use_pseudo_warmstart = bool(config_value(replay_cfg, "dataset.use_pseudo_warmstart", True))
     breaking_time_override_sec = parse_float(config_value(replay_cfg, "dataset.breaking_time_sec"), None)
+    console_log(
+        f"run start dataset_root={args.dataset_root.resolve()} groups={groups} "
+        f"config={args.config.resolve()} replay_config={args.replay_config.resolve()} "
+        f"skip_daisy={args.skip_daisy}"
+    )
 
     preload_slots: list[SlotObservation] = []
     live_slots: list[SlotObservation] = []
@@ -1339,6 +1419,10 @@ def run_command(args: argparse.Namespace) -> None:
             live_slots.extend(group_data.slots)
     preload_slots.sort(key=lambda slot: (slot.slot_start, slot.group_id))
     live_slots.sort(key=lambda slot: (slot.slot_start, slot.group_id))
+    console_log(
+        f"dataset prepared preload_slots={len(preload_slots)} live_slots={len(live_slots)} "
+        f"warmstart={use_pseudo_warmstart}"
+    )
 
     out_dir = args.out.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)

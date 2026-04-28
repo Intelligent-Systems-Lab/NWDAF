@@ -28,5 +28,6 @@ daisy:
   callback_port:
 
 report:
+  progress_every_slots: 120
   chart_downsample:
   emit_synthetic_log: false
