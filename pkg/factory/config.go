@@ -173,10 +173,6 @@ type AccuracyMonitorConfig struct {
 	MinSamples    int  `yaml:"minSamples,omitempty"`    // Min samples before evaluation (default: 5)
 	// Seconds to skip checks after start (default: 120).
 	WarmupDuration int `yaml:"warmupDuration,omitempty"`
-	// Directory for accuracy CSV output.
-	CSVDumpDir string `yaml:"csvDumpDir,omitempty"`
-	// Whether to write accuracy CSV output.
-	CSVDumpEnabled *bool `yaml:"csvDumpEnabled,omitempty"`
 	// Candidate metrics retained for observability.
 	MetricsToRecord []string `yaml:"metricsToRecord,omitempty"`
 	// Metric used for retrain decision.
@@ -212,20 +208,6 @@ type ChronicPolicyConfig struct {
 }
 
 const chronicAggregatorPercentile = "percentile"
-
-func (a *AccuracyMonitorConfig) CSVDumpEnabledOrDefault() bool {
-	if a == nil || a.CSVDumpEnabled == nil {
-		return true
-	}
-	return *a.CSVDumpEnabled
-}
-
-func (a *AccuracyMonitorConfig) CSVDumpDirOrDefault() string {
-	if a == nil || a.CSVDumpDir == "" {
-		return "log/accuracy"
-	}
-	return a.CSVDumpDir
-}
 
 func (a *AccuracyMonitorConfig) MetricsToRecordOrDefault() []string {
 	if a == nil || len(a.MetricsToRecord) == 0 {

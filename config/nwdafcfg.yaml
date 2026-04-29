@@ -72,8 +72,6 @@ configuration:
       checkInterval: 50         # seconds between accuracy checks
       minSamples: 5             # min ground truth samples before evaluation
       warmupDuration: 155       # seconds to skip checks after start (model cold-start)
-      csvDumpEnabled: true      # write scope-level accuracy observations to CSV
-      csvDumpDir: log/accuracy  # directory for metrics/pairs CSV files
       metricsToRecord:
         - sMAPE
         - MAE

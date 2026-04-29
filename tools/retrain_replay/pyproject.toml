@@ -1,0 +1,15 @@
+[project]
+name = "retrain-replay"
+version = "0.1.0"
+description = "Offline replay harness for NWDAF retrain experiments"
+requires-python = ">=3.12"
+dependencies = [
+    "joblib>=1.4.0",
+    "numpy>=1.26.0,<2.0.0",
+    "pandas>=2.2.0",
+    "pyarrow>=18.0.0",
+    "pyyaml>=6.0.0",
+    "requests>=2.32.0",
+    "scikit-learn==1.3.2",
+    "torch>=2.5.0",
+]

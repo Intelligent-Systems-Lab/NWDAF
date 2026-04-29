@@ -3,8 +3,6 @@ package anlf
 import (
 	"context"
 	"math"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -25,8 +23,6 @@ func (a testNwdafApp) CancelContext() context.Context {
 func setTestMonitorConfig(
 	t *testing.T,
 	samplingInterval int,
-	csvEnabled bool,
-	csvDir string,
 ) *factory.AccuracyMonitorConfig {
 	t.Helper()
 
@@ -36,9 +32,7 @@ func setTestMonitorConfig(
 			Mtlf: &factory.MtlfConfig{
 				Enabled: true,
 				AccuracyMonitor: &factory.AccuracyMonitorConfig{
-					Enabled:        true,
-					CSVDumpEnabled: &csvEnabled,
-					CSVDumpDir:     csvDir,
+					Enabled: true,
 				},
 			},
 			Analytics: &factory.AnalyticsConfig{
@@ -53,17 +47,6 @@ func setTestMonitorConfig(
 	})
 
 	return factory.NwdafConfig.Configuration.Mtlf.AccuracyMonitor
-}
-
-func resetAccuracyCSVManagerForTest(t *testing.T) {
-	t.Helper()
-
-	if globalAccuracyCSVManager.writer != nil {
-		if err := globalAccuracyCSVManager.writer.Close(); err != nil {
-			t.Fatalf("resetAccuracyCSVManagerForTest close error = %v", err)
-		}
-	}
-	globalAccuracyCSVManager = accuracyCSVManager{}
 }
 
 func addGroundTruthRecord(
@@ -361,9 +344,8 @@ func TestRecordScopedPair_TracksWindowAndSubID(t *testing.T) {
 
 func TestCheckModelAccuracy_LegacyDeviationUsesAllMatchedPairs(t *testing.T) {
 	ctx := setupCtx(t)
-	accCfg := setTestMonitorConfig(t, 5, false, "")
+	accCfg := setTestMonitorConfig(t, 5)
 	accCfg.MinSamples = 1
-	resetAccuracyCSVManagerForTest(t)
 
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -437,9 +419,8 @@ func TestCheckModelAccuracy_LegacyDeviationUsesAllMatchedPairs(t *testing.T) {
 
 func TestCheckModelAccuracy_MinSamplesSkipsCallbacks(t *testing.T) {
 	ctx := setupCtx(t)
-	accCfg := setTestMonitorConfig(t, 5, false, "")
+	accCfg := setTestMonitorConfig(t, 5)
 	accCfg.MinSamples = 2
-	resetAccuracyCSVManagerForTest(t)
 
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -478,15 +459,10 @@ func TestCheckModelAccuracy_MinSamplesSkipsCallbacks(t *testing.T) {
 	}
 }
 
-func TestCheckModelAccuracy_CSVEnabledDoesNotAffectLegacyDeviation(t *testing.T) {
+func TestCheckModelAccuracy_LegacyDeviationIndependentOfPersistence(t *testing.T) {
 	ctx := setupCtx(t)
-	csvDir := t.TempDir()
-	accCfg := setTestMonitorConfig(t, 5, true, csvDir)
+	accCfg := setTestMonitorConfig(t, 5)
 	accCfg.MinSamples = 1
-	resetAccuracyCSVManagerForTest(t)
-	t.Cleanup(func() {
-		resetAccuracyCSVManagerForTest(t)
-	})
 
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -523,29 +499,6 @@ func TestCheckModelAccuracy_CSVEnabledDoesNotAffectLegacyDeviation(t *testing.T)
 	if reportCalls != 1 {
 		t.Fatalf("report callback calls = %d, want 1", reportCalls)
 	}
-
-	metricsFiles, err := filepath.Glob(filepath.Join(csvDir, "metrics_*.csv"))
-	if err != nil {
-		t.Fatalf("Glob(metrics) error = %v", err)
-	}
-	if len(metricsFiles) != 1 {
-		t.Fatalf("len(metricsFiles) = %d, want 1", len(metricsFiles))
-	}
-	pairsFiles, err := filepath.Glob(filepath.Join(csvDir, "pairs_*.csv"))
-	if err != nil {
-		t.Fatalf("Glob(pairs) error = %v", err)
-	}
-	if len(pairsFiles) != 1 {
-		t.Fatalf("len(pairsFiles) = %d, want 1", len(pairsFiles))
-	}
-
-	metricsBytes, err := os.ReadFile(metricsFiles[0])
-	if err != nil {
-		t.Fatalf("ReadFile(metrics) error = %v", err)
-	}
-	if len(metricsBytes) == 0 {
-		t.Fatal("metrics CSV is empty")
-	}
 }
 
 func TestAcquireStartupWarmupDuration_OnlyOnce(t *testing.T) {
@@ -573,11 +526,6 @@ func TestAcquireStartupWarmupDuration_UsesDefaultOnce(t *testing.T) {
 }
 
 func TestRunModelAccuracyLoop_ZeroWarmupKeepsPredictionsUntilTicker(t *testing.T) {
-	resetAccuracyCSVManagerForTest(t)
-	t.Cleanup(func() {
-		resetAccuracyCSVManagerForTest(t)
-	})
-
 	service := NewAnlfService(testNwdafApp{ctx: context.Background()})
 	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
 	target := time.Now().Add(-30 * time.Second)
