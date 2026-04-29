@@ -88,13 +88,20 @@ configuration:
       requiredHitsInWindow: 3   # require N hits inside the latest M rounds
       scopeStateTTL: 600        # seconds before inactive scope state is GC'd
       consecutiveBreaches: 3    # required consecutive triggered rounds
+      degradationPolicy:
+        minDecisionTrafficScale: 0   # 0 disables the degradation low-traffic guard
       chronicPolicy:
         enabled: true           # second path for models that start bad and stay bad
         metric: WAPE            # first implementation supports WAPE/NRMSE/MAE
         aggregator: percentile  # mean | percentile
         percentile: 75          # use 50 to represent median
         threshold: 1.0          # provisional chronic metric threshold
-        minTrafficScale: 1024   # minimum traffic scale before chronic path is considered
+        minDecisionTrafficScale: 1024   # minimum traffic scale before chronic path is considered
+      lowTrafficOverpredictionPolicy:
+        enabled: false
+        maxActualTrafficScale: 1024
+        minPredictedTrafficScale: 4096
+        predictionOvershootRatio: 4.0
     task:
       TID: "nwdaf_fl_training"
       NUM_ROUNDS: 30

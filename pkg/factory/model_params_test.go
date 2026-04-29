@@ -133,6 +133,9 @@ func TestAccuracyMonitorConfig_PolicyDefaults(t *testing.T) {
 	if got := cfg.ZScoreThresholdOrDefault(); got != 3.0 {
 		t.Errorf("ZScoreThresholdOrDefault() = %.1f, want 3.0", got)
 	}
+	if got := cfg.DegradationPolicy.MinDecisionTrafficScaleOrDefault(); got != 0 {
+		t.Errorf("DegradationPolicy.MinDecisionTrafficScaleOrDefault() = %.0f, want 0", got)
+	}
 	if got := cfg.ScopeStateTTLOrDefault(); got != 600 {
 		t.Errorf("ScopeStateTTLOrDefault() = %d, want 600", got)
 	}
@@ -160,6 +163,18 @@ func TestAccuracyMonitorConfig_PolicyDefaults(t *testing.T) {
 	if got := cfg.ChronicPolicy.PercentileOrDefault(); got != 75 {
 		t.Errorf("ChronicPolicy.PercentileOrDefault() = %d, want 75", got)
 	}
+	if cfg.LowTrafficPolicy.EnabledOrDefault() {
+		t.Error("LowTrafficPolicy.EnabledOrDefault() = true, want false")
+	}
+	if got := cfg.LowTrafficPolicy.MaxActualTrafficScaleOrDefault(); got != 1024 {
+		t.Errorf("LowTrafficPolicy.MaxActualTrafficScaleOrDefault() = %.0f, want 1024", got)
+	}
+	if got := cfg.LowTrafficPolicy.MinPredictedTrafficScaleOrDefault(); got != 4096 {
+		t.Errorf("LowTrafficPolicy.MinPredictedTrafficScaleOrDefault() = %.0f, want 4096", got)
+	}
+	if got := cfg.LowTrafficPolicy.PredictionOvershootRatioOrDefault(); got != 4.0 {
+		t.Errorf("LowTrafficPolicy.PredictionOvershootRatioOrDefault() = %.1f, want 4.0", got)
+	}
 }
 
 func TestAccuracyMonitorConfig_PolicyExplicitValues(t *testing.T) {
@@ -176,13 +191,22 @@ func TestAccuracyMonitorConfig_PolicyExplicitValues(t *testing.T) {
 		RequiredHitsInWindow: 4,
 		ScopeStateTTL:        120,
 		ConsecutiveBreaches:  5,
+		DegradationPolicy: &factory.DegradationPolicyConfig{
+			MinDecisionTrafficScale: 512,
+		},
 		ChronicPolicy: &factory.ChronicPolicyConfig{
-			Enabled:         &enabled,
-			Metric:          "nrmse",
-			Aggregator:      "mean",
-			Percentile:      50,
-			Threshold:       1.5,
-			MinTrafficScale: 4096,
+			Enabled:                 &enabled,
+			Metric:                  "nrmse",
+			Aggregator:              "mean",
+			Percentile:              50,
+			Threshold:               1.5,
+			MinDecisionTrafficScale: 4096,
+		},
+		LowTrafficPolicy: &factory.LowTrafficPolicyConfig{
+			Enabled:                  &enabled,
+			MaxActualTrafficScale:    512,
+			MinPredictedTrafficScale: 8192,
+			PredictionOvershootRatio: 6.0,
 		},
 	}
 
@@ -203,6 +227,9 @@ func TestAccuracyMonitorConfig_PolicyExplicitValues(t *testing.T) {
 	}
 	if got := cfg.ZScoreThresholdOrDefault(); got != 2.5 {
 		t.Errorf("ZScoreThresholdOrDefault() = %.1f, want 2.5", got)
+	}
+	if got := cfg.DegradationPolicy.MinDecisionTrafficScaleOrDefault(); got != 512 {
+		t.Errorf("DegradationPolicy.MinDecisionTrafficScaleOrDefault() = %.0f, want 512", got)
 	}
 	if got := cfg.ScopeStateTTLOrDefault(); got != 120 {
 		t.Errorf("ScopeStateTTLOrDefault() = %d, want 120", got)
@@ -235,7 +262,19 @@ func TestAccuracyMonitorConfig_PolicyExplicitValues(t *testing.T) {
 	if got := cfg.ChronicPolicy.ThresholdOrDefault(); got != 1.5 {
 		t.Errorf("ChronicPolicy.ThresholdOrDefault() = %.1f, want 1.5", got)
 	}
-	if got := cfg.ChronicPolicy.MinTrafficScaleOrDefault(); got != 4096 {
-		t.Errorf("ChronicPolicy.MinTrafficScaleOrDefault() = %.0f, want 4096", got)
+	if got := cfg.ChronicPolicy.MinDecisionTrafficScaleOrDefault(); got != 4096 {
+		t.Errorf("ChronicPolicy.MinDecisionTrafficScaleOrDefault() = %.0f, want 4096", got)
+	}
+	if !cfg.LowTrafficPolicy.EnabledOrDefault() {
+		t.Error("LowTrafficPolicy.EnabledOrDefault() = false, want true")
+	}
+	if got := cfg.LowTrafficPolicy.MaxActualTrafficScaleOrDefault(); got != 512 {
+		t.Errorf("LowTrafficPolicy.MaxActualTrafficScaleOrDefault() = %.0f, want 512", got)
+	}
+	if got := cfg.LowTrafficPolicy.MinPredictedTrafficScaleOrDefault(); got != 8192 {
+		t.Errorf("LowTrafficPolicy.MinPredictedTrafficScaleOrDefault() = %.0f, want 8192", got)
+	}
+	if got := cfg.LowTrafficPolicy.PredictionOvershootRatioOrDefault(); got != 6.0 {
+		t.Errorf("LowTrafficPolicy.PredictionOvershootRatioOrDefault() = %.1f, want 6.0", got)
 	}
 }

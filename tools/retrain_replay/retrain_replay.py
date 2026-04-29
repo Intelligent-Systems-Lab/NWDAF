@@ -44,6 +44,8 @@ DEFAULT_FEATURE_ORDER = [
 ]
 DEFAULT_OUTPUT_FIELDS = ["ul_vol", "dl_vol"]
 TRAFFIC_SCALE_METRIC = "__traffic_scale__"
+PREDICTED_TRAFFIC_SCALE_METRIC = "__predicted_traffic_scale__"
+LOW_TRAFFIC_OVERSHOOT_EPSILON_BASE = 1.0
 
 
 def now_utc() -> pd.Timestamp:
@@ -53,6 +55,17 @@ def now_utc() -> pd.Timestamp:
 def console_log(message: str) -> None:
     ts = now_utc().strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"[retrain-replay] {ts} {message}", flush=True)
+
+
+def compose_hit_reason(degradation_hit: bool, chronic_hit: bool, low_traffic_hit: bool) -> str:
+    reasons: list[str] = []
+    if degradation_hit:
+        reasons.append("degradation")
+    if chronic_hit:
+        reasons.append("chronic")
+    if low_traffic_hit:
+        reasons.append("low_traffic_overprediction")
+    return "+".join(reasons) if reasons else "none"
 
 
 def parse_args() -> argparse.Namespace:
@@ -174,6 +187,20 @@ def mean_abs_actual(pairs: list[tuple[int, int, int, int]]) -> float:
     return sum_abs_actual(pairs) / (len(pairs) * 2)
 
 
+def sum_abs_pred(pairs: list[tuple[int, int, int, int]]) -> float:
+    total = 0.0
+    for pred_ul, pred_dl, _, _ in pairs:
+        total += abs(pred_ul)
+        total += abs(pred_dl)
+    return total
+
+
+def mean_abs_pred(pairs: list[tuple[int, int, int, int]]) -> float:
+    if not pairs:
+        return 0.0
+    return sum_abs_pred(pairs) / (len(pairs) * 2)
+
+
 def compute_wape(pairs: list[tuple[int, int, int, int]]) -> float:
     if not pairs:
         return 0.0
@@ -202,19 +229,58 @@ def compute_metrics(pairs: list[tuple[int, int, int, int]]) -> dict[str, float]:
     }
 
 
-class RingBuffer:
+@dataclass
+class PolicyObservation:
+    timestamp: pd.Timestamp
+    sample_count: int = 0
+    traffic_scale: float = 0.0
+    predicted_traffic_scale: float = 0.0
+    metrics: dict[str, float] = field(default_factory=dict)
+
+
+class ObservationBuffer:
     def __init__(self, size: int):
         self.size = max(1, size)
-        self.values: deque[float] = deque(maxlen=self.size)
+        self.observations: deque[PolicyObservation] = deque(maxlen=self.size)
 
-    def add(self, value: float) -> None:
-        self.values.append(float(value))
+    def add(self, observation: PolicyObservation) -> None:
+        self.observations.append(
+            PolicyObservation(
+                timestamp=observation.timestamp,
+                sample_count=observation.sample_count,
+                traffic_scale=observation.traffic_scale,
+                predicted_traffic_scale=observation.predicted_traffic_scale,
+                metrics=dict(observation.metrics),
+            )
+        )
 
     def count(self) -> int:
-        return len(self.values)
+        return len(self.observations)
 
-    def snapshot(self) -> list[float]:
-        return list(self.values)
+    def snapshot(self) -> list[PolicyObservation]:
+        return [
+            PolicyObservation(
+                timestamp=observation.timestamp,
+                sample_count=observation.sample_count,
+                traffic_scale=observation.traffic_scale,
+                predicted_traffic_scale=observation.predicted_traffic_scale,
+                metrics=dict(observation.metrics),
+            )
+            for observation in self.observations
+        ]
+
+    def metric_values(self, metric: str) -> list[float]:
+        values: list[float] = []
+        for observation in self.snapshot():
+            if metric == TRAFFIC_SCALE_METRIC:
+                values.append(float(observation.traffic_scale))
+                continue
+            if metric == PREDICTED_TRAFFIC_SCALE_METRIC:
+                values.append(float(observation.predicted_traffic_scale))
+                continue
+            if metric in observation.metrics:
+                values.append(float(observation.metrics[metric]))
+        return values
 
 
 class HitWindow:
@@ -235,34 +301,58 @@ class HitWindow:
 
 class ScopeState:
     def __init__(self, buffer_size: int, decision_window_size: int):
-        self.metric_buffers: dict[str, RingBuffer] = {}
+        self.recent_observations = ObservationBuffer(buffer_size)
+        self.degradation_reference = ObservationBuffer(buffer_size)
         self.degradation_window = HitWindow(decision_window_size)
         self.chronic_window = HitWindow(decision_window_size)
+        self.low_traffic_window = HitWindow(decision_window_size)
         self.buffer_size = buffer_size
         self.last_update: pd.Timestamp | None = None
 
+    def record_observation(self, observation: PolicyObservation) -> None:
+        self.recent_observations.add(observation)
+        self.last_update = observation.timestamp
+
+    def record_degradation_reference(self, observation: PolicyObservation) -> None:
+        self.degradation_reference.add(observation)
+        self.last_update = observation.timestamp
+
     def record_metric(self, metric: str, value: float, now: pd.Timestamp) -> None:
-        buffer = self.metric_buffers.get(metric)
-        if buffer is None:
-            buffer = RingBuffer(self.buffer_size)
-            self.metric_buffers[metric] = buffer
-        buffer.add(value)
-        self.last_update = now
+        observation = PolicyObservation(timestamp=now)
+        if metric == TRAFFIC_SCALE_METRIC:
+            observation.traffic_scale = value
+        elif metric == PREDICTED_TRAFFIC_SCALE_METRIC:
+            observation.predicted_traffic_scale = value
+        else:
+            observation.metrics[metric] = value
+        self.record_observation(observation)
 
     def values(self, metric: str) -> list[float]:
-        buffer = self.metric_buffers.get(metric)
-        return buffer.snapshot() if buffer else []
+        return self.recent_observations.metric_values(metric)
+
+    def degradation_values(self, metric: str) -> list[float]:
+        return self.degradation_reference.metric_values(metric)
 
     def sample_count(self, metric: str) -> int:
-        buffer = self.metric_buffers.get(metric)
-        return buffer.count() if buffer else 0
+        return len(self.values(metric))
+
+    def degradation_sample_count(self, metric: str) -> int:
+        return len(self.degradation_values(metric))
 
     def mean(self, metric: str) -> float:
         values = self.values(metric)
         return float(np.mean(values)) if values else 0.0
 
+    def degradation_mean(self, metric: str) -> float:
+        values = self.degradation_values(metric)
+        return float(np.mean(values)) if values else 0.0
+
     def std(self, metric: str) -> float:
         values = self.values(metric)
+        return float(np.std(values)) if values else 0.0
+
+    def degradation_std(self, metric: str) -> float:
+        values = self.degradation_values(metric)
         return float(np.std(values)) if values else 0.0
 
     def percentile(self, metric: str, percentile: int) -> float:
@@ -278,9 +368,22 @@ class ScopeState:
     def record_chronic_outcome(self, hit: bool) -> int:
         return self.chronic_window.add(hit)
 
+    def record_low_traffic_outcome(self, hit: bool) -> int:
+        return self.low_traffic_window.add(hit)
+
     def reset_decision_windows(self) -> None:
         self.degradation_window.reset()
         self.chronic_window.reset()
+        self.low_traffic_window.reset()
+
+    def reset_degradation_window(self) -> None:
+        self.degradation_window.reset()
+
+    def reset_chronic_window(self) -> None:
+        self.chronic_window.reset()
+
+    def reset_low_traffic_window(self) -> None:
+        self.low_traffic_window.reset()
 
 
 class MonitorStateStore:
@@ -582,6 +685,7 @@ class ReplayEngine:
         self.required_hits = parse_int(self.acc_cfg.get("requiredHitsInWindow"), 3) or 3
         self.min_samples = parse_int(self.acc_cfg.get("minSamples"), 5) or 5
         self.chronic_cfg = self.acc_cfg.get("chronicPolicy") or {}
+        self.low_traffic_cfg = self.acc_cfg.get("lowTrafficOverpredictionPolicy") or {}
 
         mtlf_cfg = config_value(nw_cfg, "configuration.mtlf", {}) or {}
         self.task_cfg = mtlf_cfg.get("task") or {}
@@ -849,7 +953,6 @@ class ReplayEngine:
         if not matured:
             return
         self.monitor_round_count += 1
-        total_pairs = len(matured)
         grouped: dict[str, list[PredictionRecord]] = {}
         for pred in matured:
             grouped.setdefault(pred.group_id, []).append(pred)
@@ -869,6 +972,7 @@ class ReplayEngine:
                 "windowEnd": max(pred.target_sim_time for pred in preds),
                 "metricsJson": json.dumps({metric: metrics[metric] for metric in self.metrics_to_record if metric in metrics}),
                 "trafficScale": mean_abs_actual(pairs),
+                "predictedTrafficScale": mean_abs_pred(pairs),
             }
             self.monitor_rows.append(report)
             self.event_rows.append(
@@ -881,38 +985,66 @@ class ReplayEngine:
                     "detail": f"samples={len(pairs)} inferenceNum={self.inference_since_last_monitor}",
                 }
             )
-            if total_pairs < self.min_samples or self.retraining_until is not None and round_time < self.retraining_until:
+            if len(pairs) < self.min_samples or self.retraining_until is not None and round_time < self.retraining_until:
                 continue
-            self.evaluate_policy(round_time, scope, metrics, mean_abs_actual(pairs), len(pairs))
+            self.evaluate_policy(
+                round_time,
+                scope,
+                metrics,
+                mean_abs_actual(pairs),
+                mean_abs_pred(pairs),
+                len(pairs),
+            )
         self.inference_since_last_monitor = 0
 
-    def evaluate_policy(self, round_time: pd.Timestamp, scope: str, metrics: dict[str, float], traffic_scale: float, sample_count: int) -> None:
+    def evaluate_policy(
+        self,
+        round_time: pd.Timestamp,
+        scope: str,
+        metrics: dict[str, float],
+        traffic_scale: float,
+        predicted_traffic_scale: float,
+        sample_count: int,
+    ) -> None:
         current = metrics.get(self.primary_metric)
         if current is None:
             return
         state = self.monitor_state.get_or_create_scope(scope, self.buffer_size, self.window_size)
-        history_count = state.sample_count(self.primary_metric)
-        mean = state.mean(self.primary_metric)
-        std = state.std(self.primary_metric)
-        baseline_ready = history_count >= self.min_buffer_samples
+        recent_history_count = state.sample_count(self.primary_metric)
+        recent_baseline_ready = recent_history_count >= self.min_buffer_samples
+        degradation_history_count = state.degradation_sample_count(self.primary_metric)
+        mean = state.degradation_mean(self.primary_metric)
+        std = state.degradation_std(self.primary_metric)
+        degradation_baseline_ready = degradation_history_count >= self.min_buffer_samples
 
-        for metric_name, value in metrics.items():
-            state.record_metric(metric_name, value, round_time)
-        state.record_metric(TRAFFIC_SCALE_METRIC, traffic_scale, round_time)
+        observation = PolicyObservation(
+            timestamp=round_time,
+            sample_count=sample_count,
+            traffic_scale=traffic_scale,
+            predicted_traffic_scale=predicted_traffic_scale,
+            metrics=dict(metrics),
+        )
+        state.record_observation(observation)
 
-        degradation_eligible = current > self.fixed_floor
+        degradation_cfg = self.acc_cfg.get("degradationPolicy") or {}
+        degradation_min_scale = parse_float(degradation_cfg.get("minDecisionTrafficScale"), 0.0) or 0.0
+        degradation_traffic_eligible = traffic_scale >= degradation_min_scale
+        degradation_eligible = current > self.fixed_floor and degradation_traffic_eligible
         zscore = 0.0
         degradation_signal = False
-        if history_count > 0:
+        if degradation_history_count > 0:
             zscore = (current - mean) / max(std, self.min_std)
             degradation_signal = zscore > self.z_threshold
-        degradation_signal_state = "skipped" if not baseline_ready else str(degradation_signal).lower()
+        degradation_signal_state = "skipped" if not degradation_baseline_ready else str(degradation_signal).lower()
 
-        degradation_hit = baseline_ready and degradation_eligible and degradation_signal
-        if baseline_ready:
-            degradation_hits = state.record_degradation_outcome(degradation_hit)
+        degradation_hit = degradation_baseline_ready and degradation_eligible and degradation_signal
+        if degradation_baseline_ready:
+            if degradation_traffic_eligible:
+                degradation_hits = state.record_degradation_outcome(degradation_hit)
+            else:
+                degradation_hits = state.degradation_window.true_count()
         else:
-            state.reset_decision_windows()
+            state.reset_degradation_window()
             degradation_hits = 0
 
         chronic_enabled = bool(self.chronic_cfg.get("enabled", False))
@@ -920,31 +1052,62 @@ class ReplayEngine:
         chronic_aggregator = self.chronic_cfg.get("aggregator") or "percentile"
         chronic_percentile = parse_int(self.chronic_cfg.get("percentile"), 75) or 75
         chronic_threshold = parse_float(self.chronic_cfg.get("threshold"), 1.0) or 1.0
-        chronic_min_scale = parse_float(self.chronic_cfg.get("minTrafficScale"), 1024.0) or 1024.0
+        chronic_min_scale = parse_float(self.chronic_cfg.get("minDecisionTrafficScale"), 1024.0) or 1024.0
         chronic_eligible = False
         chronic_signal = False
         chronic_value = 0.0
+        recent_traffic_scale_mean = state.mean(TRAFFIC_SCALE_METRIC)
         if chronic_enabled:
-            chronic_eligible = state.mean(TRAFFIC_SCALE_METRIC) >= chronic_min_scale
+            chronic_eligible = recent_traffic_scale_mean >= chronic_min_scale
             if state.sample_count(chronic_metric) > 0:
                 if chronic_aggregator == "mean":
                     chronic_value = state.mean(chronic_metric)
                 else:
                     chronic_value = state.percentile(chronic_metric, chronic_percentile)
             chronic_signal = chronic_value > chronic_threshold
-        chronic_signal_state = "skipped" if not baseline_ready else str(chronic_signal).lower()
-        if chronic_enabled and baseline_ready:
-            chronic_hits = state.record_chronic_outcome(chronic_eligible and chronic_signal)
+        chronic_signal_state = "skipped" if not recent_baseline_ready else str(chronic_signal).lower()
+        chronic_hit = chronic_enabled and recent_baseline_ready and chronic_eligible and chronic_signal
+        if chronic_enabled and recent_baseline_ready:
+            chronic_hits = state.record_chronic_outcome(chronic_hit)
         else:
+            if chronic_enabled:
+                state.reset_chronic_window()
             chronic_hits = 0
 
-        hit_reason = "none"
-        if degradation_hit and chronic_enabled and chronic_eligible and chronic_signal:
-            hit_reason = "both"
-        elif degradation_hit:
-            hit_reason = "degradation"
-        elif chronic_enabled and baseline_ready and chronic_eligible and chronic_signal:
-            hit_reason = "chronic"
+        low_traffic_enabled = bool(self.low_traffic_cfg.get("enabled", False))
+        low_traffic_max_actual = parse_float(self.low_traffic_cfg.get("maxActualTrafficScale"), 1024.0) or 1024.0
+        low_traffic_min_predicted = parse_float(self.low_traffic_cfg.get("minPredictedTrafficScale"), 4096.0) or 4096.0
+        low_traffic_ratio = parse_float(self.low_traffic_cfg.get("predictionOvershootRatio"), 4.0) or 4.0
+        if low_traffic_ratio <= 1.0:
+            low_traffic_ratio = 4.0
+        low_traffic_eligible = False
+        low_traffic_signal = False
+        low_traffic_hit = False
+        low_traffic_overshoot_ratio = 0.0
+        if low_traffic_enabled:
+            low_traffic_eligible = traffic_scale <= low_traffic_max_actual
+            overshoot_base = max(traffic_scale, LOW_TRAFFIC_OVERSHOOT_EPSILON_BASE)
+            low_traffic_overshoot_ratio = predicted_traffic_scale / overshoot_base
+            low_traffic_signal = (
+                predicted_traffic_scale >= low_traffic_min_predicted
+                and predicted_traffic_scale >= low_traffic_ratio * overshoot_base
+            )
+        low_traffic_signal_state = "skipped" if not recent_baseline_ready else str(low_traffic_signal).lower()
+        if low_traffic_enabled and recent_baseline_ready:
+            low_traffic_hit = low_traffic_eligible and low_traffic_signal
+            low_traffic_hits = state.record_low_traffic_outcome(low_traffic_hit)
+        else:
+            if low_traffic_enabled:
+                state.reset_low_traffic_window()
+            low_traffic_hits = 0
+
+        should_record_degradation_reference = (
+            sample_count >= self.min_samples and degradation_traffic_eligible and not degradation_signal
+        )
+        if should_record_degradation_reference:
+            state.record_degradation_reference(observation)
+
+        hit_reason = compose_hit_reason(degradation_hit, chronic_hit, low_traffic_hit)
 
         row = {
             "timestamp": round_time,
@@ -957,15 +1120,27 @@ class ReplayEngine:
             "zscore": zscore,
             "degradationEligible": degradation_eligible,
             "degradationSignal": degradation_signal_state,
-            "baselineReady": baseline_ready,
-            "trafficScale": state.mean(TRAFFIC_SCALE_METRIC),
+            "baselineReady": degradation_baseline_ready,
+            "degradationBaselineReady": degradation_baseline_ready,
+            "recentBaselineReady": recent_baseline_ready,
+            "actualTrafficScale": traffic_scale,
+            "recentTrafficScaleMean": recent_traffic_scale_mean,
+            "trafficScale": traffic_scale,
+            "predictedTrafficScale": predicted_traffic_scale,
             "chronicEligible": chronic_eligible,
             "chronicSignal": chronic_signal_state,
             "chronicValue": chronic_value,
+            "lowTrafficEligible": low_traffic_eligible,
+            "lowTrafficSignal": low_traffic_signal_state,
+            "lowTrafficOvershootRatio": low_traffic_overshoot_ratio,
+            "degradationReferenceSamples": degradation_history_count,
+            "recentSamples": recent_history_count,
             "degradationHits": degradation_hits,
             "degradationRequired": self.required_hits,
             "chronicHits": chronic_hits,
             "chronicRequired": self.required_hits,
+            "lowTrafficHits": low_traffic_hits,
+            "lowTrafficRequired": self.required_hits,
             "hitReason": hit_reason,
         }
         self.policy_rows.append(row)
@@ -976,11 +1151,21 @@ class ReplayEngine:
                 "model": self.current_model.key,
                 "scope": scope,
                 "reason": hit_reason,
-                "detail": f"current={current:.4f} zscore={zscore:.4f} degradationHits={degradation_hits}/{self.required_hits} chronicHits={chronic_hits}/{self.required_hits}",
+                "detail": (
+                    f"current={current:.4f} zscore={zscore:.4f} predictedTrafficScale={predicted_traffic_scale:.4f} "
+                    f"lowTrafficOvershootRatio={low_traffic_overshoot_ratio:.4f} "
+                    f"degradationHits={degradation_hits}/{self.required_hits} "
+                    f"chronicHits={chronic_hits}/{self.required_hits} "
+                    f"lowTrafficHits={low_traffic_hits}/{self.required_hits}"
+                ),
             }
         )
 
-        if degradation_hits >= self.required_hits or chronic_hits >= self.required_hits:
+        if (
+            degradation_hits >= self.required_hits
+            or chronic_hits >= self.required_hits
+            or low_traffic_hits >= self.required_hits
+        ):
             self.trigger_retrain(round_time, scope, hit_reason or "unknown")
 
     def select_training_docs(self, trigger_time: pd.Timestamp) -> dict[str, list[dict[str, Any]]]:

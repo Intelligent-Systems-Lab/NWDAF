@@ -187,13 +187,23 @@ func (a *AnlfService) checkModelAccuracy(
 	if minSamples <= 0 {
 		minSamples = 5
 	}
+	eligibleReports := make([]AccuracyReport, 0, len(reports))
+	for _, report := range reports {
+		if report.SampleCount < minSamples {
+			anlfLog.Debugf(
+				"Accuracy scope skipped by minSamples [%s]: scope=%s samples=%d < %d",
+				modelUrl, report.ScopeKey, report.SampleCount, minSamples,
+			)
+			continue
+		}
+		eligibleReports = append(eligibleReports, report)
+	}
+	if len(eligibleReports) > 0 && a.onAccuracyReports != nil {
+		a.onAccuracyReports(modelUrl, eligibleReports, store)
+	}
 	if len(pairs) < minSamples {
 		anlfLog.Debugf("Not enough samples [%s]: %d < %d", modelUrl, len(pairs), minSamples)
 		return
-	}
-
-	if len(reports) > 0 && a.onAccuracyReports != nil {
-		a.onAccuracyReports(modelUrl, reports, store)
 	}
 
 	// Report to MTLF — MTLF decides whether to retrain (TS 23.288 §6.2E)
@@ -432,6 +442,22 @@ func computeMeanAbsActual(pairs []matchedPair) float64 {
 	return computeSumAbsActual(pairs) / float64(len(pairs)*2)
 }
 
+func computeSumAbsPred(pairs []matchedPair) float64 {
+	var sumAbsPred float64
+	for _, p := range pairs {
+		sumAbsPred += math.Abs(float64(p.predUl))
+		sumAbsPred += math.Abs(float64(p.predDl))
+	}
+	return sumAbsPred
+}
+
+func computeMeanAbsPred(pairs []matchedPair) float64 {
+	if len(pairs) == 0 {
+		return 0
+	}
+	return computeSumAbsPred(pairs) / float64(len(pairs)*2)
+}
+
 // computeNRMSE calculates Normalized Root Mean Squared Error across UL and DL channels.
 // RMSE is normalized by the mean absolute actual volume of all channels.
 func computeNRMSE(pairs []matchedPair) float64 {
@@ -507,15 +533,16 @@ func buildAccuracyReports(
 		}
 
 		report := AccuracyReport{
-			ModelURL:     modelURL,
-			ScopeKey:     scopeKey,
-			NwdafSubID:   singleNwdafSubID(acc.nwdafSubIDs),
-			Metrics:      computeAll(acc.pairs),
-			TrafficScale: computeMeanAbsActual(acc.pairs),
-			SampleCount:  len(acc.pairs),
-			InferenceNum: inferenceNum,
-			WindowStart:  acc.windowStart,
-			WindowEnd:    acc.windowEnd,
+			ModelURL:              modelURL,
+			ScopeKey:              scopeKey,
+			NwdafSubID:            singleNwdafSubID(acc.nwdafSubIDs),
+			Metrics:               computeAll(acc.pairs),
+			TrafficScale:          computeMeanAbsActual(acc.pairs),
+			PredictedTrafficScale: computeMeanAbsPred(acc.pairs),
+			SampleCount:           len(acc.pairs),
+			InferenceNum:          inferenceNum,
+			WindowStart:           acc.windowStart,
+			WindowEnd:             acc.windowEnd,
 		}
 		reports = append(reports, report)
 	}

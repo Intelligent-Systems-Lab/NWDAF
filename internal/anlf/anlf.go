@@ -30,15 +30,16 @@ type AnlfService struct {
 // MTLF consumes these per-scope metrics for retrain policy evaluation and
 // CSV/log observability.
 type AccuracyReport struct {
-	ModelURL     string
-	ScopeKey     string
-	NwdafSubID   string
-	Metrics      map[string]float64
-	TrafficScale float64
-	SampleCount  int
-	InferenceNum int
-	WindowStart  time.Time
-	WindowEnd    time.Time
+	ModelURL              string
+	ScopeKey              string
+	NwdafSubID            string
+	Metrics               map[string]float64
+	TrafficScale          float64
+	PredictedTrafficScale float64
+	SampleCount           int
+	InferenceNum          int
+	WindowStart           time.Time
+	WindowEnd             time.Time
 }
 
 // NewAnlfService creates a new AnlfService instance.

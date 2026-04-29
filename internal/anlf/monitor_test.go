@@ -268,6 +268,9 @@ func TestBuildAccuracyReports_PerScope(t *testing.T) {
 	if reports[0].TrafficScale != 150 {
 		t.Fatalf("reports[0].TrafficScale = %.2f, want 150", reports[0].TrafficScale)
 	}
+	if reports[0].PredictedTrafficScale != 165 {
+		t.Fatalf("reports[0].PredictedTrafficScale = %.2f, want 165", reports[0].PredictedTrafficScale)
+	}
 	if reports[0].WindowStart != now.Add(-2*time.Minute) {
 		t.Fatalf("reports[0].WindowStart = %v, want %v", reports[0].WindowStart, now.Add(-2*time.Minute))
 	}
@@ -282,6 +285,9 @@ func TestBuildAccuracyReports_PerScope(t *testing.T) {
 	}
 	if reports[1].TrafficScale != 150 {
 		t.Fatalf("reports[1].TrafficScale = %.2f, want 150", reports[1].TrafficScale)
+	}
+	if reports[1].PredictedTrafficScale != 140 {
+		t.Fatalf("reports[1].PredictedTrafficScale = %.2f, want 140", reports[1].PredictedTrafficScale)
 	}
 }
 
@@ -456,6 +462,81 @@ func TestCheckModelAccuracy_MinSamplesSkipsCallbacks(t *testing.T) {
 	}
 	if reportCalls != 0 {
 		t.Fatalf("report callback calls = %d, want 0", reportCalls)
+	}
+}
+
+func TestCheckModelAccuracy_MinSamplesAppliesPerScope(t *testing.T) {
+	ctx := setupCtx(t)
+	accCfg := setTestMonitorConfig(t, 5)
+	accCfg.MinSamples = 2
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	service := NewAnlfService(testNwdafApp{ctx: cancelCtx})
+	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
+	now := time.Now()
+	targetA1 := now.Add(-50 * time.Second)
+	targetA2 := now.Add(-40 * time.Second)
+	targetB1 := now.Add(-30 * time.Second)
+
+	addGroundTruthRecord(ctx, "sub-a1", "corr-a1", "10.0.0.1", targetA1, 100, 200)
+	addGroundTruthRecord(ctx, "sub-a2", "corr-a2", "10.0.0.2", targetA2, 150, 250)
+	addGroundTruthRecord(ctx, "sub-b1", "corr-b1", "10.0.0.3", targetB1, 300, 400)
+
+	store.AddPrediction(nwdaf_context.PredictionRecord{
+		ModelUrl:    "file:///test/model.pth",
+		PredictedAt: targetA1.Add(-5 * time.Second),
+		TargetTime:  targetA1,
+		PredUlVol:   110,
+		PredDlVol:   210,
+		NwdafSubId:  "sub-a1",
+		ScopeKey:    groupAScopeKey,
+	})
+	store.AddPrediction(nwdaf_context.PredictionRecord{
+		ModelUrl:    "file:///test/model.pth",
+		PredictedAt: targetA2.Add(-5 * time.Second),
+		TargetTime:  targetA2,
+		PredUlVol:   140,
+		PredDlVol:   260,
+		NwdafSubId:  "sub-a2",
+		ScopeKey:    groupAScopeKey,
+	})
+	store.AddPrediction(nwdaf_context.PredictionRecord{
+		ModelUrl:    "file:///test/model.pth",
+		PredictedAt: targetB1.Add(-5 * time.Second),
+		TargetTime:  targetB1,
+		PredUlVol:   330,
+		PredDlVol:   440,
+		NwdafSubId:  "sub-b1",
+		ScopeKey:    "supi:imsi-001",
+	})
+
+	var gotReports []AccuracyReport
+	var deviationCalls int
+	service.SetOnAccuracyReports(func(modelURL string, reports []AccuracyReport, store *nwdaf_context.ModelAccuracyStore) {
+		gotReports = append([]AccuracyReport(nil), reports...)
+	})
+	service.SetOnDeviationReport(func(modelURL string, deviation float64, store *nwdaf_context.ModelAccuracyStore) {
+		deviationCalls++
+	})
+
+	service.checkModelAccuracy("file:///test/model.pth", store, accCfg)
+
+	if len(gotReports) != 1 {
+		t.Fatalf("len(gotReports) = %d, want 1 eligible scope report", len(gotReports))
+	}
+	if gotReports[0].ScopeKey != groupAScopeKey {
+		t.Fatalf("gotReports[0].ScopeKey = %q, want %q", gotReports[0].ScopeKey, groupAScopeKey)
+	}
+	if gotReports[0].SampleCount != 2 {
+		t.Fatalf("gotReports[0].SampleCount = %d, want 2", gotReports[0].SampleCount)
+	}
+	if deviationCalls != 1 {
+		t.Fatalf(
+			"deviation callback calls = %d, want 1 because total matched pairs still satisfy legacy gate",
+			deviationCalls,
+		)
 	}
 }
 
