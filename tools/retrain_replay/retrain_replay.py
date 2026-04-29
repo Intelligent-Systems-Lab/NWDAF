@@ -1101,8 +1101,11 @@ class ReplayEngine:
                 state.reset_low_traffic_window()
             low_traffic_hits = 0
 
+        baseline_not_full = degradation_history_count < self.min_buffer_samples
         should_record_degradation_reference = (
-            sample_count >= self.min_samples and degradation_traffic_eligible and not degradation_signal
+            sample_count >= self.min_samples
+            and degradation_traffic_eligible
+            and (baseline_not_full or not degradation_signal)
         )
         if should_record_degradation_reference:
             state.record_degradation_reference(observation)

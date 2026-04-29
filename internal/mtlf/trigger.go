@@ -196,9 +196,10 @@ func (m *MtlfService) HandleAccuracyReports(
 			scopeState.ResetLowTrafficWindow()
 		}
 
+		baselineNotFull := degradationHistoryCount < minBufferSamples
 		shouldRecordDegradationReference := report.SampleCount >= minSamples &&
 			degradationTrafficEligible &&
-			!degradationSignal
+			(baselineNotFull || !degradationSignal)
 		if shouldRecordDegradationReference {
 			scopeState.RecordDegradationReference(observation)
 		}
