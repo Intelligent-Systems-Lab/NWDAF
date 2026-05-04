@@ -42,6 +42,7 @@ class Inputs:
     trace: Path | None
     log: Path | None
     config: Path | None
+    replay_config: Path | None
     out: Path
 
 
@@ -62,6 +63,7 @@ def discover_inputs(args: argparse.Namespace) -> Inputs:
     trace_dir = args.trace
     log_path = args.log
     config_path = args.config
+    replay_config_path: Path | None = None
 
     if input_dir:
         if not trace_dir:
@@ -79,11 +81,19 @@ def discover_inputs(args: argparse.Namespace) -> Inputs:
             candidate = input_dir / "config.snapshot.yaml"
             if candidate.exists():
                 config_path = candidate
+        for candidate in [
+            input_dir / "config" / "replay_config.yaml",
+            input_dir / "replay_config.yaml",
+        ]:
+            if candidate.exists():
+                replay_config_path = candidate
+                break
 
     return Inputs(
         trace=trace_dir,
         log=log_path,
         config=config_path,
+        replay_config=replay_config_path,
         out=args.out,
     )
 
@@ -639,6 +649,62 @@ def load_trace_dir(path: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame
     return metrics_df, policy_df, events_df, traffic_df
 
 
+def read_cat_transitions(replay_config_path: Path | None) -> list[tuple[int, str]]:
+    """Read analysis.catTransitions from replay_config.yaml.
+
+    Expected format:
+      analysis:
+        catTransitions:
+          - seconds: 1800
+            label: "CAT1→CAT2"
+          - seconds: 3600
+            label: "CAT2→CAT3"
+    """
+    if not replay_config_path or not replay_config_path.exists():
+        return []
+    data = yaml.safe_load(replay_config_path.read_text(encoding="utf-8")) or {}
+    entries = data.get("analysis", {}).get("catTransitions") or []
+    result = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        seconds = parse_int(entry.get("seconds"))
+        if seconds is None:
+            continue
+        label = str(entry.get("label", f"T={seconds}s"))
+        result.append((seconds, label))
+    return result
+
+
+def add_cat_transition_lines(
+    fig: go.Figure,
+    cat_transitions: list[tuple[int, str]],
+    t_start: pd.Timestamp | None,
+) -> None:
+    """Add vertical lines at CAT transition times to a figure."""
+    if not cat_transitions or t_start is None or pd.isna(t_start):
+        return
+    for _, (seconds, label) in enumerate(cat_transitions):
+        ts = t_start + pd.Timedelta(seconds=seconds)
+        if hasattr(ts, "to_pydatetime"):
+            ts = ts.to_pydatetime()
+        fig.add_shape(
+            type="line",
+            x0=ts, x1=ts,
+            y0=0, y1=1,
+            xref="x", yref="paper",
+            line={"color": "#dc2626", "dash": "solid", "width": 1.5},
+        )
+        fig.add_annotation(
+            x=ts, y=1,
+            xref="x", yref="paper",
+            text=label,
+            showarrow=False,
+            yanchor="bottom",
+            font={"color": "#dc2626", "size": 11},
+        )
+
+
 def config_value(cfg: dict[str, Any], path: str, default: Any = None) -> Any:
     cur: Any = cfg
     for part in path.split("."):
@@ -715,7 +781,7 @@ def add_model_scope_label(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def metric_chart(metrics_df: pd.DataFrame, title: str, metric: str | None = None, threshold: float | None = None) -> go.Figure:
+def metric_chart(metrics_df: pd.DataFrame, title: str, metric: str | None = None, threshold: float | None = None, cat_transitions: list | None = None, t_start: pd.Timestamp | None = None) -> go.Figure:
     if metrics_df.empty:
         return empty_figure(title)
     df = metrics_df.copy()
@@ -740,6 +806,7 @@ def metric_chart(metrics_df: pd.DataFrame, title: str, metric: str | None = None
     )
     if threshold is not None:
         fig.add_hline(y=threshold, line_dash="dash", annotation_text="threshold")
+    add_cat_transition_lines(fig, cat_transitions or [], t_start)
     if not metric:
         fig.update_yaxes(matches=None, showticklabels=True)
     fig.update_layout(
@@ -749,7 +816,7 @@ def metric_chart(metrics_df: pd.DataFrame, title: str, metric: str | None = None
     return fig
 
 
-def metric_series_charts(metrics_df: pd.DataFrame, primary_metric: str, fixed_floor: float | None) -> list[go.Figure]:
+def metric_series_charts(metrics_df: pd.DataFrame, primary_metric: str, fixed_floor: float | None, cat_transitions: list | None = None, t_start: pd.Timestamp | None = None) -> list[go.Figure]:
     if metrics_df.empty:
         return [empty_figure("Metric Time Series")]
     metrics = ordered_values(metrics_df, "metric")
@@ -759,6 +826,8 @@ def metric_series_charts(metrics_df: pd.DataFrame, primary_metric: str, fixed_fl
             f"Metric Time Series: {metric}",
             metric,
             fixed_floor if metric == primary_metric else None,
+            cat_transitions=cat_transitions,
+            t_start=t_start,
         )
         for metric in metrics
     ]
@@ -824,7 +893,7 @@ def policy_signal_chart(policy_df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def hits_chart(policy_df: pd.DataFrame) -> go.Figure:
+def hits_chart(policy_df: pd.DataFrame, cat_transitions: list | None = None, t_start: pd.Timestamp | None = None) -> go.Figure:
     if policy_df.empty:
         return empty_figure("Decision Window Hits")
     rows = []
@@ -837,7 +906,7 @@ def hits_chart(policy_df: pd.DataFrame) -> go.Figure:
     if df.empty:
         return empty_figure("Decision Window Hits")
     df = sort_for_chart(df, ["scope", "path", "timestamp"])
-    return px.line(
+    fig = px.line(
         df,
         x="timestamp",
         y="hits",
@@ -846,9 +915,11 @@ def hits_chart(policy_df: pd.DataFrame) -> go.Figure:
         category_orders=category_orders(df, ["scope", "path"]),
         title="Decision Window Hits",
     )
+    add_cat_transition_lines(fig, cat_transitions or [], t_start)
+    return fig
 
 
-def degradation_detail_chart(policy_df: pd.DataFrame, cfg: dict[str, Any]) -> go.Figure:
+def degradation_detail_chart(policy_df: pd.DataFrame, cfg: dict[str, Any], cat_transitions: list | None = None, t_start: pd.Timestamp | None = None) -> go.Figure:
     if policy_df.empty:
         return empty_figure("Degradation Detail")
     df = policy_df.dropna(subset=["current", "mean", "std", "zscore"], how="all")
@@ -899,13 +970,14 @@ def degradation_detail_chart(policy_df: pd.DataFrame, cfg: dict[str, Any]) -> go
     if z_threshold is not None:
         fig.add_hline(y=z_threshold, line_dash="dash", annotation_text="zScoreThreshold", row=2, col=1)
 
+    add_cat_transition_lines(fig, cat_transitions or [], t_start)
     fig.update_yaxes(title_text="metric value", row=1, col=1)
     fig.update_yaxes(title_text="zscore", row=2, col=1)
     fig.update_layout(title="Degradation Detail", height=720, legend_traceorder="grouped")
     return fig
 
 
-def chronic_traffic_scale_chart(policy_df: pd.DataFrame, cfg: dict[str, Any]) -> go.Figure:
+def chronic_traffic_scale_chart(policy_df: pd.DataFrame, cfg: dict[str, Any], cat_transitions: list | None = None, t_start: pd.Timestamp | None = None) -> go.Figure:
     if policy_df.empty:
         return empty_figure("Chronic Traffic Scale")
     scale_col = "recentTrafficScaleMean" if "recentTrafficScaleMean" in policy_df.columns else "trafficScale"
@@ -921,6 +993,7 @@ def chronic_traffic_scale_chart(policy_df: pd.DataFrame, cfg: dict[str, Any]) ->
     min_scale = parse_float(config_value(cfg, "chronicPolicy.minDecisionTrafficScale"))
     if min_scale is not None:
         fig.add_hline(y=min_scale, line_dash="dash", annotation_text="minDecisionTrafficScale")
+    add_cat_transition_lines(fig, cat_transitions or [], t_start)
     fig.update_layout(title="Chronic Traffic Scale", height=420)
     fig.update_yaxes(title_text="trafficScale")
     return fig
@@ -1006,7 +1079,7 @@ def low_traffic_detail_chart(policy_df: pd.DataFrame, cfg: dict[str, Any]) -> go
     return fig
 
 
-def chronic_value_chart(policy_df: pd.DataFrame, cfg: dict[str, Any]) -> go.Figure:
+def chronic_value_chart(policy_df: pd.DataFrame, cfg: dict[str, Any], cat_transitions: list | None = None, t_start: pd.Timestamp | None = None) -> go.Figure:
     if policy_df.empty:
         return empty_figure("Chronic Value")
     df = policy_df.dropna(subset=["chronicValue"])
@@ -1038,6 +1111,7 @@ def chronic_value_chart(policy_df: pd.DataFrame, cfg: dict[str, Any]) -> go.Figu
     chronic_threshold = parse_float(config_value(cfg, "chronicPolicy.threshold"))
     if chronic_threshold is not None:
         fig.add_hline(y=chronic_threshold, line_dash="dot", annotation_text="chronicThreshold")
+    add_cat_transition_lines(fig, cat_transitions or [], t_start)
     fig.update_layout(title="Chronic Value", height=420)
     fig.update_yaxes(title_text="chronicValue")
     return fig
@@ -1126,6 +1200,8 @@ def traffic_timeline_chart(
     policy_df: pd.DataFrame,
     events_df: pd.DataFrame,
     direction: str,
+    cat_transitions: list | None = None,
+    t_start: pd.Timestamp | None = None,
 ) -> go.Figure:
     if traffic_df.empty:
         return empty_figure("Actual vs Predicted Traffic")
@@ -1163,6 +1239,7 @@ def traffic_timeline_chart(
     max_volume = float(long_df["volume"].max()) if not long_df.empty else 0
     add_policy_signal_markers(fig, policy_df, max_volume * 1.08)
     add_lifecycle_markers(fig, events_df, max_volume * 1.16)
+    add_cat_transition_lines(fig, cat_transitions or [], t_start)
     fig.update_yaxes(title_text="volume")
     fig.update_layout(
         title=f"Actual vs Predicted Traffic ({direction})",
@@ -1385,6 +1462,7 @@ def render_report(
     traffic_df: pd.DataFrame,
     model_map: dict[str, str],
     scope_map: dict[str, str],
+    cat_transitions: list | None = None,
 ) -> str:
     summary = make_summary(metrics_df, policy_df, events_df, traffic_df, inputs)
     primary_metric = config_value(cfg, "primaryMetric", "MAE")
@@ -1392,17 +1470,28 @@ def render_report(
     fixed_floor = parse_float(config_value(cfg, "fixedFloor"))
     chronic_threshold = parse_float(config_value(cfg, "chronicPolicy.threshold"))
 
-    metric_figures = metric_series_charts(metrics_df, primary_metric, fixed_floor)
+    # Compute t_start as earliest timestamp across all data frames
+    t_start: pd.Timestamp | None = None
+    for df in [metrics_df, policy_df, events_df, traffic_df]:
+        if not df.empty and "timestamp" in df.columns:
+            ts = df["timestamp"].dropna()
+            if not ts.empty:
+                candidate = ts.min()
+                if t_start is None or candidate < t_start:
+                    t_start = candidate
+
+    ct = cat_transitions or []
+    metric_figures = metric_series_charts(metrics_df, primary_metric, fixed_floor, cat_transitions=ct, t_start=t_start)
     figures = metric_figures + [
-        metric_chart(metrics_df, f"Chronic Metric: {chronic_metric}", chronic_metric, chronic_threshold),
-        degradation_detail_chart(policy_df, cfg),
-        chronic_traffic_scale_chart(policy_df, cfg),
-        chronic_value_chart(policy_df, cfg),
+        metric_chart(metrics_df, f"Chronic Metric: {chronic_metric}", chronic_metric, chronic_threshold, cat_transitions=ct, t_start=t_start),
+        degradation_detail_chart(policy_df, cfg, cat_transitions=ct, t_start=t_start),
+        chronic_traffic_scale_chart(policy_df, cfg, cat_transitions=ct, t_start=t_start),
+        chronic_value_chart(policy_df, cfg, cat_transitions=ct, t_start=t_start),
         low_traffic_detail_chart(policy_df, cfg),
-        traffic_timeline_chart(traffic_df, policy_df, events_df, "UL"),
-        traffic_timeline_chart(traffic_df, policy_df, events_df, "DL"),
+        traffic_timeline_chart(traffic_df, policy_df, events_df, "UL", cat_transitions=ct, t_start=t_start),
+        traffic_timeline_chart(traffic_df, policy_df, events_df, "DL", cat_transitions=ct, t_start=t_start),
         policy_signal_chart(policy_df),
-        hits_chart(policy_df),
+        hits_chart(policy_df, cat_transitions=ct, t_start=t_start),
     ]
     snippets = fig_html(figures)
     metric_count = len(metric_figures)
@@ -1445,6 +1534,7 @@ def main() -> None:
     args = parse_args()
     inputs = discover_inputs(args)
     cfg = read_accuracy_config(inputs.config)
+    cat_transitions = read_cat_transitions(inputs.replay_config)
     if inputs.trace:
         metrics_df, policy_df, events_df, traffic_df = load_trace_dir(inputs.trace)
     else:
@@ -1457,7 +1547,7 @@ def main() -> None:
 
     inputs.out.parent.mkdir(parents=True, exist_ok=True)
     inputs.out.write_text(
-        render_report(inputs, cfg, metrics_df, policy_df, events_df, traffic_df, model_map, scope_map),
+        render_report(inputs, cfg, metrics_df, policy_df, events_df, traffic_df, model_map, scope_map, cat_transitions=cat_transitions),
         encoding="utf-8",
     )
     print(f"Wrote {inputs.out}")

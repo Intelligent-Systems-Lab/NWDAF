@@ -25,6 +25,40 @@ cd ../retrain_analysis
 uv run retrain_report.py --input /path/to/output/replay-test --out /path/to/output/replay-test/report.html
 ```
 
+## Local Initial Training
+
+To train an initial bundle without Daisy/FL, use the local supervised trainer:
+
+```bash
+uv run train_initial_local.py \
+  --dataset-root /path/to/pre_data \
+  --config /path/to/nwdafcfg.yaml \
+  --groups group1 group2 \
+  --cat-duration 1800 \
+  --period 30 \
+  --seq-length 30 \
+  --out /path/to/output/initial_local_cat1_30s
+```
+
+The generated bundle is replay-compatible:
+
+```bash
+uv run retrain_replay.py run \
+  --dataset-root /path/to/pre_data \
+  --config /path/to/nwdafcfg.yaml \
+  --replay-config ./replay_config.yaml \
+  --initial-bundle /path/to/output/initial_local_cat1_30s/bundle \
+  --daisy-example-dir /path/to/daisy/examples/07_MTLF_training \
+  --out /path/to/output/replay-with-local-initial
+```
+
+The trainer writes:
+
+- `bundle/` with `config.json`, `model.npy`, `model.py`, `scaler.pkl`
+- `meta.json` with run configuration and sample counts
+- `train_metrics.json` with train/validation loss history
+- `val_predictions.parquet` with held-out next-slot predictions
+
 ## Notes
 
 - The loader filters invalid `ts < 0` packet rows before slot aggregation.
