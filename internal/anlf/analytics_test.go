@@ -64,6 +64,27 @@ func makeUeCommunicationSub(
 
 // --- tests ---
 
+func TestPredictionTargetTime_StepZeroStartsAtSnappedNow(t *testing.T) {
+	snappedNow := snappedTs(100)
+
+	got := predictionTargetTime(snappedNow, 5, 0)
+
+	if !got.Equal(snappedNow) {
+		t.Fatalf("predictionTargetTime(step=0) = %v, want %v", got, snappedNow)
+	}
+}
+
+func TestPredictionTargetTime_MultiStepAdvancesBySamplingInterval(t *testing.T) {
+	snappedNow := snappedTs(100)
+
+	got := predictionTargetTime(snappedNow, 5, 3)
+	want := snappedTs(115)
+
+	if !got.Equal(want) {
+		t.Fatalf("predictionTargetTime(step=3) = %v, want %v", got, want)
+	}
+}
+
 func TestResolveMonitoringScope_SupisSortedAndCompacted(t *testing.T) {
 	ctx := setupCtx(t)
 	sub := makeUeCommunicationSub("sub-supis", &models.TargetUeInformation{

@@ -181,9 +181,9 @@ func generateMlBasedUeCommunication(
 				store.AddPrediction(nwdaf_context.PredictionRecord{
 					ModelUrl:    mlInfo.ModelUrl,
 					PredictedAt: now,
-					// Target: i-th step ahead from the snapped period boundary,
-					// so TargetTime always aligns with UPF period startTime.
-					TargetTime: snappedNow.Add(time.Duration((i+1)*samplingInterval) * time.Second),
+					// Target: step 0 corresponds to the current snapped interval.
+					// Later steps advance by whole sampling intervals from that slot.
+					TargetTime: predictionTargetTime(snappedNow, samplingInterval, i),
 					PredUlVol:  pred.TrafChar.UlVol,
 					PredDlVol:  pred.TrafChar.DlVol,
 					NwdafSubId: nwdafSubId,
@@ -222,6 +222,13 @@ func getUeCommunicationModelParams() *factory.ModelParams {
 		return cfg.Configuration.Analytics.UeCommunication
 	}
 	return &factory.ModelParams{} // zero value → all helpers return defaults
+}
+
+// predictionTargetTime maps an ML prediction step to the start of its target slot.
+// Step 0 refers to the current snapped interval; later steps advance by full
+// sampling intervals from that boundary.
+func predictionTargetTime(snappedNow time.Time, samplingInterval, step int) time.Time {
+	return snappedNow.Add(time.Duration(step*samplingInterval) * time.Second)
 }
 
 // trafficPoint holds the numeric fields of a single UPF measurement.
