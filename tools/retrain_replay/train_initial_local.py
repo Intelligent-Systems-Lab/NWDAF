@@ -456,13 +456,14 @@ def main() -> None:
     split_stats: list[dict[str, Any]] = []
     for group, frame in group_frames.items():
         split_slot = choose_split_slot(len(frame), args.seq_length, args.train_ratio)
-        train_rows = frame.iloc[:split_slot][feature_order].to_numpy(dtype=np.float32)
-        scaler_rows.append(train_rows)
+        all_rows = frame[feature_order].to_numpy(dtype=np.float32)
+        scaler_rows.append(all_rows)
         split_stats.append({
             "groupId": group,
             "slots": len(frame),
             "splitSlot": split_slot,
-            "trainRows": int(len(train_rows)),
+            "scalerRows": int(len(all_rows)),
+            "trainRows": int(split_slot),
             "valRows": int(len(frame) - split_slot),
         })
 
