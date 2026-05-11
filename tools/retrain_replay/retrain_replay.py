@@ -445,6 +445,8 @@ class GroupReplayData:
 class ModelVersion:
     key: str
     bundle_dir: Path
+    bundle_model_path: Path
+    bundle_scaler_path: Path
     model_id: str
     model: Any
     scaler: Any
@@ -452,6 +454,9 @@ class ModelVersion:
     feature_order: list[str]
     output_fields: list[str]
     source: str
+    daisy_tid: str | None = None
+    daisy_local_model_path: Path | None = None
+    daisy_local_scaler_path: Path | None = None
 
 
 @dataclass
@@ -577,6 +582,12 @@ class DaisyManager:
         endpoint_port = parsed.port or 9887
         log_path = self.out_dir / "daisy_master.log"
         log_file = log_path.open("w", encoding="utf-8")
+        daisy_src_py = self.example_dir.parents[1] / "src" / "py"
+        env = os.environ.copy()
+        existing_pythonpath = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = (
+            f"{daisy_src_py}:{existing_pythonpath}" if existing_pythonpath else str(daisy_src_py)
+        )
         cmd = [
             self.python_bin,
             "master.py",
@@ -592,11 +603,12 @@ class DaisyManager:
         ]
         console_log(
             f"starting daisy master endpoint={self.endpoint} python={self.python_bin} "
-            f"log={log_path}"
+            f"log={log_path} py_path={env['PYTHONPATH']}"
         )
         self.master_proc = subprocess.Popen(
             cmd,
             cwd=self.example_dir,
+            env=env,
             stdout=log_file,
             stderr=subprocess.STDOUT,
             text=True,
@@ -616,10 +628,27 @@ class DaisyManager:
             resp = self.session.post(f"{self.endpoint}/upload_data", json=payload, timeout=self.timeout_sec)
             resp.raise_for_status()
 
-    def publish_task(self, tid: str) -> None:
+    def publish_task(
+        self,
+        tid: str,
+        *,
+        use_fixed_scaler: bool = False,
+        seed_model_path: Path | None = None,
+        seed_scaler_path: Path | None = None,
+    ) -> None:
         payload = json.loads(json.dumps(self.task_cfg))
         payload["TID"] = tid
         payload["CALLBACK_URL"] = self.callback_server.address
+        if use_fixed_scaler:
+            payload["USE_FIXED_SCALER"] = True
+        if seed_model_path is not None:
+            payload["SEED_MODEL_PATH"] = str(seed_model_path)
+        if seed_scaler_path is not None:
+            payload["SEED_SCALER_PATH"] = str(seed_scaler_path)
+        console_log(
+            f"daisy publish_task tid={tid} fixed_scaler={use_fixed_scaler} "
+            f"seed_model={seed_model_path} seed_scaler={seed_scaler_path}"
+        )
         resp = self.session.post(f"{self.endpoint}/publish_task", json=payload, timeout=self.timeout_sec)
         resp.raise_for_status()
 
@@ -689,6 +718,8 @@ class ReplayEngine:
 
         mtlf_cfg = config_value(nw_cfg, "configuration.mtlf", {}) or {}
         self.task_cfg = mtlf_cfg.get("task") or {}
+        self.use_fixed_scaler = bool(config_value(replay_cfg, "daisy.use_fixed_scaler", False))
+        self.enable_continue_learning = bool(config_value(replay_cfg, "daisy.enable_continue_learning", False))
         endpoint = (mtlf_cfg.get("endpoint") or "http://127.0.0.1:9887").rstrip("/")
         self.daisy = DaisyManager(
             daisy_example_dir,
@@ -705,6 +736,7 @@ class ReplayEngine:
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.current_model = self.load_bundle(initial_bundle, "initial", source="initial_bundle")
+        self.fixed_scaler_seed_path = self.current_model.bundle_scaler_path if self.use_fixed_scaler else None
         self.pending_activation: PendingActivation | None = None
         self.retraining_until: pd.Timestamp | None = None
         self.history: dict[str, deque[dict[str, float]]] = {}
@@ -744,6 +776,8 @@ class ReplayEngine:
         return ModelVersion(
             key=version_key,
             bundle_dir=self.current_model.bundle_dir,
+            bundle_model_path=self.current_model.bundle_model_path,
+            bundle_scaler_path=self.current_model.bundle_scaler_path,
             model_id=str(uuid.uuid4()),
             model=self.current_model.model,
             scaler=self.current_model.scaler,
@@ -751,6 +785,9 @@ class ReplayEngine:
             feature_order=list(self.current_model.feature_order),
             output_fields=list(self.current_model.output_fields),
             source=source,
+            daisy_tid=self.current_model.daisy_tid,
+            daisy_local_model_path=self.current_model.daisy_local_model_path,
+            daisy_local_scaler_path=self.current_model.daisy_local_scaler_path,
         )
 
     def load_bundle(self, bundle_dir: Path, version_key: str, source: str) -> ModelVersion:
@@ -787,6 +824,8 @@ class ReplayEngine:
         return ModelVersion(
             key=version_key,
             bundle_dir=bundle_dir,
+            bundle_model_path=model_path,
+            bundle_scaler_path=scaler_path,
             model_id=str(uuid.uuid4()),
             model=model,
             scaler=scaler,
@@ -795,6 +834,18 @@ class ReplayEngine:
             output_fields=output_fields,
             source=source,
         )
+
+    def resolve_seed_model_path(self) -> Path | None:
+        if not self.enable_continue_learning:
+            return None
+        if self.current_model.daisy_local_model_path is not None:
+            return self.current_model.daisy_local_model_path
+        return self.current_model.bundle_model_path
+
+    def resolve_seed_scaler_path(self) -> Path | None:
+        if not self.use_fixed_scaler:
+            return None
+        return self.fixed_scaler_seed_path
 
     def resolve_model_class(self, model_script: Path) -> Any:
         if model_script.exists():
@@ -1184,9 +1235,12 @@ class ReplayEngine:
         tid = uuid.uuid4().hex
         training_docs = self.select_training_docs(trigger_time)
         total_docs = sum(len(docs) for docs in training_docs.values())
+        seed_model_path = self.resolve_seed_model_path()
+        seed_scaler_path = self.resolve_seed_scaler_path()
         self.log_progress(
             f"retrain trigger tid={tid} scope={scope} reason={reason} sim_time={trigger_time.isoformat()} "
-            f"groups={len(training_docs)} docs={total_docs} model={self.current_model.key}"
+            f"groups={len(training_docs)} docs={total_docs} model={self.current_model.key} "
+            f"fixed_scaler={self.use_fixed_scaler} continue_learning={self.enable_continue_learning}"
         )
         event = {
             "timestamp": trigger_time,
@@ -1212,6 +1266,10 @@ class ReplayEngine:
             "swapEffectiveSimTime": None,
             "artifactLocation": None,
             "modelVersionAfter": None,
+            "useFixedScaler": self.use_fixed_scaler,
+            "enableContinueLearning": self.enable_continue_learning,
+            "seedModelPath": str(seed_model_path) if seed_model_path is not None else None,
+            "seedScalerPath": str(seed_scaler_path) if seed_scaler_path is not None else None,
             "status": "mock_pending" if self.skip_daisy else "triggered",
         }
         self.retrain_rows.append(retrain_row)
@@ -1284,7 +1342,15 @@ class ReplayEngine:
         )
         for group_id, docs in training_docs.items():
             self.daisy.upload_notifications(tid, group_id, docs, self.upload_batch_size)
-        self.daisy.publish_task(tid)
+        self.log_progress(
+            f"daisy seed selection tid={tid} seed_model={seed_model_path} seed_scaler={seed_scaler_path}"
+        )
+        self.daisy.publish_task(
+            tid,
+            use_fixed_scaler=self.use_fixed_scaler,
+            seed_model_path=seed_model_path,
+            seed_scaler_path=seed_scaler_path,
+        )
         self.log_progress(f"waiting daisy callback tid={tid}")
         callback_result = self.daisy.wait_for_result(tid)
         if callback_result.get("status") != "success":
@@ -1296,6 +1362,14 @@ class ReplayEngine:
         duration_sec = max(1.0, (wall_end - wall_start).total_seconds())
         effective_sim_time = trigger_time + pd.Timedelta(seconds=duration_sec)
         model_version = self.load_bundle(artifact_dir, f"retrain-{tid[:8]}", source=f"daisy:{tid}")
+        model_version.daisy_tid = tid
+        model_version.daisy_local_model_path = self.daisy_example_dir / "model" / tid / "model.npy"
+        model_version.daisy_local_scaler_path = self.daisy_example_dir / "model" / tid / "scaler.pkl"
+        self.log_progress(
+            f"daisy artifact ready tid={tid} artifact_dir={artifact_dir} "
+            f"local_model={model_version.daisy_local_model_path} "
+            f"local_scaler={model_version.daisy_local_scaler_path}"
+        )
         retrain_row.update(
             {
                 "trainingWallStart": wall_start,

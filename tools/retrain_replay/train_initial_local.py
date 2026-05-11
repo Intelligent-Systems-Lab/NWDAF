@@ -60,6 +60,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--groups", nargs="*", default=["group1", "group2"])
     parser.add_argument("--cat-duration", type=int, default=1800, metavar="SEC",
                         help="Seconds of data to include from t=0 (default: 1800 = CAT1 only)")
+    parser.add_argument("--scaler-cat-duration", type=int, default=None, metavar="SEC",
+                        help="Seconds of data to use for scaler fitting. Defaults to --cat-duration.")
+    parser.add_argument("--scaler-use-full-data", action="store_true",
+                        help="Fit the scaler on all available replay rows instead of limiting it to --cat-duration.")
     parser.add_argument("--period", type=int, default=30, metavar="SEC",
                         help="Slot aggregation period in seconds (default: 30)")
     parser.add_argument("--seq-length", type=int, default=30, metavar="N",
@@ -143,14 +147,14 @@ def load_group_feature_frame(
     dataset_root: Path,
     group: str,
     period: int,
-    cat_duration: int,
+    cat_duration: int | None,
     feature_order: list[str],
 ) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     group_dir = dataset_root / group
     if not group_dir.exists():
         raise FileNotFoundError(f"Group directory not found: {group_dir}")
 
-    max_slots = cat_duration // period
+    max_slots = None if cat_duration is None else cat_duration // period
     group_data = load_group_slots(
         group_dir,
         period,
@@ -427,6 +431,8 @@ def main() -> None:
     args = parse_args()
     if not 0.0 < args.train_ratio < 1.0:
         raise ValueError("--train-ratio must be between 0 and 1")
+    if args.scaler_use_full_data and args.scaler_cat_duration is not None:
+        raise ValueError("--scaler-use-full-data and --scaler-cat-duration cannot be used together")
 
     set_seed(args.seed)
     device = choose_device(args.device)
@@ -436,12 +442,17 @@ def main() -> None:
     model_cfg, infer_cfg = get_model_meta(nw_cfg, args.seq_length)
     feature_order = list(infer_cfg["feature_order"])
     output_fields = list(infer_cfg["output_fields"])
+    scaler_cat_duration = None if args.scaler_use_full_data else args.scaler_cat_duration
+    if scaler_cat_duration is None and not args.scaler_use_full_data:
+        scaler_cat_duration = args.cat_duration
+    scaler_duration_label = "full-data" if scaler_cat_duration is None else f"{scaler_cat_duration}s"
 
     if "ul_vol" not in output_fields or "dl_vol" not in output_fields:
         raise RuntimeError(f"output_fields must contain ul_vol and dl_vol, got {output_fields}")
 
     print(f"[train_initial_local] dataset_root={args.dataset_root.resolve()}")
     print(f"[train_initial_local] groups={args.groups} cat_duration={args.cat_duration}s period={args.period}s seq_length={args.seq_length}")
+    print(f"[train_initial_local] scaler_duration={scaler_duration_label}")
     print(f"[train_initial_local] device={device.type} loss={args.loss} batch_size={args.batch_size} max_epochs={args.max_epochs}")
 
     group_frames: dict[str, pd.DataFrame] = {}
@@ -453,16 +464,36 @@ def main() -> None:
         print(f"[train_initial_local] loaded group={group} slots={len(frame)}")
 
     scaler_rows: list[np.ndarray] = []
+    scaler_row_counts: dict[str, int] = {}
+    scaler_group_stats: list[dict[str, Any]] = []
+    for group in args.groups:
+        scaler_frame, _ = load_group_feature_frame(
+            args.dataset_root.resolve(),
+            group,
+            args.period,
+            scaler_cat_duration,
+            feature_order,
+        )
+        rows = scaler_frame[feature_order].to_numpy(dtype=np.float32)
+        scaler_rows.append(rows)
+        scaler_row_counts[group] = len(rows)
+        scaler_group_stats.append({
+            "groupId": group,
+            "slots": len(scaler_frame),
+        })
+        print(
+            f"[train_initial_local] scaler rows group={group} slots={len(scaler_frame)} "
+            f"source={scaler_duration_label}"
+        )
+
     split_stats: list[dict[str, Any]] = []
     for group, frame in group_frames.items():
         split_slot = choose_split_slot(len(frame), args.seq_length, args.train_ratio)
-        all_rows = frame[feature_order].to_numpy(dtype=np.float32)
-        scaler_rows.append(all_rows)
         split_stats.append({
             "groupId": group,
             "slots": len(frame),
             "splitSlot": split_slot,
-            "scalerRows": int(len(all_rows)),
+            "scalerRows": int(scaler_row_counts[group]),
             "trainRows": int(split_slot),
             "valRows": int(len(frame) - split_slot),
         })
@@ -562,6 +593,8 @@ def main() -> None:
         "outDir": str(args.out.resolve()),
         "groups": args.groups,
         "catDurationSec": args.cat_duration,
+        "scalerCatDurationSec": scaler_cat_duration,
+        "scalerUseFullData": bool(args.scaler_use_full_data),
         "periodSec": args.period,
         "seqLength": args.seq_length,
         "trainRatio": args.train_ratio,
@@ -576,6 +609,7 @@ def main() -> None:
         "seed": args.seed,
         "durationSec": wall_duration,
         "groupSlots": group_stats,
+        "scalerGroupSlots": scaler_group_stats,
         "splitRows": split_stats,
         "sampleStats": sample_stats,
         "trainSamples": int(len(train_dataset)),
