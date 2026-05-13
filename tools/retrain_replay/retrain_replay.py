@@ -405,6 +405,7 @@ class MonitorStateStore:
 @dataclass
 class SlotObservation:
     group_id: str
+    window_index: int
     slot_start: pd.Timestamp
     slot_end: pd.Timestamp
     ul_vol: int
@@ -416,6 +417,7 @@ class SlotObservation:
     ul_pkt_thr: float
     dl_pkt_thr: float
     notification_doc: dict[str, Any]
+    ue_notification_docs: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def feature_row(self) -> dict[str, float]:
@@ -437,8 +439,27 @@ class SlotObservation:
 class GroupReplayData:
     group_id: str
     slots: list[SlotObservation]
+    ue_windows: list["UeWindowObservation"]
     breaking_time_sec: float
     aligned_breaking_time_sec: int
+
+
+@dataclass
+class UeWindowObservation:
+    group_id: str
+    ue_ip: str
+    window_index: int
+    slot_start: pd.Timestamp
+    slot_end: pd.Timestamp
+    ul_vol: int
+    dl_vol: int
+    ul_pkts: int
+    dl_pkts: int
+    ul_thr: float
+    dl_thr: float
+    ul_pkt_thr: float
+    dl_pkt_thr: float
+    notification_doc: dict[str, Any]
 
 
 @dataclass
@@ -697,6 +718,24 @@ class ReplayEngine:
         self.report_period_sec = parse_int(config_value(replay_cfg, "dataset.report_period_sec"), self.sampling_interval) or self.sampling_interval
         self.check_interval_sec = parse_int(config_value(replay_cfg, "monitor.check_interval_sec"), parse_int(config_value(nw_cfg, "configuration.mtlf.accuracyMonitor.checkInterval"), 60)) or 60
         self.maturity_lag_sec = parse_int(config_value(replay_cfg, "monitor.maturity_lag_sec"), self.sampling_interval * 2) or (self.sampling_interval * 2)
+        self.subscription_to_first_urr_delay_sec = (
+            parse_int(
+                config_value(replay_cfg, "dataset.subscription_to_first_urr_delay_sec"),
+                parse_int(config_value(replay_cfg, "dataset.first_urr_delay_sec"), 0),
+            )
+            or 0
+        )
+        raw_group_delays = (
+            config_value(replay_cfg, "dataset.subscription_to_first_urr_delay_sec_by_group", {})
+            or config_value(replay_cfg, "dataset.first_urr_delay_sec_by_group", {})
+            or {}
+        )
+        self.subscription_to_first_urr_delay_sec_by_group: dict[str, int] = {}
+        if isinstance(raw_group_delays, dict):
+            for group_id, raw_value in raw_group_delays.items():
+                parsed = parse_int(raw_value)
+                if parsed is not None:
+                    self.subscription_to_first_urr_delay_sec_by_group[str(group_id)] = parsed
         self.retrain_window_sec = parse_int(config_value(replay_cfg, "retrain.window_sec"), parse_int(config_value(nw_cfg, "configuration.adrf.retrainWindow"), 1800)) or 1800
         self.upload_batch_size = parse_int(config_value(replay_cfg, "retrain.upload_batch_size"), 500) or 500
         self.mock_training_duration_sec = parse_int(config_value(replay_cfg, "retrain.mock_training_duration_sec"), 120) or 120
@@ -713,6 +752,7 @@ class ReplayEngine:
         self.window_size = parse_int(self.acc_cfg.get("decisionWindowSize"), 3) or 3
         self.required_hits = parse_int(self.acc_cfg.get("requiredHitsInWindow"), 3) or 3
         self.min_samples = parse_int(self.acc_cfg.get("minSamples"), 5) or 5
+        self.startup_warmup_sec = parse_int(self.acc_cfg.get("WarmupDuration"), parse_int(self.acc_cfg.get("warmupDuration"), 120)) or 120
         self.chronic_cfg = self.acc_cfg.get("chronicPolicy") or {}
         self.low_traffic_cfg = self.acc_cfg.get("lowTrafficOverpredictionPolicy") or {}
 
@@ -741,9 +781,10 @@ class ReplayEngine:
         self.retraining_until: pd.Timestamp | None = None
         self.history: dict[str, deque[dict[str, float]]] = {}
         self.actual_slots_by_group_time: dict[tuple[str, pd.Timestamp], SlotObservation] = {}
+        self.slot_observations: list[SlotObservation] = []
         self.predictions: list[PredictionRecord] = []
         self.monitor_state = MonitorStateStore()
-        self.inference_since_last_monitor = 0
+        self.inference_since_last_monitor: dict[str, int] = {}
 
         self.slots_rows: list[dict[str, Any]] = []
         self.prediction_rows: list[dict[str, Any]] = []
@@ -755,6 +796,8 @@ class ReplayEngine:
         self.total_live_slots = 0
         self.next_progress_slot = self.progress_every_slots
         self.monitor_round_count = 0
+        self.startup_warmup_done_groups: set[str] = set()
+        self.prediction_target_offset_sec = self.maturity_lag_sec
 
     def log_progress(self, message: str) -> None:
         console_log(message)
@@ -888,7 +931,7 @@ class ReplayEngine:
         dl_pred = int(max(0, np.expm1(unscaled[self.current_model.output_fields.index("dl_vol")])))
 
         predicted_at = slot.slot_end
-        target_time = slot.slot_end
+        target_time = slot.slot_end + pd.Timedelta(seconds=self.prediction_target_offset_sec)
         matured_at = predicted_at + pd.Timedelta(seconds=self.maturity_lag_sec)
         record = PredictionRecord(
             prediction_id=str(uuid.uuid4()),
@@ -931,13 +974,15 @@ class ReplayEngine:
                 "detail": f"group={group_id} target={target_time.isoformat()} ul={ul_pred} dl={dl_pred}",
             }
         )
-        self.inference_since_last_monitor += 1
+        self.inference_since_last_monitor[group_id] = self.inference_since_last_monitor.get(group_id, 0) + 1
 
     def record_slot(self, slot: SlotObservation) -> None:
         self.actual_slots_by_group_time[(slot.group_id, slot.slot_start)] = slot
+        self.slot_observations.append(slot)
         self.slots_rows.append(
             {
                 "simTime": slot.slot_start,
+                "windowIndex": slot.window_index,
                 "groupId": slot.group_id,
                 "slotStart": slot.slot_start,
                 "slotEnd": slot.slot_end,
@@ -985,12 +1030,62 @@ class ReplayEngine:
         )
         self.pending_activation = None
 
-    def consume_mature_predictions(self, round_time: pd.Timestamp) -> list[PredictionRecord]:
+    def lookup_ground_truth_nearest(self, group_id: str, target_time: pd.Timestamp) -> SlotObservation | None:
+        best: SlotObservation | None = None
+        best_diff: pd.Timedelta | None = None
+        tolerance = pd.Timedelta(seconds=self.sampling_interval)
+        for slot in self.slot_observations:
+            if slot.group_id != group_id:
+                continue
+            diff = abs(slot.slot_start - target_time)
+            if diff > tolerance:
+                continue
+            if best_diff is None or diff < best_diff:
+                best = slot
+                best_diff = diff
+        return best
+
+    def delay_for_group(self, group_id: str) -> int:
+        return self.subscription_to_first_urr_delay_sec_by_group.get(
+            group_id, self.subscription_to_first_urr_delay_sec
+        )
+
+    def discard_warmup_predictions(self, group_id: str, warmup_end: pd.Timestamp) -> int:
+        discarded = 0
+        for pred in self.predictions:
+            if pred.consumed or pred.group_id != group_id:
+                continue
+            # Match NWDAF monitor behavior: discard only predictions that have
+            # already matured by warmup end, not every prediction emitted
+            # during warmup.
+            if pred.matured_at_sim_time <= warmup_end:
+                pred.consumed = True
+                discarded += 1
+        if discarded > 0:
+            self.event_rows.append(
+                {
+                    "timestamp": warmup_end,
+                    "eventType": "monitor_warmup_discard",
+                    "model": self.current_model.key,
+                    "scope": f"group:{group_id}",
+                    "reason": None,
+                    "detail": f"discarded_predictions={discarded}",
+                }
+            )
+            self.log_progress(
+                f"monitor warmup discard complete group={group_id} sim_time={warmup_end.isoformat()} "
+                f"discarded_predictions={discarded}"
+            )
+        self.inference_since_last_monitor[group_id] = 0
+        self.startup_warmup_done_groups.add(group_id)
+        return discarded
+
+    def consume_mature_predictions(self, group_id: str, round_time: pd.Timestamp) -> list[PredictionRecord]:
         matured = []
         for pred in self.predictions:
-            if pred.consumed or pred.matured_at_sim_time > round_time:
+            if pred.group_id != group_id or pred.consumed or pred.matured_at_sim_time > round_time:
                 continue
-            actual = self.actual_slots_by_group_time.get((pred.group_id, pred.target_sim_time))
+            actual = self.lookup_ground_truth_nearest(pred.group_id, pred.target_sim_time)
             if actual is None:
                 continue
             pred.consumed = True
@@ -999,45 +1094,46 @@ class ReplayEngine:
             matured.append(pred)
         return matured
 
-    def run_monitor_round(self, round_time: pd.Timestamp) -> None:
-        matured = self.consume_mature_predictions(round_time)
+    def run_monitor_round(self, group_id: str, round_time: pd.Timestamp) -> None:
+        matured = self.consume_mature_predictions(group_id, round_time)
         if not matured:
             return
         self.monitor_round_count += 1
-        grouped: dict[str, list[PredictionRecord]] = {}
-        for pred in matured:
-            grouped.setdefault(pred.group_id, []).append(pred)
-
-        for group_id, preds in grouped.items():
-            scope = f"group:{group_id}"
-            pairs = [(pred.pred_ul, pred.pred_dl, pred.matched_actual_ul or 0, pred.matched_actual_dl or 0) for pred in preds]
-            metrics = compute_metrics(pairs)
-            report = {
-                "simTime": round_time,
-                "modelVersion": self.current_model.key,
-                "scope": scope,
-                "groupId": group_id,
-                "sampleCount": len(pairs),
-                "inferenceNum": self.inference_since_last_monitor,
-                "windowStart": min(pred.target_sim_time for pred in preds),
-                "windowEnd": max(pred.target_sim_time for pred in preds),
-                "metricsJson": json.dumps({metric: metrics[metric] for metric in self.metrics_to_record if metric in metrics}),
-                "trafficScale": mean_abs_actual(pairs),
-                "predictedTrafficScale": mean_abs_pred(pairs),
-            }
-            self.monitor_rows.append(report)
-            self.event_rows.append(
-                {
-                    "timestamp": round_time,
-                    "eventType": "monitor_round",
-                    "model": self.current_model.key,
-                    "scope": scope,
-                    "reason": None,
-                    "detail": f"samples={len(pairs)} inferenceNum={self.inference_since_last_monitor}",
-                }
-            )
-            if len(pairs) < self.min_samples or self.retraining_until is not None and round_time < self.retraining_until:
+        scope = f"group:{group_id}"
+        pairs = [(pred.pred_ul, pred.pred_dl, pred.matched_actual_ul or 0, pred.matched_actual_dl or 0) for pred in matured]
+        metrics = compute_metrics(pairs)
+        report = {
+            "simTime": round_time,
+            "modelVersion": self.current_model.key,
+            "scope": scope,
+            "groupId": group_id,
+            "sampleCount": len(pairs),
+            "inferenceNum": self.inference_since_last_monitor.get(group_id, 0),
+            "windowStart": min(pred.target_sim_time for pred in matured),
+            "windowEnd": max(pred.target_sim_time for pred in matured),
+            "metricsJson": json.dumps({metric: metrics[metric] for metric in self.metrics_to_record if metric in metrics}),
+            "trafficScale": mean_abs_actual(pairs),
+            "predictedTrafficScale": mean_abs_pred(pairs),
+        }
+        self.monitor_rows.append(report)
+        matched_index = {pred.prediction_id: pred for pred in matured}
+        for row in self.prediction_rows:
+            pred = matched_index.get(row["predictionId"])
+            if pred is None:
                 continue
+            row["matchedActualUl"] = pred.matched_actual_ul
+            row["matchedActualDl"] = pred.matched_actual_dl
+        self.event_rows.append(
+            {
+                "timestamp": round_time,
+                "eventType": "monitor_round",
+                "model": self.current_model.key,
+                "scope": scope,
+                "reason": None,
+                "detail": f"samples={len(pairs)} inferenceNum={self.inference_since_last_monitor.get(group_id, 0)}",
+            }
+        )
+        if not (len(pairs) < self.min_samples or self.retraining_until is not None and round_time < self.retraining_until):
             self.evaluate_policy(
                 round_time,
                 scope,
@@ -1046,7 +1142,7 @@ class ReplayEngine:
                 mean_abs_pred(pairs),
                 len(pairs),
             )
-        self.inference_since_last_monitor = 0
+        self.inference_since_last_monitor[group_id] = 0
 
     def evaluate_policy(
         self,
@@ -1225,10 +1321,11 @@ class ReplayEngine:
     def select_training_docs(self, trigger_time: pd.Timestamp) -> dict[str, list[dict[str, Any]]]:
         start = trigger_time - pd.Timedelta(seconds=self.retrain_window_sec)
         selected: dict[str, list[dict[str, Any]]] = {}
-        for row in self.slots_rows:
-            slot_start = row["slotStart"]
+        for slot in self.slot_observations:
+            slot_start = slot.slot_start
             if start <= slot_start <= trigger_time:
-                selected.setdefault(str(row["groupId"]), []).append(json.loads(row["notificationDoc"]))
+                docs = slot.ue_notification_docs or [slot.notification_doc]
+                selected.setdefault(str(slot.group_id), []).extend(json.loads(json.dumps(doc)) for doc in docs)
         return selected
 
     def trigger_retrain(self, trigger_time: pd.Timestamp, scope: str, reason: str) -> None:
@@ -1430,19 +1527,61 @@ class ReplayEngine:
         self.total_live_slots = len(slots)
         self.processed_live_slots = 0
         self.next_progress_slot = self.progress_every_slots
-        next_monitor = slots[0].slot_start + pd.Timedelta(seconds=self.check_interval_sec)
+        first_slot_by_group: dict[str, SlotObservation] = {}
+        for slot in slots:
+            first_slot_by_group.setdefault(slot.group_id, slot)
+
+        startup_warmup_by_group: dict[str, int] = {}
+        monitor_start_by_group: dict[str, pd.Timestamp] = {}
+        warmup_end_by_group: dict[str, pd.Timestamp] = {}
+        warmup_discarded_by_group: dict[str, bool] = {}
+        next_monitor_by_group: dict[str, pd.Timestamp] = {}
+        for group_id in groups:
+            first_slot = first_slot_by_group[group_id]
+            startup_warmup = 0 if group_id in self.startup_warmup_done_groups else self.startup_warmup_sec
+            group_delay = self.delay_for_group(group_id)
+            monitor_start = first_slot.slot_start - pd.Timedelta(seconds=group_delay)
+            warmup_end = monitor_start + pd.Timedelta(seconds=startup_warmup)
+            next_monitor = warmup_end + pd.Timedelta(seconds=self.check_interval_sec)
+            startup_warmup_by_group[group_id] = startup_warmup
+            monitor_start_by_group[group_id] = monitor_start
+            warmup_end_by_group[group_id] = warmup_end
+            warmup_discarded_by_group[group_id] = startup_warmup == 0
+            next_monitor_by_group[group_id] = next_monitor
         self.log_progress(
             f"live replay begin slots={len(slots)} groups={len(groups)} "
             f"range={slots[0].slot_start.isoformat()}..{slots[-1].slot_end.isoformat()} "
-            f"sampling={self.sampling_interval}s check_interval={self.check_interval_sec}s"
+            f"sampling={self.sampling_interval}s check_interval={self.check_interval_sec}s "
+            f"group_schedules={json.dumps({group_id: {'warmupSec': startup_warmup_by_group[group_id], 'firstUrrDelaySec': self.delay_for_group(group_id), 'monitorStart': monitor_start_by_group[group_id].isoformat(), 'nextMonitor': next_monitor_by_group[group_id].isoformat()} for group_id in groups}, ensure_ascii=False)}"
         )
+        batch: list[SlotObservation] = []
+        current_batch_end: pd.Timestamp | None = None
+
+        def flush_batch(batch_slots: list[SlotObservation], batch_end: pd.Timestamp) -> None:
+            if not batch_slots:
+                return
+            for batch_slot in batch_slots:
+                self.maybe_activate_model(batch_slot.slot_start)
+                self.record_slot(batch_slot)
+                self.predict_next(batch_slot.group_id, batch_slot)
+            touched_groups = {batch_slot.group_id for batch_slot in batch_slots}
+            for group_id in touched_groups:
+                if not warmup_discarded_by_group[group_id] and batch_end >= warmup_end_by_group[group_id]:
+                    self.discard_warmup_predictions(group_id, warmup_end_by_group[group_id])
+                    warmup_discarded_by_group[group_id] = True
+            for scheduled_group in groups:
+                while next_monitor_by_group[scheduled_group] <= batch_end:
+                    self.run_monitor_round(scheduled_group, next_monitor_by_group[scheduled_group])
+                    next_monitor_by_group[scheduled_group] += pd.Timedelta(seconds=self.check_interval_sec)
+
         for slot in slots:
-            self.maybe_activate_model(slot.slot_start)
-            self.record_slot(slot)
-            self.predict_next(slot.group_id, slot)
-            while next_monitor <= slot.slot_end:
-                self.run_monitor_round(next_monitor)
-                next_monitor += pd.Timedelta(seconds=self.check_interval_sec)
+            if current_batch_end is None:
+                current_batch_end = slot.slot_end
+            if slot.slot_end != current_batch_end:
+                flush_batch(batch, current_batch_end)
+                batch = []
+                current_batch_end = slot.slot_end
+            batch.append(slot)
             self.processed_live_slots += 1
             if (
                 self.processed_live_slots == 1
@@ -1458,6 +1597,9 @@ class ReplayEngine:
                 while self.processed_live_slots >= self.next_progress_slot:
                     self.next_progress_slot += self.progress_every_slots
 
+        if current_batch_end is not None:
+            flush_batch(batch, current_batch_end)
+
         manifest = {
             "kind": "retrain_replay_trace",
             "createdAt": now_utc().isoformat(),
@@ -1468,6 +1610,8 @@ class ReplayEngine:
                 "reportPeriodSec": self.report_period_sec,
                 "checkIntervalSec": self.check_interval_sec,
                 "maturityLagSec": self.maturity_lag_sec,
+                "subscriptionToFirstUrrDelaySec": self.subscription_to_first_urr_delay_sec,
+                "subscriptionToFirstUrrDelaySecByGroup": self.subscription_to_first_urr_delay_sec_by_group,
                 "retrainWindowSec": self.retrain_window_sec,
                 "mockTrainingDurationSec": self.mock_training_duration_sec,
                 "primaryMetric": self.primary_metric,
@@ -1516,7 +1660,66 @@ def read_group_breaking_time(group_dir: Path, override_sec: float | None) -> flo
     return value if value and value > 0 else 300.0
 
 
-def build_notification_doc(group_id: str, slot_start: pd.Timestamp, slot_end: pd.Timestamp, ul_vol: int, dl_vol: int, ul_pkts: int, dl_pkts: int, ul_thr: float, dl_thr: float, ul_pkt_thr: float, dl_pkt_thr: float, seq: int) -> dict[str, Any]:
+def build_ue_notification_doc(
+    group_id: str,
+    ue_ip: str,
+    slot_start: pd.Timestamp,
+    slot_end: pd.Timestamp,
+    ul_vol: int,
+    dl_vol: int,
+    ul_pkts: int,
+    dl_pkts: int,
+    ul_thr: float,
+    dl_thr: float,
+    ul_pkt_thr: float,
+    dl_pkt_thr: float,
+    seq: int,
+) -> dict[str, Any]:
+    return {
+        "notificationItems": [
+            {
+                "eventType": "USER_DATA_USAGE_MEASURES",
+                "timeStamp": isoformat_utc(slot_end),
+                "ueIpv4Addr": ue_ip,
+                "startTime": isoformat_utc(slot_start),
+                "userDataUsageMeasurements": [
+                    {
+                        "volumeMeasurement": {
+                            "totalVolume": ul_vol + dl_vol,
+                            "ulVolume": ul_vol,
+                            "dlVolume": dl_vol,
+                            "totalNbOfPackets": ul_pkts + dl_pkts,
+                            "ulNbOfPackets": ul_pkts,
+                            "dlNbOfPackets": dl_pkts,
+                        },
+                        "throughputMeasurement": {
+                            "ulThroughput": format_bps(ul_thr),
+                            "dlThroughput": format_bps(dl_thr),
+                            "ulPacketThroughput": format_pps(ul_pkt_thr),
+                            "dlPacketThroughput": format_pps(dl_pkt_thr),
+                        },
+                    }
+                ],
+            }
+        ],
+        "correlationId": f"replay_{group_id}_{ue_ip}_{seq:06d}",
+    }
+
+
+def build_group_notification_doc(
+    group_id: str,
+    slot_start: pd.Timestamp,
+    slot_end: pd.Timestamp,
+    ul_vol: int,
+    dl_vol: int,
+    ul_pkts: int,
+    dl_pkts: int,
+    ul_thr: float,
+    dl_thr: float,
+    ul_pkt_thr: float,
+    dl_pkt_thr: float,
+    seq: int,
+) -> dict[str, Any]:
     return {
         "notificationItems": [
             {
@@ -1548,6 +1751,60 @@ def build_notification_doc(group_id: str, slot_start: pd.Timestamp, slot_end: pd
     }
 
 
+def aggregate_ue_windows(group_id: str, ue_windows: list[UeWindowObservation], report_period_sec: int) -> list[SlotObservation]:
+    grouped: dict[int, list[UeWindowObservation]] = {}
+    for window in ue_windows:
+        grouped.setdefault(window.window_index, []).append(window)
+
+    slots: list[SlotObservation] = []
+    seq = 0
+    for window_index in sorted(grouped):
+        members = grouped[window_index]
+        slot_start = members[0].slot_start
+        slot_end = members[0].slot_end
+        ul_vol = sum(item.ul_vol for item in members)
+        dl_vol = sum(item.dl_vol for item in members)
+        ul_pkts = sum(item.ul_pkts for item in members)
+        dl_pkts = sum(item.dl_pkts for item in members)
+        ul_thr = (ul_vol * 8) / report_period_sec
+        dl_thr = (dl_vol * 8) / report_period_sec
+        ul_pkt_thr = ul_pkts / report_period_sec
+        dl_pkt_thr = dl_pkts / report_period_sec
+        slots.append(
+            SlotObservation(
+                group_id=group_id,
+                window_index=window_index,
+                slot_start=slot_start,
+                slot_end=slot_end,
+                ul_vol=ul_vol,
+                dl_vol=dl_vol,
+                ul_pkts=ul_pkts,
+                dl_pkts=dl_pkts,
+                ul_thr=ul_thr,
+                dl_thr=dl_thr,
+                ul_pkt_thr=ul_pkt_thr,
+                dl_pkt_thr=dl_pkt_thr,
+                notification_doc=build_group_notification_doc(
+                    group_id,
+                    slot_start,
+                    slot_end,
+                    ul_vol,
+                    dl_vol,
+                    ul_pkts,
+                    dl_pkts,
+                    ul_thr,
+                    dl_thr,
+                    ul_pkt_thr,
+                    dl_pkt_thr,
+                    seq,
+                ),
+                ue_notification_docs=[item.notification_doc for item in members],
+            )
+        )
+        seq += 1
+    return slots
+
+
 def load_group_slots(
     group_dir: Path,
     report_period_sec: int,
@@ -1556,10 +1813,10 @@ def load_group_slots(
     use_pseudo_warmstart: bool = True,
     breaking_time_override_sec: float | None = None,
 ) -> GroupReplayData:
-    slots: list[SlotObservation] = []
+    ue_windows: list[UeWindowObservation] = []
     parquet_files = sorted(group_dir.glob("training_packets_run*.parquet"))
-    seq = 0
-    global_time_offset = 0.0
+    ue_offsets: dict[str, float] = {}
+    ue_seq: dict[str, int] = {}
     for parquet_path in parquet_files:
         df = pd.read_parquet(parquet_path, columns=["ts", "direction", "len", "action", "ue_ip"])
         if df.empty:
@@ -1570,78 +1827,87 @@ def load_group_slots(
         df = df[df["timestamp"] >= 0].copy()
         if df.empty:
             continue
-        min_ts = float(df["timestamp"].min())
-        max_ts = float(df["timestamp"].max())
-        df["global_ts"] = (df["timestamp"] - min_ts) + global_time_offset
-        if start_offset_sec > 0:
-            df = df[df["global_ts"] >= start_offset_sec].copy()
-        if df.empty:
-            global_time_offset += max(0.0, (max_ts - min_ts)) + 0.001
-            continue
-        df["slot_index"] = np.floor(df["global_ts"] / report_period_sec).astype(int)
-        grouped = (
-            df.groupby("slot_index", sort=True)
-            .agg(
-                ul_vol=("length", lambda s: int(s[df.loc[s.index, "dir_norm"] == "ul"].sum())),
-                dl_vol=("length", lambda s: int(s[df.loc[s.index, "dir_norm"] == "dl"].sum())),
-                ul_pkts=("dir_norm", lambda s: int((s == "ul").sum())),
-                dl_pkts=("dir_norm", lambda s: int((s == "dl").sum())),
-            )
-            .reset_index()
-        )
-        for _, row in grouped.iterrows():
-            slot_start = pd.to_datetime(int(row["slot_index"]) * report_period_sec, unit="s", utc=True)
-            slot_end = slot_start + pd.Timedelta(seconds=report_period_sec)
-            ul_thr = (int(row["ul_vol"]) * 8) / report_period_sec
-            dl_thr = (int(row["dl_vol"]) * 8) / report_period_sec
-            ul_pkt_thr = int(row["ul_pkts"]) / report_period_sec
-            dl_pkt_thr = int(row["dl_pkts"]) / report_period_sec
-            doc = build_notification_doc(
-                group_dir.name,
-                slot_start,
-                slot_end,
-                int(row["ul_vol"]),
-                int(row["dl_vol"]),
-                int(row["ul_pkts"]),
-                int(row["dl_pkts"]),
-                ul_thr,
-                dl_thr,
-                ul_pkt_thr,
-                dl_pkt_thr,
-                seq,
-            )
-            slots.append(
-                SlotObservation(
-                    group_id=group_dir.name,
-                    slot_start=slot_start,
-                    slot_end=slot_end,
-                    ul_vol=int(row["ul_vol"]),
-                    dl_vol=int(row["dl_vol"]),
-                    ul_pkts=int(row["ul_pkts"]),
-                    dl_pkts=int(row["dl_pkts"]),
-                    ul_thr=ul_thr,
-                    dl_thr=dl_thr,
-                    ul_pkt_thr=ul_pkt_thr,
-                    dl_pkt_thr=dl_pkt_thr,
-                    notification_doc=doc,
+        for ue_ip, ue_df in df.groupby("ue_ip", sort=True):
+            ue_df = ue_df.copy()
+            min_ts = float(ue_df["timestamp"].min())
+            max_ts = float(ue_df["timestamp"].max())
+            offset = ue_offsets.get(str(ue_ip), 0.0)
+            ue_df["global_ts"] = (ue_df["timestamp"] - min_ts) + offset
+            if start_offset_sec > 0:
+                ue_df = ue_df[ue_df["global_ts"] >= start_offset_sec].copy()
+            if not ue_df.empty:
+                ue_df["slot_index"] = np.floor(ue_df["global_ts"] / report_period_sec).astype(int)
+                grouped = (
+                    ue_df.groupby("slot_index", sort=True)
+                    .agg(
+                        ul_vol=("length", lambda s: int(s[ue_df.loc[s.index, "dir_norm"] == "ul"].sum())),
+                        dl_vol=("length", lambda s: int(s[ue_df.loc[s.index, "dir_norm"] == "dl"].sum())),
+                        ul_pkts=("dir_norm", lambda s: int((s == "ul").sum())),
+                        dl_pkts=("dir_norm", lambda s: int((s == "dl").sum())),
+                    )
+                    .reset_index()
                 )
-            )
-            seq += 1
-            if max_slots is not None and len(slots) >= max_slots:
-                breaking_time_sec = read_group_breaking_time(group_dir, breaking_time_override_sec)
-                aligned_breaking = int(math.ceil(breaking_time_sec / report_period_sec) * report_period_sec) if use_pseudo_warmstart else 0
-                return GroupReplayData(
-                    group_id=group_dir.name,
-                    slots=slots,
-                    breaking_time_sec=breaking_time_sec,
-                    aligned_breaking_time_sec=aligned_breaking,
-                )
-        global_time_offset += max(0.0, (max_ts - min_ts)) + 0.001
+                max_slot_index = int(grouped["slot_index"].max()) if not grouped.empty else -1
+                by_slot = grouped.set_index("slot_index").to_dict("index")
+                seq = ue_seq.get(str(ue_ip), 0)
+                for slot_index in range(max_slot_index + 1):
+                    row = by_slot.get(slot_index)
+                    ul_vol = int(row["ul_vol"]) if row else 0
+                    dl_vol = int(row["dl_vol"]) if row else 0
+                    ul_pkts = int(row["ul_pkts"]) if row else 0
+                    dl_pkts = int(row["dl_pkts"]) if row else 0
+                    slot_start = pd.to_datetime(slot_index * report_period_sec, unit="s", utc=True)
+                    slot_end = slot_start + pd.Timedelta(seconds=report_period_sec)
+                    ul_thr = (ul_vol * 8) / report_period_sec
+                    dl_thr = (dl_vol * 8) / report_period_sec
+                    ul_pkt_thr = ul_pkts / report_period_sec
+                    dl_pkt_thr = dl_pkts / report_period_sec
+                    ue_windows.append(
+                        UeWindowObservation(
+                            group_id=group_dir.name,
+                            ue_ip=str(ue_ip),
+                            window_index=int(slot_index),
+                            slot_start=slot_start,
+                            slot_end=slot_end,
+                            ul_vol=ul_vol,
+                            dl_vol=dl_vol,
+                            ul_pkts=ul_pkts,
+                            dl_pkts=dl_pkts,
+                            ul_thr=ul_thr,
+                            dl_thr=dl_thr,
+                            ul_pkt_thr=ul_pkt_thr,
+                            dl_pkt_thr=dl_pkt_thr,
+                            notification_doc=build_ue_notification_doc(
+                                group_dir.name,
+                                str(ue_ip),
+                                slot_start,
+                                slot_end,
+                                ul_vol,
+                                dl_vol,
+                                ul_pkts,
+                                dl_pkts,
+                                ul_thr,
+                                dl_thr,
+                                ul_pkt_thr,
+                                dl_pkt_thr,
+                                seq,
+                            ),
+                        )
+                    )
+                    seq += 1
+                ue_seq[str(ue_ip)] = seq
+            ue_offsets[str(ue_ip)] = offset + max(0.0, (max_ts - min_ts)) + 0.001
     breaking_time_sec = read_group_breaking_time(group_dir, breaking_time_override_sec)
     aligned_breaking = int(math.ceil(breaking_time_sec / report_period_sec) * report_period_sec) if use_pseudo_warmstart else 0
+    slots = aggregate_ue_windows(group_dir.name, ue_windows, report_period_sec)
+    if max_slots is not None:
+        slots = slots[:max_slots]
+        max_slot_end = slots[-1].slot_end if slots else pd.Timestamp(0, unit="s", tz="UTC")
+        ue_windows = [window for window in ue_windows if window.slot_end <= max_slot_end]
     return GroupReplayData(
         group_id=group_dir.name,
         slots=slots,
+        ue_windows=ue_windows,
         breaking_time_sec=breaking_time_sec,
         aligned_breaking_time_sec=aligned_breaking,
     )
@@ -1674,9 +1940,9 @@ def run_command(args: argparse.Namespace) -> None:
             breaking_time_override_sec=breaking_time_override_sec,
         )
         if use_pseudo_warmstart and group_data.aligned_breaking_time_sec > 0:
-            split_time = pd.to_datetime(group_data.aligned_breaking_time_sec, unit="s", utc=True)
-            preload_slots.extend([slot for slot in group_data.slots if slot.slot_start < split_time])
-            live_slots.extend([slot for slot in group_data.slots if slot.slot_start >= split_time])
+            split_window_index = max(0, (group_data.aligned_breaking_time_sec // report_period_sec) - 1)
+            preload_slots.extend([slot for slot in group_data.slots if slot.window_index < split_window_index])
+            live_slots.extend([slot for slot in group_data.slots if slot.window_index >= split_window_index])
         else:
             live_slots.extend(group_data.slots)
     preload_slots.sort(key=lambda slot: (slot.slot_start, slot.group_id))
