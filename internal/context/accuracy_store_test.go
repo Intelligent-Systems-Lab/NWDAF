@@ -41,6 +41,14 @@ func TestModelAccuracyStore_AddPrediction(t *testing.T) {
 	if num != 0 {
 		t.Errorf("GetAndResetInferenceNum() after reset = %d, want 0", num)
 	}
+
+	snapshot := store.SnapshotPredictions()
+	if len(snapshot) != 2 {
+		t.Fatalf("len(SnapshotPredictions()) = %d, want 2", len(snapshot))
+	}
+	if snapshot[0].ID == 0 || snapshot[1].ID == 0 {
+		t.Fatal("SnapshotPredictions() returned prediction with zero ID")
+	}
 }
 
 func TestModelAccuracyStore_PreservesScopeKey(t *testing.T) {
@@ -48,62 +56,117 @@ func TestModelAccuracyStore_PreservesScopeKey(t *testing.T) {
 	scopeKey := "group:group-a"
 
 	store.AddPrediction(PredictionRecord{
-		ModelUrl:    "file:///test/model.pth",
-		PredictedAt: time.Now(),
-		TargetTime:  time.Now().Add(-time.Second),
-		PredUlVol:   100,
-		PredDlVol:   200,
-		NwdafSubId:  "sub-001",
-		ScopeKey:    scopeKey,
+		ModelUrl:       "file:///test/model.pth",
+		PredictedAt:    time.Now(),
+		TargetTime:     time.Now().Add(-time.Second),
+		TargetSlotTime: time.Now().Add(-time.Second),
+		PredUlVol:      100,
+		PredDlVol:      200,
+		NwdafSubId:     "sub-001",
+		ScopeKey:       scopeKey,
 	})
 
-	mature := store.ConsumeMaturePredictions(0)
-	if len(mature) != 1 {
-		t.Fatalf("ConsumeMaturePredictions() returned %d, want 1", len(mature))
+	snapshot := store.SnapshotPredictions()
+	if len(snapshot) != 1 {
+		t.Fatalf("SnapshotPredictions() returned %d, want 1", len(snapshot))
 	}
-	if mature[0].ScopeKey != scopeKey {
-		t.Fatalf("mature[0].ScopeKey = %q, want %q", mature[0].ScopeKey, scopeKey)
+	if snapshot[0].ScopeKey != scopeKey {
+		t.Fatalf("snapshot[0].ScopeKey = %q, want %q", snapshot[0].ScopeKey, scopeKey)
 	}
 }
 
-func TestModelAccuracyStore_ConsumeMaturePredictions(t *testing.T) {
+func TestModelAccuracyStore_ResolvePredictions(t *testing.T) {
 	store := NewModelAccuracyStore("file:///test/model.pth")
 	now := time.Now()
 
 	store.AddPrediction(PredictionRecord{
-		TargetTime: now.Add(-10 * time.Second),
-		PredUlVol:  100,
-		PredDlVol:  200,
+		TargetTime:     now.Add(-10 * time.Second),
+		TargetSlotTime: now.Add(-10 * time.Second),
+		PredUlVol:      100,
+		PredDlVol:      200,
 	})
 
 	store.AddPrediction(PredictionRecord{
-		TargetTime: now.Add(60 * time.Second),
-		PredUlVol:  300,
-		PredDlVol:  400,
+		TargetTime:     now.Add(60 * time.Second),
+		TargetSlotTime: now.Add(60 * time.Second),
+		PredUlVol:      300,
+		PredDlVol:      400,
 	})
 
 	store.AddPrediction(PredictionRecord{
-		TargetTime: now.Add(-5 * time.Second),
-		PredUlVol:  500,
-		PredDlVol:  600,
+		TargetTime:     now.Add(-5 * time.Second),
+		TargetSlotTime: now.Add(-5 * time.Second),
+		PredUlVol:      500,
+		PredDlVol:      600,
 	})
 
-	mature := store.ConsumeMaturePredictions(0)
-	if len(mature) != 2 {
-		t.Fatalf("ConsumeMaturePredictions() returned %d, want 2", len(mature))
+	snapshot := store.SnapshotPredictions()
+	if len(snapshot) != 3 {
+		t.Fatalf("len(SnapshotPredictions()) = %d, want 3", len(snapshot))
 	}
 
-	mature2 := store.ConsumeMaturePredictions(0)
-	if len(mature2) != 0 {
-		t.Errorf("Second ConsumeMaturePredictions() returned %d, want 0", len(mature2))
+	matchedIDs := map[uint64]struct{}{
+		snapshot[0].ID: {},
+	}
+	missedIDs := map[uint64]struct{}{
+		snapshot[1].ID: {},
+		snapshot[2].ID: {},
+	}
+
+	matched, discarded := store.ResolvePredictions(matchedIDs, missedIDs, 2)
+	if matched != 1 {
+		t.Fatalf("ResolvePredictions() matched = %d, want 1", matched)
+	}
+	if discarded != 0 {
+		t.Fatalf("ResolvePredictions() discarded = %d, want 0", discarded)
+	}
+
+	snapshot = store.SnapshotPredictions()
+	if len(snapshot) != 2 {
+		t.Fatalf("len(SnapshotPredictions()) after resolve = %d, want 2", len(snapshot))
+	}
+	for _, pred := range snapshot {
+		if pred.MissCount != 1 {
+			t.Fatalf("pred.MissCount = %d, want 1 after first miss", pred.MissCount)
+		}
+	}
+
+	matched, discarded = store.ResolvePredictions(nil, missedIDs, 2)
+	if matched != 0 {
+		t.Fatalf("second ResolvePredictions() matched = %d, want 0", matched)
+	}
+	if discarded != 2 {
+		t.Fatalf("second ResolvePredictions() discarded = %d, want 2", discarded)
+	}
+	if got := len(store.SnapshotPredictions()); got != 0 {
+		t.Fatalf("len(SnapshotPredictions()) after discard = %d, want 0", got)
 	}
 }
 
-func TestModelAccuracyStore_ConsumeMaturePredictions_Empty(t *testing.T) {
+func TestModelAccuracyStore_DiscardAllPredictions_Empty(t *testing.T) {
 	store := NewModelAccuracyStore("file:///test/model.pth")
-	mature := store.ConsumeMaturePredictions(0)
-	if len(mature) != 0 {
-		t.Errorf("ConsumeMaturePredictions() on empty store returned %d, want 0", len(mature))
+	if discarded := store.DiscardAllPredictions(); discarded != 0 {
+		t.Errorf("DiscardAllPredictions() on empty store returned %d, want 0", discarded)
+	}
+}
+
+func TestModelAccuracyStore_DiscardAllPredictions(t *testing.T) {
+	store := NewModelAccuracyStore("file:///test/model.pth")
+	now := time.Now()
+	store.AddPrediction(PredictionRecord{
+		TargetTime:     now,
+		TargetSlotTime: now,
+	})
+	store.AddPrediction(PredictionRecord{
+		TargetTime:     now.Add(time.Second),
+		TargetSlotTime: now.Add(time.Second),
+	})
+
+	if discarded := store.DiscardAllPredictions(); discarded != 2 {
+		t.Fatalf("DiscardAllPredictions() = %d, want 2", discarded)
+	}
+	if got := len(store.SnapshotPredictions()); got != 0 {
+		t.Fatalf("len(SnapshotPredictions()) after discard = %d, want 0", got)
 	}
 }
 

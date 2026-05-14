@@ -2,6 +2,7 @@ package context
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 )
@@ -9,13 +10,16 @@ import (
 // PredictionRecord stores a prediction for later ground truth comparison
 // Per TS 23.288 §5C: comparing predictions against ground truth data
 type PredictionRecord struct {
-	ModelUrl    string    // Model URL this prediction belongs to
-	PredictedAt time.Time // When prediction was made
-	TargetTime  time.Time // Time the prediction refers to
-	PredUlVol   int64     // Predicted UL volume
-	PredDlVol   int64     // Predicted DL volume
-	NwdafSubId  string    // Subscription that generated this prediction
-	ScopeKey    string    // Canonical monitoring scope snapshotted at prediction time
+	ID             uint64    // Store-assigned unique identifier for pending lifecycle tracking
+	ModelUrl       string    // Model URL this prediction belongs to
+	PredictedAt    time.Time // When prediction was made
+	TargetTime     time.Time // Semantic time the prediction refers to
+	TargetSlotTime time.Time // Slot-aligned time used for pred/actual pairing
+	MissCount      int       // Number of monitor rounds where this prediction did not find ground truth
+	PredUlVol      int64     // Predicted UL volume
+	PredDlVol      int64     // Predicted DL volume
+	NwdafSubId     string    // Subscription that generated this prediction
+	ScopeKey       string    // Canonical monitoring scope snapshotted at prediction time
 }
 
 // ModelAccuracyStore manages prediction records and accuracy state for one model.
@@ -24,6 +28,7 @@ type ModelAccuracyStore struct {
 	mu sync.RWMutex
 
 	modelUrl     string
+	nextID       uint64
 	predictions  []PredictionRecord // Pending predictions awaiting ground truth
 	deviation    float64            // Latest computed model-level deviation for debug/observability
 	inferenceNum int                // Total inferences since last check
@@ -49,28 +54,62 @@ func NewModelAccuracyStore(modelUrl string) *ModelAccuracyStore {
 func (s *ModelAccuracyStore) AddPrediction(record PredictionRecord) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.nextID++
+	record.ID = s.nextID
 	s.predictions = append(s.predictions, record)
 	s.inferenceNum++
 }
 
-// ConsumeMaturePredictions returns predictions where TargetTime+graceAfterTarget < now.
-// graceAfterTarget should be at least 2×samplingInterval so the UPF reporting period
-// has ended and the report has had time to arrive before ground truth is looked up.
-func (s *ModelAccuracyStore) ConsumeMaturePredictions(graceAfterTarget time.Duration) []PredictionRecord {
+// SnapshotPredictions returns a copy of the current pending predictions.
+func (s *ModelAccuracyStore) SnapshotPredictions() []PredictionRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return slices.Clone(s.predictions)
+}
+
+// ResolvePredictions applies one monitor round's matching results.
+// Predictions in matchedIDs are removed. Predictions in missedIDs have MissCount
+// incremented and are discarded once MissCount reaches maxMissCount. Predictions
+// absent from both sets are preserved as-is, which covers records added after the
+// monitor took its snapshot.
+func (s *ModelAccuracyStore) ResolvePredictions(
+	matchedIDs map[uint64]struct{},
+	missedIDs map[uint64]struct{},
+	maxMissCount int,
+) (matchedCount, discardedCount int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	deadline := time.Now().Add(-graceAfterTarget)
-	var mature, pending []PredictionRecord
-	for _, p := range s.predictions {
-		if p.TargetTime.Before(deadline) {
-			mature = append(mature, p)
-		} else {
-			pending = append(pending, p)
-		}
+	if maxMissCount <= 0 {
+		maxMissCount = 1
 	}
-	s.predictions = pending
-	return mature
+
+	updated := make([]PredictionRecord, 0, len(s.predictions))
+	for _, pred := range s.predictions {
+		if _, matched := matchedIDs[pred.ID]; matched {
+			matchedCount++
+			continue
+		}
+		if _, missed := missedIDs[pred.ID]; missed {
+			pred.MissCount++
+			if pred.MissCount >= maxMissCount {
+				discardedCount++
+				continue
+			}
+		}
+		updated = append(updated, pred)
+	}
+	s.predictions = updated
+	return matchedCount, discardedCount
+}
+
+// DiscardAllPredictions clears all pending predictions and returns the number removed.
+func (s *ModelAccuracyStore) DiscardAllPredictions() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := len(s.predictions)
+	s.predictions = nil
+	return n
 }
 
 // UpdateDeviation updates the latest computed deviation value
