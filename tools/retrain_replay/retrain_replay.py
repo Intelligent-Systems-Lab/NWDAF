@@ -488,14 +488,108 @@ class PredictionRecord:
     model_version: str
     model_source: str
     predicted_at_sim_time: pd.Timestamp
+    base_target_sim_time: pd.Timestamp
     target_sim_time: pd.Timestamp
+    target_slot_sim_time: pd.Timestamp
     matured_at_sim_time: pd.Timestamp
     pred_ul: int
     pred_dl: int
     confidence: int
+    miss_count: int = 0
     matched_actual_ul: int | None = None
     matched_actual_dl: int | None = None
-    consumed: bool = False
+    matched_actual_slot_start: pd.Timestamp | None = None
+    resolved_round_index: int | None = None
+    resolved_at_sim_time: pd.Timestamp | None = None
+    discarded: bool = False
+    discard_reason: str | None = None
+
+
+class PendingPredictionStore:
+    def __init__(self) -> None:
+        self.predictions: list[PredictionRecord] = []
+
+    def add_prediction(self, record: PredictionRecord) -> None:
+        self.predictions.append(record)
+
+    def snapshot_predictions(self, group_id: str | None = None) -> list[PredictionRecord]:
+        if group_id is None:
+            return list(self.predictions)
+        return [pred for pred in self.predictions if pred.group_id == group_id]
+
+    def resolve_predictions(
+        self,
+        matched_ids: set[str],
+        missed_ids: set[str],
+        max_miss_count: int,
+        round_index: int,
+        round_time: pd.Timestamp,
+    ) -> tuple[int, int, list[PredictionRecord]]:
+        if max_miss_count <= 0:
+            max_miss_count = 1
+
+        updated: list[PredictionRecord] = []
+        matched_count = 0
+        discarded_count = 0
+        discarded_predictions: list[PredictionRecord] = []
+        for pred in self.predictions:
+            if pred.prediction_id in matched_ids:
+                pred.resolved_round_index = round_index
+                pred.resolved_at_sim_time = round_time
+                matched_count += 1
+                continue
+            if pred.prediction_id in missed_ids:
+                pred.miss_count += 1
+                if pred.miss_count >= max_miss_count:
+                    pred.discarded = True
+                    pred.discard_reason = "max_miss_count"
+                    pred.resolved_round_index = round_index
+                    pred.resolved_at_sim_time = round_time
+                    discarded_count += 1
+                    discarded_predictions.append(pred)
+                    continue
+            updated.append(pred)
+        self.predictions = updated
+        return matched_count, discarded_count, discarded_predictions
+
+    def discard_all_predictions(
+        self,
+        *,
+        group_id: str | None,
+        discard_reason: str,
+        round_time: pd.Timestamp,
+    ) -> list[PredictionRecord]:
+        discarded: list[PredictionRecord] = []
+        updated: list[PredictionRecord] = []
+        for pred in self.predictions:
+            if group_id is not None and pred.group_id != group_id:
+                updated.append(pred)
+                continue
+            pred.discarded = True
+            pred.discard_reason = discard_reason
+            pred.resolved_at_sim_time = round_time
+            discarded.append(pred)
+        self.predictions = updated
+        return discarded
+
+    def discard_predictions_before(
+        self,
+        sim_time: pd.Timestamp,
+        *,
+        discard_reason: str,
+    ) -> list[PredictionRecord]:
+        discarded: list[PredictionRecord] = []
+        updated: list[PredictionRecord] = []
+        for pred in self.predictions:
+            if pred.target_sim_time >= sim_time:
+                updated.append(pred)
+                continue
+            pred.discarded = True
+            pred.discard_reason = discard_reason
+            pred.resolved_at_sim_time = sim_time
+            discarded.append(pred)
+        self.predictions = updated
+        return discarded
 
 
 @dataclass
@@ -503,6 +597,24 @@ class PendingActivation:
     effective_sim_time: pd.Timestamp
     model_version: ModelVersion
     retrain_job: dict[str, Any]
+
+
+@dataclass
+class StartupTimingProfile:
+    group_id: str
+    mode: str
+    first_data_slot_epoch: pd.Timestamp
+    first_target_slot_epoch: pd.Timestamp
+    first_urr_signal_epoch: pd.Timestamp
+    anchor_established_epoch: pd.Timestamp
+    first_visible_inference_epoch: pd.Timestamp
+    subscription_epoch: pd.Timestamp
+    warmup_end_epoch: pd.Timestamp
+    first_monitor_epoch: pd.Timestamp
+    subscription_to_first_visible_inference_sec: int
+    startup_warmup_sec: int
+    prediction_visibility_lag_sec: int
+    component_offsets_sec: dict[str, int] = field(default_factory=dict)
 
 
 class DaisyCallbackServer:
@@ -718,6 +830,8 @@ class ReplayEngine:
         self.report_period_sec = parse_int(config_value(replay_cfg, "dataset.report_period_sec"), self.sampling_interval) or self.sampling_interval
         self.check_interval_sec = parse_int(config_value(replay_cfg, "monitor.check_interval_sec"), parse_int(config_value(nw_cfg, "configuration.mtlf.accuracyMonitor.checkInterval"), 60)) or 60
         self.maturity_lag_sec = parse_int(config_value(replay_cfg, "monitor.maturity_lag_sec"), self.sampling_interval * 2) or (self.sampling_interval * 2)
+        self.startup_timing_cfg = config_value(replay_cfg, "startup_timing", {}) or {}
+        self.startup_timing_mode = str(self.startup_timing_cfg.get("mode") or "legacy_single_offset").strip() or "legacy_single_offset"
         self.subscription_to_first_urr_delay_sec = (
             parse_int(
                 config_value(replay_cfg, "dataset.subscription_to_first_urr_delay_sec"),
@@ -736,6 +850,18 @@ class ReplayEngine:
                 parsed = parse_int(raw_value)
                 if parsed is not None:
                     self.subscription_to_first_urr_delay_sec_by_group[str(group_id)] = parsed
+        self.startup_subscription_to_first_urr_signal_sec = parse_int(
+            self.startup_timing_cfg.get("subscription_to_first_urr_signal_sec"),
+            0,
+        ) or 0
+        self.startup_first_urr_signal_to_anchor_sec = parse_int(
+            self.startup_timing_cfg.get("first_urr_signal_to_anchor_sec"),
+            0,
+        ) or 0
+        self.startup_anchor_to_first_visible_inference_sec = parse_int(
+            self.startup_timing_cfg.get("anchor_to_first_visible_inference_sec"),
+            0,
+        ) or 0
         self.retrain_window_sec = parse_int(config_value(replay_cfg, "retrain.window_sec"), parse_int(config_value(nw_cfg, "configuration.adrf.retrainWindow"), 1800)) or 1800
         self.upload_batch_size = parse_int(config_value(replay_cfg, "retrain.upload_batch_size"), 500) or 500
         self.mock_training_duration_sec = parse_int(config_value(replay_cfg, "retrain.mock_training_duration_sec"), 120) or 120
@@ -782,12 +908,13 @@ class ReplayEngine:
         self.history: dict[str, deque[dict[str, float]]] = {}
         self.actual_slots_by_group_time: dict[tuple[str, pd.Timestamp], SlotObservation] = {}
         self.slot_observations: list[SlotObservation] = []
-        self.predictions: list[PredictionRecord] = []
+        self.prediction_store = PendingPredictionStore()
         self.monitor_state = MonitorStateStore()
         self.inference_since_last_monitor: dict[str, int] = {}
 
         self.slots_rows: list[dict[str, Any]] = []
         self.prediction_rows: list[dict[str, Any]] = []
+        self.prediction_rows_by_id: dict[str, dict[str, Any]] = {}
         self.monitor_rows: list[dict[str, Any]] = []
         self.policy_rows: list[dict[str, Any]] = []
         self.retrain_rows: list[dict[str, Any]] = []
@@ -797,10 +924,83 @@ class ReplayEngine:
         self.next_progress_slot = self.progress_every_slots
         self.monitor_round_count = 0
         self.startup_warmup_done_groups: set[str] = set()
+        self.pending_warmup_discard_counts: dict[str, int] = {}
+        self.pending_warmup_discard_applied_groups: set[str] = set()
         self.prediction_target_offset_sec = self.maturity_lag_sec
+        self.prediction_target_mode = str(
+            config_value(replay_cfg, "monitor.prediction_target_mode", "historical_next_slot")
+        ).strip() or "historical_next_slot"
+        self.startup_profile_by_group: dict[str, StartupTimingProfile] = {}
+        self.prediction_visibility_lag_sec_by_group: dict[str, int] = {}
+        self.scheduled_predictions: list[PredictionRecord] = []
 
     def log_progress(self, message: str) -> None:
         console_log(message)
+
+    def build_startup_timing_profile(
+        self,
+        group_id: str,
+        first_slot: SlotObservation,
+        startup_warmup: int,
+    ) -> StartupTimingProfile:
+        first_data_slot_epoch = first_slot.slot_start
+        first_target_slot_epoch = self.derive_prediction_base_target_time(first_slot)
+
+        if self.startup_timing_mode == "explicit_offsets":
+            subscription_to_first_urr_signal_sec = self.startup_subscription_to_first_urr_signal_sec
+            first_urr_signal_to_anchor_sec = self.startup_first_urr_signal_to_anchor_sec
+            anchor_to_first_visible_inference_sec = self.startup_anchor_to_first_visible_inference_sec
+            component_offsets_sec = {
+                "subscriptionToFirstUrrSignalSec": subscription_to_first_urr_signal_sec,
+                "firstUrrSignalToAnchorSec": first_urr_signal_to_anchor_sec,
+                "anchorToFirstVisibleInferenceSec": anchor_to_first_visible_inference_sec,
+            }
+            subscription_to_first_visible_inference_sec = sum(component_offsets_sec.values())
+            subscription_epoch = first_target_slot_epoch - pd.Timedelta(seconds=subscription_to_first_urr_signal_sec)
+            first_urr_signal_epoch = subscription_epoch + pd.Timedelta(seconds=subscription_to_first_urr_signal_sec)
+            anchor_established_epoch = first_urr_signal_epoch + pd.Timedelta(seconds=first_urr_signal_to_anchor_sec)
+            first_visible_inference_epoch = anchor_established_epoch + pd.Timedelta(
+                seconds=anchor_to_first_visible_inference_sec
+            )
+        else:
+            legacy_delay_sec = self.delay_for_group(group_id)
+            slot_visibility_lag_sec = int((first_slot.slot_end - first_slot.slot_start).total_seconds())
+            component_offsets_sec = {
+                "legacySubscriptionToFirstUrrDelaySec": legacy_delay_sec,
+                "slotVisibilityLagSec": slot_visibility_lag_sec,
+            }
+            subscription_to_first_visible_inference_sec = legacy_delay_sec + slot_visibility_lag_sec
+            first_visible_inference_epoch = first_data_slot_epoch + pd.Timedelta(
+                seconds=subscription_to_first_visible_inference_sec
+            )
+            subscription_epoch = first_visible_inference_epoch - pd.Timedelta(
+                seconds=subscription_to_first_visible_inference_sec
+            )
+            first_urr_signal_epoch = subscription_epoch + pd.Timedelta(seconds=legacy_delay_sec)
+            anchor_established_epoch = first_urr_signal_epoch
+
+        warmup_end_epoch = subscription_epoch + pd.Timedelta(seconds=startup_warmup)
+        first_monitor_epoch = warmup_end_epoch + pd.Timedelta(seconds=self.check_interval_sec)
+        prediction_visibility_lag_sec = max(
+            0,
+            int((first_visible_inference_epoch - first_target_slot_epoch).total_seconds()),
+        )
+        return StartupTimingProfile(
+            group_id=group_id,
+            mode=self.startup_timing_mode,
+            first_data_slot_epoch=first_data_slot_epoch,
+            first_target_slot_epoch=first_target_slot_epoch,
+            first_urr_signal_epoch=first_urr_signal_epoch,
+            anchor_established_epoch=anchor_established_epoch,
+            first_visible_inference_epoch=first_visible_inference_epoch,
+            subscription_epoch=subscription_epoch,
+            warmup_end_epoch=warmup_end_epoch,
+            first_monitor_epoch=first_monitor_epoch,
+            subscription_to_first_visible_inference_sec=subscription_to_first_visible_inference_sec,
+            startup_warmup_sec=startup_warmup,
+            prediction_visibility_lag_sec=prediction_visibility_lag_sec,
+            component_offsets_sec=component_offsets_sec,
+        )
 
     def preload_history(self, slots: list[SlotObservation]) -> None:
         if not slots:
@@ -906,6 +1106,58 @@ class ReplayEngine:
             return getattr(module, "Model", getattr(module, "TCNModel"))
         raise RuntimeError(f"Unable to resolve model class from {model_script}")
 
+    def sync_prediction_row(self, pred: PredictionRecord) -> None:
+        row = self.prediction_rows_by_id.get(pred.prediction_id)
+        if row is None:
+            return
+        row["baseTargetSimTime"] = pred.base_target_sim_time
+        row["targetSlotSimTime"] = pred.target_slot_sim_time
+        row["missCountFinal"] = pred.miss_count
+        row["matchedActualUl"] = pred.matched_actual_ul
+        row["matchedActualDl"] = pred.matched_actual_dl
+        row["matchedActualSlotStart"] = pred.matched_actual_slot_start
+        row["resolvedRoundIndex"] = pred.resolved_round_index
+        row["resolvedAtSimTime"] = pred.resolved_at_sim_time
+        row["discarded"] = pred.discarded
+        row["discardReason"] = pred.discard_reason
+
+    def derive_prediction_base_target_time(self, slot: SlotObservation) -> pd.Timestamp:
+        if self.prediction_target_mode == "legacy_offset":
+            return slot.slot_end + pd.Timedelta(seconds=self.prediction_target_offset_sec)
+        return slot.slot_end
+
+    def derive_prediction_visible_time(self, group_id: str, base_target_time: pd.Timestamp) -> pd.Timestamp:
+        visibility_lag_sec = self.prediction_visibility_lag_sec_by_group.get(group_id, 0)
+        return base_target_time + pd.Timedelta(seconds=visibility_lag_sec)
+
+    def activate_scheduled_predictions(self, boundary: pd.Timestamp, *, inclusive: bool) -> int:
+        activated = 0
+        updated: list[PredictionRecord] = []
+        for pred in self.scheduled_predictions:
+            due = pred.predicted_at_sim_time <= boundary if inclusive else pred.predicted_at_sim_time < boundary
+            if not due:
+                updated.append(pred)
+                continue
+            self.prediction_store.add_prediction(pred)
+            self.event_rows.append(
+                {
+                    "timestamp": pred.predicted_at_sim_time,
+                    "eventType": "prediction_emitted",
+                    "model": pred.model_version,
+                    "scope": pred.scope,
+                    "reason": None,
+                    "detail": (
+                        f"group={pred.group_id} baseTarget={pred.base_target_sim_time.isoformat()} "
+                        f"target={pred.target_sim_time.isoformat()} "
+                        f"targetSlot={pred.target_slot_sim_time.isoformat()} "
+                        f"mode={self.prediction_target_mode} ul={pred.pred_ul} dl={pred.pred_dl}"
+                    ),
+                }
+            )
+            activated += 1
+        self.scheduled_predictions = updated
+        return activated
+
     def predict_next(self, group_id: str, slot: SlotObservation) -> None:
         history = self.history.setdefault(group_id, deque(maxlen=max(self.current_model.input_window, 1)))
         history.append(slot.feature_row)
@@ -930,8 +1182,10 @@ class ReplayEngine:
         ul_pred = int(max(0, np.expm1(unscaled[self.current_model.output_fields.index("ul_vol")])))
         dl_pred = int(max(0, np.expm1(unscaled[self.current_model.output_fields.index("dl_vol")])))
 
-        predicted_at = slot.slot_end
-        target_time = slot.slot_end + pd.Timedelta(seconds=self.prediction_target_offset_sec)
+        base_target_time = self.derive_prediction_base_target_time(slot)
+        predicted_at = self.derive_prediction_visible_time(group_id, base_target_time)
+        target_time = base_target_time
+        target_slot_time = target_time
         matured_at = predicted_at + pd.Timedelta(seconds=self.maturity_lag_sec)
         record = PredictionRecord(
             prediction_id=str(uuid.uuid4()),
@@ -940,40 +1194,41 @@ class ReplayEngine:
             model_version=self.current_model.key,
             model_source=str(self.current_model.bundle_dir),
             predicted_at_sim_time=predicted_at,
+            base_target_sim_time=base_target_time,
             target_sim_time=target_time,
+            target_slot_sim_time=target_slot_time,
             matured_at_sim_time=matured_at,
             pred_ul=ul_pred,
             pred_dl=dl_pred,
             confidence=confidence,
         )
-        self.predictions.append(record)
-        self.prediction_rows.append(
-            {
-                "predictionId": record.prediction_id,
-                "predictedAtSimTime": predicted_at,
-                "targetSimTime": target_time,
-                "groupId": group_id,
-                "scope": record.scope,
-                "modelVersion": record.model_version,
-                "modelSource": record.model_source,
-                "predUl": ul_pred,
-                "predDl": dl_pred,
-                "confidence": confidence,
-                "matchedActualUl": None,
-                "matchedActualDl": None,
-                "maturedAtSimTime": matured_at,
-            }
-        )
-        self.event_rows.append(
-            {
-                "timestamp": predicted_at,
-                "eventType": "prediction_emitted",
-                "model": record.model_version,
-                "scope": record.scope,
-                "reason": None,
-                "detail": f"group={group_id} target={target_time.isoformat()} ul={ul_pred} dl={dl_pred}",
-            }
-        )
+        self.scheduled_predictions.append(record)
+        row = {
+            "predictionId": record.prediction_id,
+            "predictedAtSimTime": predicted_at,
+            "baseTargetSimTime": base_target_time,
+            "targetSimTime": target_time,
+            "targetSlotSimTime": target_slot_time,
+            "groupId": group_id,
+            "scope": record.scope,
+            "modelVersion": record.model_version,
+            "modelSource": record.model_source,
+            "targetMode": self.prediction_target_mode,
+            "predUl": ul_pred,
+            "predDl": dl_pred,
+            "confidence": confidence,
+            "matchedActualUl": None,
+            "matchedActualDl": None,
+            "matchedActualSlotStart": None,
+            "maturedAtSimTime": matured_at,
+            "missCountFinal": 0,
+            "resolvedRoundIndex": None,
+            "resolvedAtSimTime": None,
+            "discarded": False,
+            "discardReason": None,
+        }
+        self.prediction_rows.append(row)
+        self.prediction_rows_by_id[record.prediction_id] = row
         self.inference_since_last_monitor[group_id] = self.inference_since_last_monitor.get(group_id, 0) + 1
 
     def record_slot(self, slot: SlotObservation) -> None:
@@ -1007,9 +1262,12 @@ class ReplayEngine:
             return
         self.current_model = self.pending_activation.model_version
         self.monitor_state = MonitorStateStore()
-        self.predictions = [pred for pred in self.predictions if pred.target_sim_time >= sim_time]
-        for pred in self.predictions:
-            pred.consumed = False
+        discarded_predictions = self.prediction_store.discard_predictions_before(
+            sim_time,
+            discard_reason="model_swap_pending_expired",
+        )
+        for pred in discarded_predictions:
+            self.sync_prediction_row(pred)
         self.retraining_until = None
         job = self.pending_activation.retrain_job
         job["status"] = "activated"
@@ -1021,7 +1279,10 @@ class ReplayEngine:
                 "model": self.current_model.key,
                 "scope": job["scope"],
                 "reason": job["reason"],
-                "detail": f"model swap activated: {self.current_model.key}",
+                "detail": (
+                    f"model swap activated: {self.current_model.key} "
+                    f"discarded_pending_predictions={len(discarded_predictions)}"
+                ),
             }
         )
         self.log_progress(
@@ -1030,78 +1291,90 @@ class ReplayEngine:
         )
         self.pending_activation = None
 
-    def lookup_ground_truth_nearest(self, group_id: str, target_time: pd.Timestamp) -> SlotObservation | None:
-        best: SlotObservation | None = None
-        best_diff: pd.Timedelta | None = None
-        tolerance = pd.Timedelta(seconds=self.sampling_interval)
-        for slot in self.slot_observations:
-            if slot.group_id != group_id:
-                continue
-            diff = abs(slot.slot_start - target_time)
-            if diff > tolerance:
-                continue
-            if best_diff is None or diff < best_diff:
-                best = slot
-                best_diff = diff
-        return best
+    def lookup_ground_truth_slot(self, group_id: str, target_slot_time: pd.Timestamp) -> SlotObservation | None:
+        return self.actual_slots_by_group_time.get((group_id, target_slot_time))
 
     def delay_for_group(self, group_id: str) -> int:
         return self.subscription_to_first_urr_delay_sec_by_group.get(
             group_id, self.subscription_to_first_urr_delay_sec
         )
 
+    def prediction_max_miss_count(self) -> int:
+        sampling_interval = max(self.sampling_interval, 1)
+        check_interval = max(self.check_interval_sec, 1)
+        return max(1, int(math.ceil((2 * sampling_interval) / check_interval)) + 1)
+
     def discard_warmup_predictions(self, group_id: str, warmup_end: pd.Timestamp) -> int:
-        discarded = 0
-        for pred in self.predictions:
-            if pred.consumed or pred.group_id != group_id:
-                continue
-            # Match NWDAF monitor behavior: discard only predictions that have
-            # already matured by warmup end, not every prediction emitted
-            # during warmup.
-            if pred.matured_at_sim_time <= warmup_end:
-                pred.consumed = True
-                discarded += 1
-        if discarded > 0:
-            self.event_rows.append(
-                {
-                    "timestamp": warmup_end,
-                    "eventType": "monitor_warmup_discard",
-                    "model": self.current_model.key,
-                    "scope": f"group:{group_id}",
-                    "reason": None,
-                    "detail": f"discarded_predictions={discarded}",
-                }
-            )
-            self.log_progress(
-                f"monitor warmup discard complete group={group_id} sim_time={warmup_end.isoformat()} "
-                f"discarded_predictions={discarded}"
-            )
+        discarded_predictions = self.prediction_store.discard_all_predictions(
+            group_id=group_id,
+            discard_reason="warmup",
+            round_time=warmup_end,
+        )
+        discarded = len(discarded_predictions)
+        for pred in discarded_predictions:
+            self.sync_prediction_row(pred)
+        self.pending_warmup_discard_counts[group_id] = discarded
+        self.pending_warmup_discard_applied_groups.add(group_id)
+        self.event_rows.append(
+            {
+                "timestamp": warmup_end,
+                "eventType": "monitor_warmup_discard",
+                "model": self.current_model.key,
+                "scope": f"group:{group_id}",
+                "reason": None,
+                "detail": f"discarded_predictions={discarded}",
+            }
+        )
+        self.log_progress(
+            f"monitor warmup discard complete group={group_id} sim_time={warmup_end.isoformat()} "
+            f"discarded_predictions={discarded}"
+        )
         self.inference_since_last_monitor[group_id] = 0
         self.startup_warmup_done_groups.add(group_id)
         return discarded
 
-    def consume_mature_predictions(self, group_id: str, round_time: pd.Timestamp) -> list[PredictionRecord]:
-        matured = []
-        for pred in self.predictions:
-            if pred.group_id != group_id or pred.consumed or pred.matured_at_sim_time > round_time:
-                continue
-            actual = self.lookup_ground_truth_nearest(pred.group_id, pred.target_sim_time)
+    def run_monitor_round(self, group_id: str, round_time: pd.Timestamp) -> None:
+        self.monitor_round_count += 1
+        round_index = self.monitor_round_count
+        scope = f"group:{group_id}"
+        pending = self.prediction_store.snapshot_predictions(group_id)
+        max_miss_count = self.prediction_max_miss_count()
+        matched_predictions: list[PredictionRecord] = []
+        matched_ids: set[str] = set()
+        missed_ids: set[str] = set()
+        for pred in pending:
+            actual = self.lookup_ground_truth_slot(pred.group_id, pred.target_slot_sim_time)
             if actual is None:
+                missed_ids.add(pred.prediction_id)
                 continue
-            pred.consumed = True
             pred.matched_actual_ul = actual.ul_vol
             pred.matched_actual_dl = actual.dl_vol
-            matured.append(pred)
-        return matured
+            pred.matched_actual_slot_start = actual.slot_start
+            pred.resolved_round_index = round_index
+            pred.resolved_at_sim_time = round_time
+            matched_ids.add(pred.prediction_id)
+            matched_predictions.append(pred)
 
-    def run_monitor_round(self, group_id: str, round_time: pd.Timestamp) -> None:
-        matured = self.consume_mature_predictions(group_id, round_time)
-        if not matured:
-            return
-        self.monitor_round_count += 1
-        scope = f"group:{group_id}"
-        pairs = [(pred.pred_ul, pred.pred_dl, pred.matched_actual_ul or 0, pred.matched_actual_dl or 0) for pred in matured]
+        matched_count, discarded_count, discarded_predictions = self.prediction_store.resolve_predictions(
+            matched_ids,
+            missed_ids,
+            max_miss_count,
+            round_index,
+            round_time,
+        )
+        for pred in pending:
+            self.sync_prediction_row(pred)
+
+        pairs = [
+            (pred.pred_ul, pred.pred_dl, pred.matched_actual_ul or 0, pred.matched_actual_dl or 0)
+            for pred in matched_predictions
+        ]
         metrics = compute_metrics(pairs)
+        traffic_scale = mean_abs_actual(pairs)
+        predicted_traffic_scale = mean_abs_pred(pairs)
+        warmup_discard_applied = group_id in self.pending_warmup_discard_applied_groups
+        warmup_discarded_predictions = self.pending_warmup_discard_counts.pop(group_id, 0)
+        self.pending_warmup_discard_applied_groups.discard(group_id)
         report = {
             "simTime": round_time,
             "modelVersion": self.current_model.key,
@@ -1109,28 +1382,61 @@ class ReplayEngine:
             "groupId": group_id,
             "sampleCount": len(pairs),
             "inferenceNum": self.inference_since_last_monitor.get(group_id, 0),
-            "windowStart": min(pred.target_sim_time for pred in matured),
-            "windowEnd": max(pred.target_sim_time for pred in matured),
+            "windowStart": min((pred.target_sim_time for pred in matched_predictions), default=None),
+            "windowEnd": max((pred.target_sim_time for pred in matched_predictions), default=None),
             "metricsJson": json.dumps({metric: metrics[metric] for metric in self.metrics_to_record if metric in metrics}),
-            "trafficScale": mean_abs_actual(pairs),
-            "predictedTrafficScale": mean_abs_pred(pairs),
+            "trafficScale": traffic_scale,
+            "predictedTrafficScale": predicted_traffic_scale,
+            "pendingSnapshotSize": len(pending),
+            "matchedPredictionCount": matched_count,
+            "missedPredictionCount": len(missed_ids),
+            "discardedPredictionCount": discarded_count,
+            "warmupDiscardApplied": warmup_discard_applied,
+            "warmupDiscardedPredictions": warmup_discarded_predictions,
+            "predictionMaxMissCount": max_miss_count,
         }
         self.monitor_rows.append(report)
-        matched_index = {pred.prediction_id: pred for pred in matured}
-        for row in self.prediction_rows:
-            pred = matched_index.get(row["predictionId"])
-            if pred is None:
-                continue
-            row["matchedActualUl"] = pred.matched_actual_ul
-            row["matchedActualDl"] = pred.matched_actual_dl
+        for pred in matched_predictions:
+            self.event_rows.append(
+                {
+                    "timestamp": round_time,
+                    "eventType": "prediction_resolved",
+                    "model": self.current_model.key,
+                    "scope": pred.scope,
+                    "reason": None,
+                    "detail": (
+                        f"predictionId={pred.prediction_id} group={pred.group_id} "
+                        f"targetSlot={pred.target_slot_sim_time.isoformat()} "
+                        f"actualSlot={pred.matched_actual_slot_start.isoformat() if pred.matched_actual_slot_start is not None else 'none'}"
+                    ),
+                }
+            )
+        for pred in discarded_predictions:
+            self.event_rows.append(
+                {
+                    "timestamp": round_time,
+                    "eventType": "prediction_discarded",
+                    "model": self.current_model.key,
+                    "scope": pred.scope,
+                    "reason": pred.discard_reason,
+                    "detail": (
+                        f"predictionId={pred.prediction_id} group={pred.group_id} "
+                        f"targetSlot={pred.target_slot_sim_time.isoformat()} missCount={pred.miss_count}"
+                    ),
+                }
+            )
         self.event_rows.append(
             {
                 "timestamp": round_time,
-                "eventType": "monitor_round",
+                "eventType": "monitor_snapshot",
                 "model": self.current_model.key,
                 "scope": scope,
                 "reason": None,
-                "detail": f"samples={len(pairs)} inferenceNum={self.inference_since_last_monitor.get(group_id, 0)}",
+                "detail": (
+                    f"pending={len(pending)} matched={matched_count} missed={len(missed_ids)} "
+                    f"discarded={discarded_count} samples={len(pairs)} "
+                    f"inferenceNum={self.inference_since_last_monitor.get(group_id, 0)}"
+                ),
             }
         )
         if not (len(pairs) < self.min_samples or self.retraining_until is not None and round_time < self.retraining_until):
@@ -1138,11 +1444,12 @@ class ReplayEngine:
                 round_time,
                 scope,
                 metrics,
-                mean_abs_actual(pairs),
-                mean_abs_pred(pairs),
+                traffic_scale,
+                predicted_traffic_scale,
                 len(pairs),
             )
-        self.inference_since_last_monitor[group_id] = 0
+        if pairs:
+            self.inference_since_last_monitor[group_id] = 0
 
     def evaluate_policy(
         self,
@@ -1532,47 +1839,76 @@ class ReplayEngine:
             first_slot_by_group.setdefault(slot.group_id, slot)
 
         startup_warmup_by_group: dict[str, int] = {}
-        monitor_start_by_group: dict[str, pd.Timestamp] = {}
+        startup_profile_by_group: dict[str, StartupTimingProfile] = {}
         warmup_end_by_group: dict[str, pd.Timestamp] = {}
         warmup_discarded_by_group: dict[str, bool] = {}
         next_monitor_by_group: dict[str, pd.Timestamp] = {}
         for group_id in groups:
             first_slot = first_slot_by_group[group_id]
             startup_warmup = 0 if group_id in self.startup_warmup_done_groups else self.startup_warmup_sec
-            group_delay = self.delay_for_group(group_id)
-            monitor_start = first_slot.slot_start - pd.Timedelta(seconds=group_delay)
-            warmup_end = monitor_start + pd.Timedelta(seconds=startup_warmup)
-            next_monitor = warmup_end + pd.Timedelta(seconds=self.check_interval_sec)
+            startup_profile = self.build_startup_timing_profile(group_id, first_slot, startup_warmup)
+            warmup_end = startup_profile.warmup_end_epoch
+            next_monitor = startup_profile.first_monitor_epoch
             startup_warmup_by_group[group_id] = startup_warmup
-            monitor_start_by_group[group_id] = monitor_start
+            startup_profile_by_group[group_id] = startup_profile
             warmup_end_by_group[group_id] = warmup_end
             warmup_discarded_by_group[group_id] = startup_warmup == 0
             next_monitor_by_group[group_id] = next_monitor
+        self.startup_profile_by_group = dict(startup_profile_by_group)
+        self.prediction_visibility_lag_sec_by_group = {
+            group_id: startup_profile_by_group[group_id].prediction_visibility_lag_sec for group_id in groups
+        }
         self.log_progress(
             f"live replay begin slots={len(slots)} groups={len(groups)} "
             f"range={slots[0].slot_start.isoformat()}..{slots[-1].slot_end.isoformat()} "
             f"sampling={self.sampling_interval}s check_interval={self.check_interval_sec}s "
-            f"group_schedules={json.dumps({group_id: {'warmupSec': startup_warmup_by_group[group_id], 'firstUrrDelaySec': self.delay_for_group(group_id), 'monitorStart': monitor_start_by_group[group_id].isoformat(), 'nextMonitor': next_monitor_by_group[group_id].isoformat()} for group_id in groups}, ensure_ascii=False)}"
+            f"group_schedules={json.dumps({group_id: {'mode': startup_profile_by_group[group_id].mode, 'warmupSec': startup_warmup_by_group[group_id], 'subscriptionToFirstVisibleInferenceSec': startup_profile_by_group[group_id].subscription_to_first_visible_inference_sec, 'predictionVisibilityLagSec': startup_profile_by_group[group_id].prediction_visibility_lag_sec, 'componentOffsetsSec': startup_profile_by_group[group_id].component_offsets_sec, 'subscriptionEpoch': startup_profile_by_group[group_id].subscription_epoch.isoformat(), 'firstUrrSignalEpoch': startup_profile_by_group[group_id].first_urr_signal_epoch.isoformat(), 'anchorEstablishedEpoch': startup_profile_by_group[group_id].anchor_established_epoch.isoformat(), 'firstDataSlotEpoch': startup_profile_by_group[group_id].first_data_slot_epoch.isoformat(), 'firstTargetSlotEpoch': startup_profile_by_group[group_id].first_target_slot_epoch.isoformat(), 'firstVisibleInferenceEpoch': startup_profile_by_group[group_id].first_visible_inference_epoch.isoformat(), 'warmupEnd': warmup_end_by_group[group_id].isoformat(), 'firstMonitor': next_monitor_by_group[group_id].isoformat()} for group_id in groups}, ensure_ascii=False)}"
         )
         batch: list[SlotObservation] = []
         current_batch_end: pd.Timestamp | None = None
 
+        def advance_simulation(boundary: pd.Timestamp, *, inclusive: bool) -> None:
+            def due(event_time: pd.Timestamp) -> bool:
+                return event_time <= boundary if inclusive else event_time < boundary
+
+            while True:
+                next_event_time: pd.Timestamp | None = None
+                if self.scheduled_predictions:
+                    earliest_prediction_time = min(pred.predicted_at_sim_time for pred in self.scheduled_predictions)
+                    if due(earliest_prediction_time):
+                        next_event_time = earliest_prediction_time
+                for scheduled_group in groups:
+                    warmup_end = warmup_end_by_group[scheduled_group]
+                    if not warmup_discarded_by_group[scheduled_group] and due(warmup_end):
+                        if next_event_time is None or warmup_end < next_event_time:
+                            next_event_time = warmup_end
+                    next_monitor = next_monitor_by_group[scheduled_group]
+                    if due(next_monitor):
+                        if next_event_time is None or next_monitor < next_event_time:
+                            next_event_time = next_monitor
+                if next_event_time is None:
+                    return
+
+                self.activate_scheduled_predictions(next_event_time, inclusive=True)
+                for scheduled_group in groups:
+                    warmup_end = warmup_end_by_group[scheduled_group]
+                    if not warmup_discarded_by_group[scheduled_group] and warmup_end == next_event_time:
+                        self.discard_warmup_predictions(scheduled_group, warmup_end)
+                        warmup_discarded_by_group[scheduled_group] = True
+                for scheduled_group in groups:
+                    while next_monitor_by_group[scheduled_group] == next_event_time:
+                        self.run_monitor_round(scheduled_group, next_monitor_by_group[scheduled_group])
+                        next_monitor_by_group[scheduled_group] += pd.Timedelta(seconds=self.check_interval_sec)
+
         def flush_batch(batch_slots: list[SlotObservation], batch_end: pd.Timestamp) -> None:
             if not batch_slots:
                 return
+            advance_simulation(batch_end, inclusive=False)
             for batch_slot in batch_slots:
                 self.maybe_activate_model(batch_slot.slot_start)
                 self.record_slot(batch_slot)
                 self.predict_next(batch_slot.group_id, batch_slot)
-            touched_groups = {batch_slot.group_id for batch_slot in batch_slots}
-            for group_id in touched_groups:
-                if not warmup_discarded_by_group[group_id] and batch_end >= warmup_end_by_group[group_id]:
-                    self.discard_warmup_predictions(group_id, warmup_end_by_group[group_id])
-                    warmup_discarded_by_group[group_id] = True
-            for scheduled_group in groups:
-                while next_monitor_by_group[scheduled_group] <= batch_end:
-                    self.run_monitor_round(scheduled_group, next_monitor_by_group[scheduled_group])
-                    next_monitor_by_group[scheduled_group] += pd.Timedelta(seconds=self.check_interval_sec)
+            advance_simulation(batch_end, inclusive=True)
 
         for slot in slots:
             if current_batch_end is None:
@@ -1610,6 +1946,10 @@ class ReplayEngine:
                 "reportPeriodSec": self.report_period_sec,
                 "checkIntervalSec": self.check_interval_sec,
                 "maturityLagSec": self.maturity_lag_sec,
+                "startupTimingMode": self.startup_timing_mode,
+                "startupTiming": self.startup_timing_cfg,
+                "predictionTargetMode": self.prediction_target_mode,
+                "predictionTargetOffsetSec": self.prediction_target_offset_sec,
                 "subscriptionToFirstUrrDelaySec": self.subscription_to_first_urr_delay_sec,
                 "subscriptionToFirstUrrDelaySecByGroup": self.subscription_to_first_urr_delay_sec_by_group,
                 "retrainWindowSec": self.retrain_window_sec,
