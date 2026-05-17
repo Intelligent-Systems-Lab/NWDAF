@@ -71,7 +71,7 @@ configuration:
       enabled: true            # Trigger retraining on accuracy degradation
       checkInterval: 90         # seconds between accuracy checks
       minSamples: 2             # keep testbed margin; do not require the theoretical max slots per round
-      warmupDuration: 155       # seconds to skip checks after start (model cold-start)
+      warmupDuration: 20        # seconds to skip checks after start (model cold-start)
       metricsToRecord:
         - sMAPE
         - MAE
@@ -83,7 +83,7 @@ configuration:
       minBufferSamples: 5       # samples required before enabling z-score gate
       minStd: 0.14              # floor on std to avoid unstable z-scores
       fixedFloor: 0.05          # degradation eligibility floor in primary metric space
-      zScoreThreshold: 1.5      # relative anomaly threshold
+      zScoreThreshold: 1.3      # relative anomaly threshold
       decisionWindowSize: 5     # evaluate the latest M decision rounds
       requiredHitsInWindow: 3   # require N hits inside the latest M rounds
       scopeStateTTL: 600        # seconds before inactive scope state is GC'd
@@ -105,8 +105,9 @@ configuration:
     task:
       TID: "nwdaf_fl_training"
       NUM_ROUNDS: 30
-      ES_PATIENCE: 5    # early stopping: halt after N rounds without val loss improvement
-      LR_PATIENCE: 3    # reduce LR by 0.5x after N rounds without improvement
+      ES_PATIENCE: 2    # early stopping: halt after N rounds without val loss improvement
+      LR_PATIENCE: 2    # reduce LR by 0.5x after N rounds without improvement
+      INITIAL_LR: 0.001
       EVALUATE_INTERVAL: 1
       EVALUATE_INIT_MODEL_MASTER: true
       MIN_WAITING_TIME_MASTER: 5
