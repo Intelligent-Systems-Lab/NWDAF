@@ -135,15 +135,27 @@ func generateMlBasedUeCommunication(
 	}
 
 	last := historicalData[len(historicalData)-1]
+	baseTargetTime, err := baseTargetTimeFromHistorical(last.Ts, samplingInterval)
+	baseTargetTimeFallback := false
+	if err != nil {
+		anlfLog.Warnf(
+			"failed to derive base target time from last historical slot ts=%q; falling back to snappedNow: %v",
+			last.Ts, err,
+		)
+		baseTargetTime = snappedNow
+		baseTargetTimeFallback = true
+	}
 	target := inferenceTargetLabel(nwdafSubId, ctx)
 	anlfLog.Infof("latest aggregated slot: %s %s ts=%s"+
 		" ulVol=%.0f dlVol=%.0f totalVol=%.0f"+
 		" ulPkts=%.0f dlPkts=%.0f totalPkts=%.0f"+
-		" ulThr=%.4f dlThr=%.4f ulPktThr=%.4f dlPktThr=%.4f",
+		" ulThr=%.4f dlThr=%.4f ulPktThr=%.4f dlPktThr=%.4f"+
+		" baseTargetTime=%s fallback=%t",
 		nwdafSubId, target, last.Ts,
 		last.UlVol, last.DlVol, last.TotalVol,
 		last.UlNbPkts, last.DlNbPkts, last.TotalNbPkts,
-		last.UlThr, last.DlThr, last.UlPktThr, last.DlPktThr)
+		last.UlThr, last.DlThr, last.UlPktThr, last.DlPktThr,
+		baseTargetTime.Format(time.RFC3339), baseTargetTimeFallback)
 
 	// Call ML service for prediction
 	modelId := mlInfo.GetModelId()
@@ -179,15 +191,14 @@ func generateMlBasedUeCommunication(
 			store := ctx.GetModelAccuracyStore(mlInfo.ModelUrl)
 			if store != nil {
 				store.AddPrediction(nwdaf_context.PredictionRecord{
-					ModelUrl:    mlInfo.ModelUrl,
-					PredictedAt: now,
-					// Target: step 0 corresponds to the current snapped interval.
-					// Later steps advance by whole sampling intervals from that slot.
-					TargetTime: predictionTargetTime(snappedNow, samplingInterval, i),
-					PredUlVol:  pred.TrafChar.UlVol,
-					PredDlVol:  pred.TrafChar.DlVol,
-					NwdafSubId: nwdafSubId,
-					ScopeKey:   scopeKey,
+					ModelUrl:       mlInfo.ModelUrl,
+					PredictedAt:    now,
+					TargetTime:     predictionTargetTime(baseTargetTime, samplingInterval, i),
+					TargetSlotTime: predictionTargetTime(baseTargetTime, samplingInterval, i),
+					PredUlVol:      pred.TrafChar.UlVol,
+					PredDlVol:      pred.TrafChar.DlVol,
+					NwdafSubId:     nwdafSubId,
+					ScopeKey:       scopeKey,
 				})
 			}
 		}
@@ -196,13 +207,17 @@ func generateMlBasedUeCommunication(
 
 	// commDur = total prediction horizon in seconds
 	commDur := int32(outputWindow * samplingInterval)
+	targetEndTime := predictionTargetTime(baseTargetTime, samplingInterval, len(resp.PredictedData)-1)
 
-	anlfLog.Infof("ML inference: sub=%s %s steps=%d ulVol=%d dlVol=%d confidence=%d commDur=%ds",
-		nwdafSubId, inferenceTargetLabel(nwdafSubId, ctx), len(resp.PredictedData), totalUl, totalDl, avgConfidence, commDur)
+	anlfLog.Infof(
+		"ML inference: sub=%s %s steps=%d ulVol=%d dlVol=%d confidence=%d commDur=%ds ueCommTs=%s targetRange=[%s..%s]",
+		nwdafSubId, inferenceTargetLabel(nwdafSubId, ctx), len(resp.PredictedData), totalUl, totalDl, avgConfidence, commDur,
+		baseTargetTime.Format(time.RFC3339), baseTargetTime.Format(time.RFC3339), targetEndTime.Format(time.RFC3339),
+	)
 
 	return models.UeCommunication{
 		CommDur: commDur,
-		Ts:      &now,
+		Ts:      &baseTargetTime,
 		TrafChar: &models.TrafficCharacterization{
 			Dnn:   dnn,
 			UlVol: totalUl,
@@ -224,11 +239,20 @@ func getUeCommunicationModelParams() *factory.ModelParams {
 	return &factory.ModelParams{} // zero value → all helpers return defaults
 }
 
+// baseTargetTimeFromHistorical derives the first future target slot from the
+// last historical slot consumed by the model.
+func baseTargetTimeFromHistorical(lastHistoricalTs string, samplingInterval int) (time.Time, error) {
+	lastTs, err := time.Parse(time.RFC3339, lastHistoricalTs)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return lastTs.Add(time.Duration(samplingInterval) * time.Second), nil
+}
+
 // predictionTargetTime maps an ML prediction step to the start of its target slot.
-// Step 0 refers to the current snapped interval; later steps advance by full
-// sampling intervals from that boundary.
-func predictionTargetTime(snappedNow time.Time, samplingInterval, step int) time.Time {
-	return snappedNow.Add(time.Duration(step*samplingInterval) * time.Second)
+// Step 0 refers to the first future slot immediately after the final historical slot.
+func predictionTargetTime(baseTargetTime time.Time, samplingInterval, step int) time.Time {
+	return baseTargetTime.Add(time.Duration(step*samplingInterval) * time.Second)
 }
 
 // trafficPoint holds the numeric fields of a single UPF measurement.

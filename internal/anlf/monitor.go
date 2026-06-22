@@ -92,9 +92,9 @@ func (a *AnlfService) runModelAccuracyLoop(
 
 		// Startup warmup discards pre-stabilization predictions and inference
 		// counters. Post-swap monitors intentionally skip this path.
-		if drained := store.ConsumeMaturePredictions(0); len(drained) > 0 {
+		if drained := store.DiscardAllPredictions(); drained > 0 {
 			anlfLog.Infof("Accuracy monitor: discarded %d warmup predictions for model=%s",
-				len(drained), modelUrl)
+				drained, modelUrl)
 		}
 		store.GetAndResetInferenceNum() // discard warmup inference count
 	} else {
@@ -119,7 +119,8 @@ func (a *AnlfService) runModelAccuracyLoop(
 	}
 }
 
-// checkModelAccuracy collects mature predictions, computes sMAPE, and reports
+// checkModelAccuracy scans pending predictions, computes sMAPE for the matched
+// pred/actual pairs, and reports the deviation to MTLF via onDeviationReport.
 // the deviation to MTLF via the onDeviationReport callback.
 // Per TS 23.288 §6.2D: AnLF generates Analytics Accuracy Information from
 // prediction vs ground truth comparison.
@@ -130,19 +131,29 @@ func (a *AnlfService) checkModelAccuracy(
 ) {
 	nwdafCtx := nwdaf_context.GetSelf()
 
-	si := time.Duration(getUeCommunicationModelParams().SamplingIntervalOrDefault()) * time.Second
-	mature := store.ConsumeMaturePredictions(2 * si)
-	if len(mature) == 0 {
+	samplingInterval := getUeCommunicationModelParams().SamplingIntervalOrDefault()
+	pending := store.SnapshotPredictions()
+	if len(pending) == 0 {
 		return
 	}
+	maxMissCount := predictionMaxMissCount(samplingInterval, accCfg.CheckInterval)
 
 	var pairs []matchedPair
 	scopedPairs := make(map[string]*scopedPairAccumulator)
 	unscopedMatches := 0
-	gtCounts := make([]string, 0, len(mature))
-	for _, pred := range mature {
+	gtCounts := make([]string, 0, len(pending))
+	matchedIDs := make(map[uint64]struct{}, len(pending))
+	missedIDs := make(map[uint64]struct{}, len(pending))
+	sourceCounts := map[string]int{
+		"mongo":  0,
+		"memory": 0,
+		"none":   0,
+	}
+	for _, pred := range pending {
 		actual := a.lookupGroundTruth(nwdafCtx, pred)
 		if actual != nil {
+			matchedIDs[pred.ID] = struct{}{}
+			sourceCounts[actual.source]++
 			pair := matchedPair{
 				predUl: pred.PredUlVol, predDl: pred.PredDlVol,
 				actualUl: actual.ulVol, actualDl: actual.dlVol,
@@ -155,11 +166,19 @@ func (a *AnlfService) checkModelAccuracy(
 			}
 			gtCounts = append(gtCounts, strconv.Itoa(actual.count))
 		} else {
+			missedIDs[pred.ID] = struct{}{}
+			sourceCounts["none"]++
 			gtCounts = append(gtCounts, "0")
 		}
 	}
-	anlfLog.Debugf("Ground truth [%d mature → %d matched]: %s",
-		len(mature), len(pairs), strings.Join(gtCounts, ","))
+	matchedCount, discardedCount := store.ResolvePredictions(matchedIDs, missedIDs, maxMissCount)
+	anlfLog.Debugf(
+		"Ground truth [%d pending → %d matched, %d discarded]: "+
+			"si=%ds checkInterval=%ds maxMissCount=%d "+
+			"source[mongo=%d memory=%d none=%d] matches=%s",
+		len(pending), matchedCount, discardedCount, samplingInterval, accCfg.CheckInterval, maxMissCount,
+		sourceCounts["mongo"], sourceCounts["memory"], sourceCounts["none"], strings.Join(gtCounts, ","),
+	)
 
 	if len(pairs) == 0 {
 		anlfLog.Debugf("No matched pairs for model: %s", modelUrl)
@@ -187,13 +206,23 @@ func (a *AnlfService) checkModelAccuracy(
 	if minSamples <= 0 {
 		minSamples = 5
 	}
+	eligibleReports := make([]AccuracyReport, 0, len(reports))
+	for _, report := range reports {
+		if report.SampleCount < minSamples {
+			anlfLog.Debugf(
+				"Accuracy scope skipped by minSamples [%s]: scope=%s samples=%d < %d",
+				modelUrl, report.ScopeKey, report.SampleCount, minSamples,
+			)
+			continue
+		}
+		eligibleReports = append(eligibleReports, report)
+	}
+	if len(eligibleReports) > 0 && a.onAccuracyReports != nil {
+		a.onAccuracyReports(modelUrl, eligibleReports, store)
+	}
 	if len(pairs) < minSamples {
 		anlfLog.Debugf("Not enough samples [%s]: %d < %d", modelUrl, len(pairs), minSamples)
 		return
-	}
-
-	if len(reports) > 0 && a.onAccuracyReports != nil {
-		a.onAccuracyReports(modelUrl, reports, store)
 	}
 
 	// Report to MTLF — MTLF decides whether to retrain (TS 23.288 §6.2E)
@@ -202,17 +231,31 @@ func (a *AnlfService) checkModelAccuracy(
 	}
 }
 
+func predictionMaxMissCount(samplingInterval, checkInterval int) int {
+	if samplingInterval <= 0 {
+		samplingInterval = 10
+	}
+	if checkInterval <= 0 {
+		checkInterval = 60
+	}
+	maxMissCount := int(math.Ceil(float64(2*samplingInterval)/float64(checkInterval))) + 1
+	if maxMissCount < 1 {
+		return 1
+	}
+	return maxMissCount
+}
+
 // groundTruth holds actual measurement values for one time window.
 type groundTruth struct {
 	ulVol, dlVol int64
 	count        int // number of DB/in-memory records aggregated
+	source       string
 }
 
-// lookupGroundTruth finds actual UPF traffic data matching a prediction.
-// For each expected corrId (derived from pred.NwdafSubId), the record closest to
-// pred.TargetTime within ±samplingInterval is selected. Values are summed across
-// all corrIds to produce the group-level ground truth.
-// Primary source: MongoDB. Fallback: in-memory scan.
+// lookupGroundTruth finds actual UPF traffic data matching a prediction's target
+// slot. Both predictions and actuals are mapped onto the same slot grid by
+// rounding actual timestamps relative to pred.TargetSlotTime; only exact slot-key
+// matches are accepted.
 func (a *AnlfService) lookupGroundTruth(
 	ctx *nwdaf_context.NWDAFContext,
 	pred nwdaf_context.PredictionRecord,
@@ -231,18 +274,26 @@ func (a *AnlfService) lookupGroundTruth(
 		return nil
 	}
 
-	// Query window: TargetTime ± si to absorb jitter.
-	from := pred.TargetTime.Add(-si)
-	to := pred.TargetTime.Add(si)
+	slotTime := pred.TargetSlotTime
+	if slotTime.IsZero() {
+		slotTime = pred.TargetTime
+	}
+	from := slotTime.Add(-si)
+	to := slotTime.Add(si)
 
-	// Primary: MongoDB — query wider window, then pick nearest per corrId.
+	// Primary: MongoDB — query a slot-sized window around the target slot and
+	// aggregate only records that map back to the same slot key.
 	if cfg != nil && cfg.Configuration != nil && cfg.Configuration.Mongodb != nil &&
 		nwdaf_context.IsMongoAvailable() {
 		dbName := cfg.Configuration.Mongodb.Name
 		records, err := nwdaf_context.QueryTrafficInTimeRange(dbName, corrIds, from, to)
 		if err == nil && len(records) > 0 {
-			gt := nearestPerCorrId(corrIds, records, pred.TargetTime)
+			gt := aggregateRecordsForTargetSlot(corrIds, records, slotTime, samplingInterval)
 			if gt != nil {
+				anlfLog.Debugf(
+					"Ground truth slot match: source=mongo sub=%s targetTime=%s targetSlotTime=%s corrIds=%d contributors=%d",
+					pred.NwdafSubId, pred.TargetTime.Format(time.RFC3339), slotTime.Format(time.RFC3339), len(corrIds), gt.count,
+				)
 				return gt
 			}
 		}
@@ -251,78 +302,95 @@ func (a *AnlfService) lookupGroundTruth(
 		}
 	}
 
-	// Fallback: in-memory scan — per corrId, find nearest data point to TargetTime.
+	// Fallback: in-memory scan — aggregate only the data points that map to the
+	// same slot identity as pred.TargetSlotTime.
 	var ulVol, dlVol int64
 	count := 0
 	for _, corrId := range corrIds {
 		allData := ctx.GetAllTrafficDataForCorrelation(corrId)
-		var bestDiff time.Duration = -1
-		var bestUl, bestDl int64
+		var corrUl, corrDl int64
+		matched := false
 		for _, td := range allData {
 			td.Lock()
+			var slotMatch *nwdaf_context.UpfDataPoint
 			for _, dp := range td.RawUpfData {
-				diff := dp.Timestamp.Sub(pred.TargetTime)
-				if diff < 0 {
-					diff = -diff
-				}
-				if diff <= si && (bestDiff < 0 || diff < bestDiff) {
-					bestDiff = diff
-					bestUl = dp.UlVolume
-					bestDl = dp.DlVolume
+				if slotKeyForTime(dp.Timestamp, slotTime, samplingInterval) == 0 {
+					dpCopy := dp
+					slotMatch = &dpCopy
 				}
 			}
 			td.Unlock()
+			if slotMatch != nil {
+				corrUl += slotMatch.UlVolume
+				corrDl += slotMatch.DlVolume
+				matched = true
+			}
 		}
-		if bestDiff >= 0 {
-			ulVol += bestUl
-			dlVol += bestDl
+		if matched {
+			ulVol += corrUl
+			dlVol += corrDl
 			count++
 		}
 	}
 	if count == 0 {
 		return nil
 	}
-	return &groundTruth{ulVol: ulVol, dlVol: dlVol, count: count}
+	anlfLog.Debugf(
+		"Ground truth slot match: source=memory sub=%s targetTime=%s targetSlotTime=%s corrIds=%d contributors=%d",
+		pred.NwdafSubId, pred.TargetTime.Format(time.RFC3339), slotTime.Format(time.RFC3339), len(corrIds), count,
+	)
+	return &groundTruth{ulVol: ulVol, dlVol: dlVol, count: count, source: "memory"}
 }
 
-// nearestPerCorrId selects the record closest to targetTime for each corrId,
-// then sums UL/DL volumes across all corrIds.
-func nearestPerCorrId(
+func slotKeyForTime(ts, slotOrigin time.Time, samplingInterval int) int {
+	if samplingInterval <= 0 {
+		samplingInterval = 10
+	}
+	slotWidth := time.Duration(samplingInterval) * time.Second
+	return int(math.Round(float64(ts.Sub(slotOrigin)) / float64(slotWidth)))
+}
+
+// aggregateRecordsForTargetSlot groups MongoDB records by corrId and IP session,
+// keeps only those that map to the same slot key as slotTime, and sums them.
+func aggregateRecordsForTargetSlot(
 	corrIds []string,
 	records []nwdaf_context.UpfTrafficRecord,
-	targetTime time.Time,
+	slotTime time.Time,
+	samplingInterval int,
 ) *groundTruth {
-	type best struct {
-		diff         time.Duration
+	type slotRecord struct {
 		ulVol, dlVol int64
 	}
-	byCorr := make(map[string]*best, len(corrIds))
-	for _, id := range corrIds {
-		byCorr[id] = nil
-	}
+	byCorrIP := make(map[string]slotRecord)
 	for _, r := range records {
-		diff := r.Timestamp.Sub(targetTime)
-		if diff < 0 {
-			diff = -diff
+		if slotKeyForTime(r.Timestamp, slotTime, samplingInterval) != 0 {
+			continue
 		}
-		b := byCorr[r.Metadata.CorrelationId]
-		if b == nil || diff < b.diff {
-			byCorr[r.Metadata.CorrelationId] = &best{diff: diff, ulVol: r.UlVolume, dlVol: r.DlVolume}
-		}
+		key := r.Metadata.CorrelationId + "\x00" + r.Metadata.IpAddr
+		byCorrIP[key] = slotRecord{ulVol: r.UlVolume, dlVol: r.DlVolume}
 	}
+	byCorr := make(map[string]slotRecord, len(corrIds))
+	for key, record := range byCorrIP {
+		corrID, _, _ := strings.Cut(key, "\x00")
+		agg := byCorr[corrID]
+		agg.ulVol += record.ulVol
+		agg.dlVol += record.dlVol
+		byCorr[corrID] = agg
+	}
+
 	var ulVol, dlVol int64
 	count := 0
-	for _, b := range byCorr {
-		if b != nil {
-			ulVol += b.ulVol
-			dlVol += b.dlVol
+	for _, corrID := range corrIds {
+		if record, ok := byCorr[corrID]; ok {
+			ulVol += record.ulVol
+			dlVol += record.dlVol
 			count++
 		}
 	}
 	if count == 0 {
 		return nil
 	}
-	return &groundTruth{ulVol: ulVol, dlVol: dlVol, count: count}
+	return &groundTruth{ulVol: ulVol, dlVol: dlVol, count: count, source: "mongo"}
 }
 
 // matchedPair holds a prediction-truth pair for sMAPE computation.
@@ -432,6 +500,22 @@ func computeMeanAbsActual(pairs []matchedPair) float64 {
 	return computeSumAbsActual(pairs) / float64(len(pairs)*2)
 }
 
+func computeSumAbsPred(pairs []matchedPair) float64 {
+	var sumAbsPred float64
+	for _, p := range pairs {
+		sumAbsPred += math.Abs(float64(p.predUl))
+		sumAbsPred += math.Abs(float64(p.predDl))
+	}
+	return sumAbsPred
+}
+
+func computeMeanAbsPred(pairs []matchedPair) float64 {
+	if len(pairs) == 0 {
+		return 0
+	}
+	return computeSumAbsPred(pairs) / float64(len(pairs)*2)
+}
+
 // computeNRMSE calculates Normalized Root Mean Squared Error across UL and DL channels.
 // RMSE is normalized by the mean absolute actual volume of all channels.
 func computeNRMSE(pairs []matchedPair) float64 {
@@ -507,15 +591,16 @@ func buildAccuracyReports(
 		}
 
 		report := AccuracyReport{
-			ModelURL:     modelURL,
-			ScopeKey:     scopeKey,
-			NwdafSubID:   singleNwdafSubID(acc.nwdafSubIDs),
-			Metrics:      computeAll(acc.pairs),
-			TrafficScale: computeMeanAbsActual(acc.pairs),
-			SampleCount:  len(acc.pairs),
-			InferenceNum: inferenceNum,
-			WindowStart:  acc.windowStart,
-			WindowEnd:    acc.windowEnd,
+			ModelURL:              modelURL,
+			ScopeKey:              scopeKey,
+			NwdafSubID:            singleNwdafSubID(acc.nwdafSubIDs),
+			Metrics:               computeAll(acc.pairs),
+			TrafficScale:          computeMeanAbsActual(acc.pairs),
+			PredictedTrafficScale: computeMeanAbsPred(acc.pairs),
+			SampleCount:           len(acc.pairs),
+			InferenceNum:          inferenceNum,
+			WindowStart:           acc.windowStart,
+			WindowEnd:             acc.windowEnd,
 		}
 		reports = append(reports, report)
 	}

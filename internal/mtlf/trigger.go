@@ -3,6 +3,7 @@ package mtlf
 import (
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/free5gc/nwdaf/internal/anlf"
@@ -10,13 +11,34 @@ import (
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
-const trafficScaleMetricName = "__traffic_scale__"
+const (
+	trafficScaleMetricName          = "__traffic_scale__"
+	predictedTrafficScaleMetricName = "__predicted_traffic_scale__"
+	lowTrafficOvershootEpsilonBase  = 1.0
+)
 
 func signalState(baselineReady bool, signal bool) string {
 	if !baselineReady {
 		return "skipped"
 	}
 	return fmt.Sprintf("%t", signal)
+}
+
+func composeHitReason(degradationHit, chronicHit, lowTrafficHit bool) string {
+	reasons := make([]string, 0, 3)
+	if degradationHit {
+		reasons = append(reasons, "degradation")
+	}
+	if chronicHit {
+		reasons = append(reasons, "chronic")
+	}
+	if lowTrafficHit {
+		reasons = append(reasons, "low_traffic_overprediction")
+	}
+	if len(reasons) == 0 {
+		return "none"
+	}
+	return strings.Join(reasons, "+")
 }
 
 // HandleAccuracyReports receives per-scope accuracy information from AnLF and
@@ -53,12 +75,18 @@ func (m *MtlfService) HandleAccuracyReports(
 	primaryMetric := accCfg.PrimaryMetricOrDefault()
 	bufferSize := accCfg.RecentBufferSizeOrDefault()
 	minBufferSamples := accCfg.MinBufferSamplesOrDefault()
+	minSamples := accCfg.MinSamples
+	if minSamples <= 0 {
+		minSamples = 5
+	}
 	minStd := accCfg.MinStdOrDefault()
 	fixedFloor := accCfg.FixedFloorOrDefault()
+	degradationMinScale := accCfg.DegradationPolicy.MinDecisionTrafficScaleOrDefault()
 	zThreshold := accCfg.ZScoreThresholdOrDefault()
 	windowSize := accCfg.DecisionWindowSizeOrDefault()
 	requiredHits := accCfg.RequiredHitsInWindowOrDefault()
 	chronicCfg := accCfg.ChronicPolicy
+	lowTrafficCfg := accCfg.LowTrafficPolicy
 
 	for _, report := range reports {
 		if report.ScopeKey == "" {
@@ -74,33 +102,45 @@ func (m *MtlfService) HandleAccuracyReports(
 		}
 
 		scopeState := m.stateStore.GetOrCreateScope(modelUrl, report.ScopeKey, bufferSize, windowSize)
-		historyCount := scopeState.SampleCount(primaryMetric)
-		mean := scopeState.Mean(primaryMetric)
-		std := scopeState.Std(primaryMetric)
-		baselineReady := historyCount >= minBufferSamples
+		recentHistoryCount := scopeState.SampleCount(primaryMetric)
+		recentBaselineReady := recentHistoryCount >= minBufferSamples
+		degradationHistoryCount := scopeState.DegradationSampleCount(primaryMetric)
+		mean := scopeState.DegradationMean(primaryMetric)
+		std := scopeState.DegradationStd(primaryMetric)
+		degradationBaselineReady := degradationHistoryCount >= minBufferSamples
 
+		observation := ScopeObservation{
+			Timestamp:             now,
+			SampleCount:           report.SampleCount,
+			TrafficScale:          report.TrafficScale,
+			PredictedTrafficScale: report.PredictedTrafficScale,
+			Metrics:               make(map[string]float64, len(report.Metrics)),
+		}
 		for metric, value := range report.Metrics {
-			scopeState.RecordMetric(metric, value, now)
+			observation.Metrics[metric] = value
 		}
-		if report.TrafficScale > 0 {
-			scopeState.RecordMetric(trafficScaleMetricName, report.TrafficScale, now)
-		}
+		scopeState.RecordObservation(observation)
 
-		degradationEligible := current > fixedFloor
+		degradationTrafficEligible := report.TrafficScale >= degradationMinScale
+		degradationEligible := current > fixedFloor && degradationTrafficEligible
 		degradationSignal := false
 		zscore := 0.0
-		if historyCount > 0 {
+		if degradationHistoryCount > 0 {
 			zscore = (current - mean) / math.Max(std, minStd)
 			degradationSignal = zscore > zThreshold
 		}
-		degradationSignalState := signalState(baselineReady, degradationSignal)
+		degradationSignalState := signalState(degradationBaselineReady, degradationSignal)
 
-		degradationHit := baselineReady && degradationEligible && degradationSignal
+		degradationHit := degradationBaselineReady && degradationEligible && degradationSignal
 		degradationHits := 0
-		if baselineReady {
-			degradationHits = scopeState.RecordDegradationOutcome(degradationHit)
+		if degradationBaselineReady {
+			if degradationTrafficEligible {
+				degradationHits = scopeState.RecordDegradationOutcome(degradationHit)
+			} else {
+				degradationHits = scopeState.BreachCount()
+			}
 		} else {
-			scopeState.ResetDecisionWindows()
+			scopeState.ResetDegradationWindow()
 		}
 
 		chronicEnabled := chronicCfg != nil && chronicCfg.EnabledOrDefault()
@@ -108,12 +148,12 @@ func (m *MtlfService) HandleAccuracyReports(
 		chronicSignal := false
 		chronicHit := false
 		chronicValue := 0.0
-		trafficScale := scopeState.Mean(trafficScaleMetricName)
+		recentTrafficScaleMean := scopeState.Mean(trafficScaleMetricName)
 		chronicHits := 0
 		chronicMetricCount := 0
 		if chronicEnabled {
 			chronicMetricCount = scopeState.SampleCount(chronicCfg.MetricOrDefault())
-			chronicEligible = trafficScale >= chronicCfg.MinTrafficScaleOrDefault()
+			chronicEligible = recentTrafficScaleMean >= chronicCfg.MinDecisionTrafficScaleOrDefault()
 			if chronicMetricCount > 0 {
 				switch chronicCfg.AggregatorOrDefault() {
 				case "mean":
@@ -127,26 +167,53 @@ func (m *MtlfService) HandleAccuracyReports(
 			}
 			chronicSignal = chronicValue > chronicCfg.ThresholdOrDefault()
 		}
-		chronicSignalState := signalState(baselineReady, chronicSignal)
-		if chronicEnabled && baselineReady {
+		chronicSignalState := signalState(recentBaselineReady, chronicSignal)
+		if chronicEnabled && recentBaselineReady {
 			chronicHit = chronicEligible && chronicSignal
 			chronicHits = scopeState.RecordChronicOutcome(chronicHit)
+		} else if chronicEnabled {
+			scopeState.ResetChronicWindow()
 		}
 
-		hitReason := "none"
-		switch {
-		case degradationHit && chronicHit:
-			hitReason = "both"
-		case degradationHit:
-			hitReason = "degradation"
-		case chronicHit:
-			hitReason = "chronic"
+		lowTrafficEnabled := lowTrafficCfg != nil && lowTrafficCfg.EnabledOrDefault()
+		lowTrafficEligible := false
+		lowTrafficSignal := false
+		lowTrafficHit := false
+		lowTrafficHits := 0
+		lowTrafficOvershootRatio := 0.0
+		if lowTrafficEnabled {
+			lowTrafficEligible = report.TrafficScale <= lowTrafficCfg.MaxActualTrafficScaleOrDefault()
+			overshootBase := math.Max(report.TrafficScale, lowTrafficOvershootEpsilonBase)
+			lowTrafficOvershootRatio = report.PredictedTrafficScale / overshootBase
+			lowTrafficSignal = report.PredictedTrafficScale >= lowTrafficCfg.MinPredictedTrafficScaleOrDefault() &&
+				report.PredictedTrafficScale >= lowTrafficCfg.PredictionOvershootRatioOrDefault()*overshootBase
 		}
+		lowTrafficSignalState := signalState(recentBaselineReady, lowTrafficSignal)
+		if lowTrafficEnabled && recentBaselineReady {
+			lowTrafficHit = lowTrafficEligible && lowTrafficSignal
+			lowTrafficHits = scopeState.RecordLowTrafficOutcome(lowTrafficHit)
+		} else if lowTrafficEnabled {
+			scopeState.ResetLowTrafficWindow()
+		}
+
+		baselineNotFull := degradationHistoryCount < minBufferSamples
+		shouldRecordDegradationReference := report.SampleCount >= minSamples &&
+			degradationTrafficEligible &&
+			(baselineNotFull || !degradationSignal)
+		if shouldRecordDegradationReference {
+			scopeState.RecordDegradationReference(observation)
+		}
+
+		hitReason := composeHitReason(degradationHit, chronicHit, lowTrafficHit)
 
 		mtlfLog.Infof(
 			"Accuracy policy [%s]: scope=%s metric=%s current=%.4f mean=%.4f std=%.4f "+
-				"zscore=%.4f degradationEligible=%t degradationSignal=%s baselineReady=%t trafficScale=%.4f "+
-				"chronicEligible=%t chronicSignal=%s chronicValue=%.4f degradationHits=%d/%d chronicHits=%d/%d hitReason=%s",
+				"zscore=%.4f degradationEligible=%t degradationSignal=%s "+
+				"degradationBaselineReady=%t recentBaselineReady=%t actualTrafficScale=%.4f recentTrafficScaleMean=%.4f "+
+				"predictedTrafficScale=%.4f chronicEligible=%t chronicSignal=%s chronicValue=%.4f "+
+				"lowTrafficEligible=%t lowTrafficSignal=%s lowTrafficOvershootRatio=%.4f "+
+				"degradationReferenceSamples=%d recentSamples=%d "+
+				"degradationHits=%d/%d chronicHits=%d/%d lowTrafficHits=%d/%d hitReason=%s",
 			modelUrl,
 			report.ScopeKey,
 			primaryMetric,
@@ -156,27 +223,39 @@ func (m *MtlfService) HandleAccuracyReports(
 			zscore,
 			degradationEligible,
 			degradationSignalState,
-			baselineReady,
-			trafficScale,
+			degradationBaselineReady,
+			recentBaselineReady,
+			report.TrafficScale,
+			recentTrafficScaleMean,
+			report.PredictedTrafficScale,
 			chronicEligible,
 			chronicSignalState,
 			chronicValue,
+			lowTrafficEligible,
+			lowTrafficSignalState,
+			lowTrafficOvershootRatio,
+			degradationHistoryCount,
+			recentHistoryCount,
 			degradationHits,
 			requiredHits,
 			chronicHits,
 			requiredHits,
+			lowTrafficHits,
+			requiredHits,
 			hitReason,
 		)
 
-		if degradationHits >= requiredHits || chronicHits >= requiredHits {
+		if degradationHits >= requiredHits || chronicHits >= requiredHits || lowTrafficHits >= requiredHits {
 			mtlfLog.Warnf(
-				"Retrain trigger [%s]: scope=%s metric=%s current=%.4f degradationHits=%d/%d chronicHits=%d/%d reason=%s",
+				"Retrain trigger [%s]: scope=%s metric=%s current=%.4f "+
+					"degradationHits=%d/%d chronicHits=%d/%d lowTrafficHits=%d/%d reason=%s",
 				modelUrl,
 				report.ScopeKey,
 				primaryMetric,
 				current,
 				degradationHits, requiredHits,
 				chronicHits, requiredHits,
+				lowTrafficHits, requiredHits,
 				hitReason,
 			)
 			m.stateStore.ResetModelBreaches(modelUrl)

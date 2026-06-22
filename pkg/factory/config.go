@@ -194,17 +194,30 @@ type AccuracyMonitorConfig struct {
 	// Scope state GC threshold in seconds.
 	ScopeStateTTL int `yaml:"scopeStateTTL,omitempty"`
 	// Backward-compatible fallback for strict consecutive behavior.
-	ConsecutiveBreaches int                  `yaml:"consecutiveBreaches,omitempty"`
-	ChronicPolicy       *ChronicPolicyConfig `yaml:"chronicPolicy,omitempty"`
+	ConsecutiveBreaches int                      `yaml:"consecutiveBreaches,omitempty"`
+	DegradationPolicy   *DegradationPolicyConfig `yaml:"degradationPolicy,omitempty"`
+	ChronicPolicy       *ChronicPolicyConfig     `yaml:"chronicPolicy,omitempty"`
+	LowTrafficPolicy    *LowTrafficPolicyConfig  `yaml:"lowTrafficOverpredictionPolicy,omitempty"`
+}
+
+type DegradationPolicyConfig struct {
+	MinDecisionTrafficScale float64 `yaml:"minDecisionTrafficScale,omitempty"`
 }
 
 type ChronicPolicyConfig struct {
-	Enabled         *bool   `yaml:"enabled,omitempty"`
-	Metric          string  `yaml:"metric,omitempty"`
-	Aggregator      string  `yaml:"aggregator,omitempty"`
-	Percentile      int     `yaml:"percentile,omitempty"`
-	Threshold       float64 `yaml:"threshold,omitempty"`
-	MinTrafficScale float64 `yaml:"minTrafficScale,omitempty"`
+	Enabled                 *bool   `yaml:"enabled,omitempty"`
+	Metric                  string  `yaml:"metric,omitempty"`
+	Aggregator              string  `yaml:"aggregator,omitempty"`
+	Percentile              int     `yaml:"percentile,omitempty"`
+	Threshold               float64 `yaml:"threshold,omitempty"`
+	MinDecisionTrafficScale float64 `yaml:"minDecisionTrafficScale,omitempty"`
+}
+
+type LowTrafficPolicyConfig struct {
+	Enabled                  *bool   `yaml:"enabled,omitempty"`
+	MaxActualTrafficScale    float64 `yaml:"maxActualTrafficScale,omitempty"`
+	MinPredictedTrafficScale float64 `yaml:"minPredictedTrafficScale,omitempty"`
+	PredictionOvershootRatio float64 `yaml:"predictionOvershootRatio,omitempty"`
 }
 
 const chronicAggregatorPercentile = "percentile"
@@ -249,6 +262,13 @@ func (a *AccuracyMonitorConfig) FixedFloorOrDefault() float64 {
 		return 1024
 	}
 	return a.FixedFloor
+}
+
+func (d *DegradationPolicyConfig) MinDecisionTrafficScaleOrDefault() float64 {
+	if d == nil || d.MinDecisionTrafficScale < 0 {
+		return 0
+	}
+	return d.MinDecisionTrafficScale
 }
 
 func (a *AccuracyMonitorConfig) ZScoreThresholdOrDefault() float64 {
@@ -352,11 +372,42 @@ func (c *ChronicPolicyConfig) ThresholdOrDefault() float64 {
 	return c.Threshold
 }
 
-func (c *ChronicPolicyConfig) MinTrafficScaleOrDefault() float64 {
-	if c == nil || c.MinTrafficScale <= 0 {
+func (c *ChronicPolicyConfig) MinDecisionTrafficScaleOrDefault() float64 {
+	if c == nil {
 		return 1024
 	}
-	return c.MinTrafficScale
+	if c.MinDecisionTrafficScale > 0 {
+		return c.MinDecisionTrafficScale
+	}
+	return 1024
+}
+
+func (c *LowTrafficPolicyConfig) EnabledOrDefault() bool {
+	if c == nil || c.Enabled == nil {
+		return false
+	}
+	return *c.Enabled
+}
+
+func (c *LowTrafficPolicyConfig) MaxActualTrafficScaleOrDefault() float64 {
+	if c == nil || c.MaxActualTrafficScale <= 0 {
+		return 1024
+	}
+	return c.MaxActualTrafficScale
+}
+
+func (c *LowTrafficPolicyConfig) MinPredictedTrafficScaleOrDefault() float64 {
+	if c == nil || c.MinPredictedTrafficScale <= 0 {
+		return 4096
+	}
+	return c.MinPredictedTrafficScale
+}
+
+func (c *LowTrafficPolicyConfig) PredictionOvershootRatioOrDefault() float64 {
+	if c == nil || c.PredictionOvershootRatio <= 1.0 {
+		return 4.0
+	}
+	return c.PredictionOvershootRatio
 }
 
 // AdrfConfig holds connection settings for the ADRF (Analytics Data Repository Function).

@@ -64,20 +64,31 @@ func makeUeCommunicationSub(
 
 // --- tests ---
 
-func TestPredictionTargetTime_StepZeroStartsAtSnappedNow(t *testing.T) {
-	snappedNow := snappedTs(100)
+func TestBaseTargetTimeFromHistorical_AddsSamplingInterval(t *testing.T) {
+	got, err := baseTargetTimeFromHistorical("1970-01-01T00:01:40Z", 5)
+	if err != nil {
+		t.Fatalf("baseTargetTimeFromHistorical() error = %v, want nil", err)
+	}
+	want := snappedTs(105)
+	if !got.Equal(want) {
+		t.Fatalf("baseTargetTimeFromHistorical() = %v, want %v", got, want)
+	}
+}
 
-	got := predictionTargetTime(snappedNow, 5, 0)
+func TestPredictionTargetTime_StepZeroStartsAtBaseTargetTime(t *testing.T) {
+	baseTargetTime := snappedTs(100)
 
-	if !got.Equal(snappedNow) {
-		t.Fatalf("predictionTargetTime(step=0) = %v, want %v", got, snappedNow)
+	got := predictionTargetTime(baseTargetTime, 5, 0)
+
+	if !got.Equal(baseTargetTime) {
+		t.Fatalf("predictionTargetTime(step=0) = %v, want %v", got, baseTargetTime)
 	}
 }
 
 func TestPredictionTargetTime_MultiStepAdvancesBySamplingInterval(t *testing.T) {
-	snappedNow := snappedTs(100)
+	baseTargetTime := snappedTs(100)
 
-	got := predictionTargetTime(snappedNow, 5, 3)
+	got := predictionTargetTime(baseTargetTime, 5, 3)
 	want := snappedTs(115)
 
 	if !got.Equal(want) {
@@ -186,13 +197,14 @@ func TestPredictionScopeKeySnapshotSurvivesSubscriptionUpdate(t *testing.T) {
 
 	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
 	store.AddPrediction(nwdaf_context.PredictionRecord{
-		ModelUrl:    "file:///test/model.pth",
-		PredictedAt: time.Now(),
-		TargetTime:  time.Now().Add(-time.Second),
-		PredUlVol:   100,
-		PredDlVol:   200,
-		NwdafSubId:  sub.ID,
-		ScopeKey:    scopeKey,
+		ModelUrl:       "file:///test/model.pth",
+		PredictedAt:    time.Now(),
+		TargetTime:     time.Now().Add(-time.Second),
+		TargetSlotTime: time.Now().Add(-time.Second),
+		PredUlVol:      100,
+		PredDlVol:      200,
+		NwdafSubId:     sub.ID,
+		ScopeKey:       scopeKey,
 	})
 
 	sub.EventSubs[0].TgtUe = &models.TargetUeInformation{
@@ -202,12 +214,12 @@ func TestPredictionScopeKeySnapshotSurvivesSubscriptionUpdate(t *testing.T) {
 		t.Fatal("UpdateSubscription() returned false, want true")
 	}
 
-	mature := store.ConsumeMaturePredictions(0)
-	if len(mature) != 1 {
-		t.Fatalf("ConsumeMaturePredictions() returned %d records, want 1", len(mature))
+	snapshot := store.SnapshotPredictions()
+	if len(snapshot) != 1 {
+		t.Fatalf("SnapshotPredictions() returned %d records, want 1", len(snapshot))
 	}
-	if mature[0].ScopeKey != "group:group-a" {
-		t.Fatalf("mature[0].ScopeKey = %q, want %q", mature[0].ScopeKey, "group:group-a")
+	if snapshot[0].ScopeKey != "group:group-a" {
+		t.Fatalf("snapshot[0].ScopeKey = %q, want %q", snapshot[0].ScopeKey, "group:group-a")
 	}
 }
 

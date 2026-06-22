@@ -7,9 +7,17 @@ import (
 	"time"
 )
 
-type ringBuffer struct {
-	values []float64
-	next   int
+type ScopeObservation struct {
+	Timestamp             time.Time
+	SampleCount           int
+	TrafficScale          float64
+	PredictedTrafficScale float64
+	Metrics               map[string]float64
+}
+
+type observationBuffer struct {
+	observations []ScopeObservation
+	next         int
 }
 
 type hitWindow struct {
@@ -18,11 +26,11 @@ type hitWindow struct {
 	trueCount int
 }
 
-func newRingBuffer(size int) *ringBuffer {
+func newObservationBuffer(size int) *observationBuffer {
 	if size <= 0 {
 		size = 1
 	}
-	return &ringBuffer{values: make([]float64, 0, size)}
+	return &observationBuffer{observations: make([]ScopeObservation, 0, size)}
 }
 
 func newHitWindow(size int) *hitWindow {
@@ -32,30 +40,79 @@ func newHitWindow(size int) *hitWindow {
 	return &hitWindow{values: make([]bool, 0, size)}
 }
 
-func (r *ringBuffer) Add(v float64) {
-	if len(r.values) < cap(r.values) {
-		r.values = append(r.values, v)
+func cloneObservation(observation ScopeObservation) ScopeObservation {
+	cloned := observation
+	if observation.Metrics != nil {
+		cloned.Metrics = make(map[string]float64, len(observation.Metrics))
+		for metric, value := range observation.Metrics {
+			cloned.Metrics[metric] = value
+		}
+	}
+	return cloned
+}
+
+func (b *observationBuffer) Add(observation ScopeObservation) {
+	observation = cloneObservation(observation)
+	if len(b.observations) < cap(b.observations) {
+		b.observations = append(b.observations, observation)
 		return
 	}
-	r.values[r.next] = v
-	r.next = (r.next + 1) % cap(r.values)
+	b.observations[b.next] = observation
+	b.next = (b.next + 1) % cap(b.observations)
 }
 
-func (r *ringBuffer) Count() int {
-	return len(r.values)
+func (b *observationBuffer) Count() int {
+	return len(b.observations)
 }
 
-func (r *ringBuffer) Snapshot() []float64 {
-	if len(r.values) == 0 {
+func (b *observationBuffer) Snapshot() []ScopeObservation {
+	if len(b.observations) == 0 {
 		return nil
 	}
-	out := make([]float64, 0, len(r.values))
-	if len(r.values) < cap(r.values) || r.next == 0 {
-		return append(out, r.values...)
+	out := make([]ScopeObservation, 0, len(b.observations))
+	if len(b.observations) < cap(b.observations) || b.next == 0 {
+		for _, observation := range b.observations {
+			out = append(out, cloneObservation(observation))
+		}
+		return out
 	}
-	out = append(out, r.values[r.next:]...)
-	out = append(out, r.values[:r.next]...)
+	for _, observation := range b.observations[b.next:] {
+		out = append(out, cloneObservation(observation))
+	}
+	for _, observation := range b.observations[:b.next] {
+		out = append(out, cloneObservation(observation))
+	}
 	return out
+}
+
+func observationMetricValue(observation ScopeObservation, metric string) (float64, bool) {
+	switch metric {
+	case trafficScaleMetricName:
+		return observation.TrafficScale, true
+	case predictedTrafficScaleMetricName:
+		return observation.PredictedTrafficScale, true
+	default:
+		if observation.Metrics == nil {
+			return 0, false
+		}
+		value, ok := observation.Metrics[metric]
+		return value, ok
+	}
+}
+
+func (b *observationBuffer) metricValues(metric string) []float64 {
+	observations := b.Snapshot()
+	if len(observations) == 0 {
+		return nil
+	}
+	values := make([]float64, 0, len(observations))
+	for _, observation := range observations {
+		value, ok := observationMetricValue(observation, metric)
+		if ok {
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 func (w *hitWindow) Add(hit bool) int {
@@ -92,9 +149,11 @@ type ScopeState struct {
 	scopeKey           string
 	bufferSize         int
 	decisionWindowSize int
-	metricBuffers      map[string]*ringBuffer
+	recentObservations *observationBuffer
+	degradationRef     *observationBuffer
 	degradationWindow  *hitWindow
 	chronicWindow      *hitWindow
+	lowTrafficWindow   *hitWindow
 	lastUpdate         time.Time
 	mu                 sync.RWMutex
 }
@@ -104,36 +163,64 @@ func newScopeState(scopeKey string, bufferSize, decisionWindowSize int) *ScopeSt
 		scopeKey:           scopeKey,
 		bufferSize:         bufferSize,
 		decisionWindowSize: decisionWindowSize,
-		metricBuffers:      make(map[string]*ringBuffer),
+		recentObservations: newObservationBuffer(bufferSize),
+		degradationRef:     newObservationBuffer(bufferSize),
 		degradationWindow:  newHitWindow(decisionWindowSize),
 		chronicWindow:      newHitWindow(decisionWindowSize),
+		lowTrafficWindow:   newHitWindow(decisionWindowSize),
 	}
 }
 
-func (s *ScopeState) RecordMetric(metric string, value float64, now time.Time) {
+func (s *ScopeState) RecordObservation(observation ScopeObservation) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	buffer := s.metricBuffers[metric]
-	if buffer == nil {
-		buffer = newRingBuffer(s.bufferSize)
-		s.metricBuffers[metric] = buffer
-	}
-	buffer.Add(value)
-	s.lastUpdate = now
+	s.recentObservations.Add(observation)
+	s.lastUpdate = observation.Timestamp
+}
+
+func (s *ScopeState) RecordDegradationReference(observation ScopeObservation) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.degradationRef.Add(observation)
+	s.lastUpdate = observation.Timestamp
 }
 
 func (s *ScopeState) SampleCount(metric string) int {
+	return len(s.metricValuesFromBuffer(s.recentObservations, metric))
+}
+
+func (s *ScopeState) DegradationSampleCount(metric string) int {
+	return len(s.metricValuesFromBuffer(s.degradationRef, metric))
+}
+
+func (s *ScopeState) RecentObservationCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if buffer := s.metricBuffers[metric]; buffer != nil {
-		return buffer.Count()
-	}
-	return 0
+	return s.recentObservations.Count()
+}
+
+func (s *ScopeState) DegradationReferenceCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.degradationRef.Count()
 }
 
 func (s *ScopeState) Mean(metric string) float64 {
-	values := s.metricValues(metric)
+	values := s.metricValuesFromBuffer(s.recentObservations, metric)
+	if len(values) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, value := range values {
+		sum += value
+	}
+	return sum / float64(len(values))
+}
+
+func (s *ScopeState) DegradationMean(metric string) float64 {
+	values := s.metricValuesFromBuffer(s.degradationRef, metric)
 	if len(values) == 0 {
 		return 0
 	}
@@ -145,7 +232,26 @@ func (s *ScopeState) Mean(metric string) float64 {
 }
 
 func (s *ScopeState) Std(metric string) float64 {
-	values := s.metricValues(metric)
+	values := s.metricValuesFromBuffer(s.recentObservations, metric)
+	if len(values) == 0 {
+		return 0
+	}
+	mean := 0.0
+	for _, value := range values {
+		mean += value
+	}
+	mean /= float64(len(values))
+
+	sumSq := 0.0
+	for _, value := range values {
+		diff := value - mean
+		sumSq += diff * diff
+	}
+	return math.Sqrt(sumSq / float64(len(values)))
+}
+
+func (s *ScopeState) DegradationStd(metric string) float64 {
+	values := s.metricValuesFromBuffer(s.degradationRef, metric)
 	if len(values) == 0 {
 		return 0
 	}
@@ -164,7 +270,7 @@ func (s *ScopeState) Std(metric string) float64 {
 }
 
 func (s *ScopeState) Percentile(metric string, percentile int) float64 {
-	values := s.metricValues(metric)
+	values := s.metricValuesFromBuffer(s.recentObservations, metric)
 	if len(values) == 0 {
 		return 0
 	}
@@ -188,7 +294,7 @@ func (s *ScopeState) Percentile(metric string, percentile int) float64 {
 }
 
 func (s *ScopeState) Min(metric string) float64 {
-	values := s.metricValues(metric)
+	values := s.metricValuesFromBuffer(s.recentObservations, metric)
 	if len(values) == 0 {
 		return 0
 	}
@@ -202,7 +308,7 @@ func (s *ScopeState) Min(metric string) float64 {
 }
 
 func (s *ScopeState) Max(metric string) float64 {
-	values := s.metricValues(metric)
+	values := s.metricValuesFromBuffer(s.recentObservations, metric)
 	if len(values) == 0 {
 		return 0
 	}
@@ -220,9 +326,7 @@ func (s *ScopeState) IncrementBreach() int {
 }
 
 func (s *ScopeState) ResetBreach() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.degradationWindow.Reset()
+	s.ResetDegradationWindow()
 }
 
 func (s *ScopeState) BreachCount() int {
@@ -243,10 +347,22 @@ func (s *ScopeState) RecordChronicOutcome(hit bool) int {
 	return s.chronicWindow.Add(hit)
 }
 
+func (s *ScopeState) RecordLowTrafficOutcome(hit bool) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lowTrafficWindow.Add(hit)
+}
+
 func (s *ScopeState) ChronicHitCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.chronicWindow.TrueCount()
+}
+
+func (s *ScopeState) LowTrafficHitCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lowTrafficWindow.TrueCount()
 }
 
 func (s *ScopeState) ResetDecisionWindows() {
@@ -254,6 +370,25 @@ func (s *ScopeState) ResetDecisionWindows() {
 	defer s.mu.Unlock()
 	s.degradationWindow.Reset()
 	s.chronicWindow.Reset()
+	s.lowTrafficWindow.Reset()
+}
+
+func (s *ScopeState) ResetDegradationWindow() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.degradationWindow.Reset()
+}
+
+func (s *ScopeState) ResetChronicWindow() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.chronicWindow.Reset()
+}
+
+func (s *ScopeState) ResetLowTrafficWindow() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lowTrafficWindow.Reset()
 }
 
 func (s *ScopeState) LastUpdate() time.Time {
@@ -262,14 +397,13 @@ func (s *ScopeState) LastUpdate() time.Time {
 	return s.lastUpdate
 }
 
-func (s *ScopeState) metricValues(metric string) []float64 {
+func (s *ScopeState) metricValuesFromBuffer(buffer *observationBuffer, metric string) []float64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	buffer := s.metricBuffers[metric]
 	if buffer == nil {
 		return nil
 	}
-	return buffer.Snapshot()
+	return buffer.metricValues(metric)
 }
 
 type ModelMonitorState struct {

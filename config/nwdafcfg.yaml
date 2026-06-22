@@ -27,8 +27,8 @@ configuration:
   # Analytics model parameters per event type
   analytics:
     ueCommunication:
-      samplingInterval: 5   # UPF report period (seconds); governs smf repPeriod
-      inputWindow: 30       # data points fed to ML model (30 × 5s = 2.5 min history)
+      samplingInterval: 30  # UPF report period (seconds); governs smf repPeriod
+      inputWindow: 30       # data points fed to ML model (30 × 30s = 15 min history)
       outputWindow: 1       # ML service predicts 1 step ahead
       lookbackBuffer: 15    # extra seconds added to query window to absorb jitter (default: 2×samplingInterval)
       # queryLookback = samplingInterval × inputWindow + lookbackBuffer (auto-computed)
@@ -69,35 +69,45 @@ configuration:
     staticModelUrl: http://placeholder/download/initial  # Initial model bundle (pre-cached in ML Service artifacts/initial/)
     accuracyMonitor:
       enabled: true            # Trigger retraining on accuracy degradation
-      checkInterval: 50         # seconds between accuracy checks
-      minSamples: 5             # min ground truth samples before evaluation
-      warmupDuration: 155       # seconds to skip checks after start (model cold-start)
+      checkInterval: 90         # seconds between accuracy checks
+      minSamples: 2             # keep testbed margin; do not require the theoretical max slots per round
+      warmupDuration: 20        # seconds to skip checks after start (model cold-start)
       metricsToRecord:
         - sMAPE
         - MAE
         - MSE
         - WAPE
         - NRMSE
-      primaryMetric: MAE        # decision metric for retrain policy
-      recentBufferSize: 20      # per-scope retained report history
-      minBufferSamples: 8       # samples required before enabling z-score gate
-      minStd: 0.01              # floor on std to avoid unstable z-scores
-      fixedFloor: 1024          # provisional degradation eligibility floor in bytes
-      zScoreThreshold: 3.0      # relative anomaly threshold
-      decisionWindowSize: 3     # evaluate the latest M decision rounds
+      primaryMetric: WAPE       # decision metric for retrain policy
+      recentBufferSize: 12      # per-scope retained report history
+      minBufferSamples: 5       # samples required before enabling z-score gate
+      minStd: 0.14              # floor on std to avoid unstable z-scores
+      fixedFloor: 0.05          # degradation eligibility floor in primary metric space
+      zScoreThreshold: 1.3      # relative anomaly threshold
+      decisionWindowSize: 5     # evaluate the latest M decision rounds
       requiredHitsInWindow: 3   # require N hits inside the latest M rounds
       scopeStateTTL: 600        # seconds before inactive scope state is GC'd
       consecutiveBreaches: 3    # required consecutive triggered rounds
+      degradationPolicy:
+        minDecisionTrafficScale: 1024
       chronicPolicy:
-        enabled: true           # second path for models that start bad and stay bad
+        enabled: false          # disable chronic path on the current transition-only testbed line
         metric: WAPE            # first implementation supports WAPE/NRMSE/MAE
         aggregator: percentile  # mean | percentile
         percentile: 75          # use 50 to represent median
-        threshold: 1.0          # provisional chronic metric threshold
-        minTrafficScale: 1024   # minimum traffic scale before chronic path is considered
+        threshold: 0.97         # chronic metric threshold used in recent replay experiments
+        minDecisionTrafficScale: 1024   # minimum traffic scale before chronic path is considered
+      lowTrafficOverpredictionPolicy:
+        enabled: false
+        maxActualTrafficScale: 1024
+        minPredictedTrafficScale: 4096
+        predictionOvershootRatio: 4.0
     task:
       TID: "nwdaf_fl_training"
       NUM_ROUNDS: 30
+      ES_PATIENCE: 2    # early stopping: halt after N rounds without val loss improvement
+      LR_PATIENCE: 2    # reduce LR by 0.5x after N rounds without improvement
+      INITIAL_LR: 0.001
       EVALUATE_INTERVAL: 1
       EVALUATE_INIT_MODEL_MASTER: true
       MIN_WAITING_TIME_MASTER: 5
@@ -135,13 +145,15 @@ configuration:
             - ul_vol
             - dl_vol
           preprocessing: log1p_standard_scaler
+        training:
+          local_epochs: 3
 
   # ADRF (Analytics Data Repository Function) — TS 29.575
   adrf:
     url: http://127.0.0.1:9888
     storageThreshold: 1   # per-UE: flush every N notifications from the same UE; 1 = immediate
     fetchBatchSize: 1     # IDs per RetrievalRequest GET; ADRF V0 enforces exactly 1 — do not change
-    retrainWindow: 1800   # seconds of history to fetch for retrain (30 min)
+    retrainWindow: 1200   # seconds of history to fetch for retrain
     watchdogTimeout: 120  # seconds after last callback before watchdog fires
 
 logger:

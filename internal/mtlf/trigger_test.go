@@ -41,18 +41,38 @@ func testAccuracyReportWithMetrics(
 	metrics map[string]float64,
 	trafficScale float64,
 ) anlf.AccuracyReport {
+	return testAccuracyReportWithMetricsAndPredicted(modelURL, scopeKey, metrics, trafficScale, 0)
+}
+
+func testAccuracyReportWithMetricsAndPredicted(
+	modelURL, scopeKey string,
+	metrics map[string]float64,
+	trafficScale float64,
+	predictedTrafficScale float64,
+) anlf.AccuracyReport {
 	return anlf.AccuracyReport{
-		ModelURL:     modelURL,
-		ScopeKey:     scopeKey,
-		Metrics:      metrics,
-		TrafficScale: trafficScale,
-		SampleCount:  5,
+		ModelURL:              modelURL,
+		ScopeKey:              scopeKey,
+		Metrics:               metrics,
+		TrafficScale:          trafficScale,
+		PredictedTrafficScale: predictedTrafficScale,
+		SampleCount:           5,
 	}
 }
 
 func prefillScope(scope *ScopeState, values ...float64) {
+	now := time.Now()
 	for _, value := range values {
-		scope.RecordMetric("MAE", value, time.Now())
+		observation := ScopeObservation{
+			Timestamp:    now,
+			SampleCount:  5,
+			TrafficScale: 2048,
+			Metrics: map[string]float64{
+				"MAE": value,
+			},
+		}
+		scope.RecordObservation(observation)
+		scope.RecordDegradationReference(observation)
 	}
 }
 
@@ -65,6 +85,18 @@ func TestSignalState(t *testing.T) {
 	}
 	if got := signalState(true, false); got != "false" {
 		t.Fatalf("signalState(true, false) = %q, want %q", got, "false")
+	}
+}
+
+func TestComposeHitReason(t *testing.T) {
+	if got := composeHitReason(false, false, false); got != "none" {
+		t.Fatalf("composeHitReason(false, false, false) = %q, want %q", got, "none")
+	}
+	if got := composeHitReason(true, false, false); got != "degradation" {
+		t.Fatalf("composeHitReason(true, false, false) = %q, want %q", got, "degradation")
+	}
+	if got := composeHitReason(false, true, true); got != "chronic+low_traffic_overprediction" {
+		t.Fatalf("composeHitReason(false, true, true) = %q, want %q", got, "chronic+low_traffic_overprediction")
 	}
 }
 
@@ -257,6 +289,72 @@ func TestHandleAccuracyReports_DecisionWindowRetainsRecentHits(t *testing.T) {
 	m.HandleAccuracyReports(modelURL, []anlf.AccuracyReport{badAgain}, store)
 	if got := scope.BreachCount(); got != 2 {
 		t.Fatalf("BreachCount() after second bad round = %d, want 2", got)
+	}
+}
+
+func TestHandleAccuracyReports_DegradationLowTrafficSkipsWindowUpdate(t *testing.T) {
+	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+		Enabled:              true,
+		PrimaryMetric:        "MAE",
+		RecentBufferSize:     5,
+		MinBufferSamples:     3,
+		MinStd:               1,
+		FixedFloor:           100,
+		ZScoreThreshold:      3,
+		DecisionWindowSize:   3,
+		RequiredHitsInWindow: 2,
+		DegradationPolicy: &factory.DegradationPolicyConfig{
+			MinDecisionTrafficScale: 1024,
+		},
+	})
+
+	m := NewMtlfService(nil)
+	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	scope := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 3)
+	prefillScope(scope, 150, 150, 150)
+
+	badLowTraffic := testAccuracyReportWithMetrics(testModelURL, testScopeKey, map[string]float64{"MAE": 700}, 100)
+	badNormalTraffic := testAccuracyReportWithMetrics(testModelURL, testScopeKey, map[string]float64{"MAE": 1200}, 2048)
+
+	m.HandleAccuracyReports(testModelURL, []anlf.AccuracyReport{badLowTraffic}, store)
+	if got := scope.BreachCount(); got != 0 {
+		t.Fatalf("BreachCount() after low-traffic degradation round = %d, want 0", got)
+	}
+
+	m.HandleAccuracyReports(testModelURL, []anlf.AccuracyReport{badNormalTraffic}, store)
+	if got := scope.BreachCount(); got != 1 {
+		t.Fatalf("BreachCount() after eligible degradation round = %d, want 1", got)
+	}
+}
+
+func TestHandleAccuracyReports_DegradationSignalDoesNotPolluteReferenceBuffer(t *testing.T) {
+	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+		Enabled:              true,
+		PrimaryMetric:        "MAE",
+		RecentBufferSize:     5,
+		MinSamples:           2,
+		MinBufferSamples:     3,
+		MinStd:               1,
+		FixedFloor:           100,
+		ZScoreThreshold:      3,
+		DecisionWindowSize:   3,
+		RequiredHitsInWindow: 2,
+	})
+
+	m := NewMtlfService(nil)
+	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	scope := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 3)
+	prefillScope(scope, 150, 150, 150)
+
+	m.HandleAccuracyReports(testModelURL, []anlf.AccuracyReport{
+		testAccuracyReport(testModelURL, testScopeKey, 700),
+	}, store)
+
+	if got := scope.RecentObservationCount(); got != 4 {
+		t.Fatalf("RecentObservationCount() = %d, want 4", got)
+	}
+	if got := scope.DegradationReferenceCount(); got != 3 {
+		t.Fatalf("DegradationReferenceCount() = %d, want 3 after signal round", got)
 	}
 }
 
@@ -481,12 +579,12 @@ func TestHandleAccuracyReports_ChronicPathTriggersWithoutDegradation(t *testing.
 		DecisionWindowSize:   3,
 		RequiredHitsInWindow: 2,
 		ChronicPolicy: &factory.ChronicPolicyConfig{
-			Enabled:         &enabled,
-			Metric:          "WAPE",
-			Aggregator:      "percentile",
-			Percentile:      50,
-			Threshold:       0.8,
-			MinTrafficScale: 100,
+			Enabled:                 &enabled,
+			Metric:                  "WAPE",
+			Aggregator:              "percentile",
+			Percentile:              50,
+			Threshold:               0.8,
+			MinDecisionTrafficScale: 100,
 		},
 	})
 
@@ -537,12 +635,12 @@ func TestHandleAccuracyReports_ChronicPathRequiresTrafficScale(t *testing.T) {
 		DecisionWindowSize:   3,
 		RequiredHitsInWindow: 1,
 		ChronicPolicy: &factory.ChronicPolicyConfig{
-			Enabled:         &enabled,
-			Metric:          "WAPE",
-			Aggregator:      "percentile",
-			Percentile:      50,
-			Threshold:       0.8,
-			MinTrafficScale: 1000,
+			Enabled:                 &enabled,
+			Metric:                  "WAPE",
+			Aggregator:              "percentile",
+			Percentile:              50,
+			Threshold:               0.8,
+			MinDecisionTrafficScale: 1000,
 		},
 	})
 
@@ -566,5 +664,108 @@ func TestHandleAccuracyReports_ChronicPathRequiresTrafficScale(t *testing.T) {
 	}
 	if store.IsRetraining() {
 		t.Fatal("store.IsRetraining() = true, want false when chronic path is ineligible")
+	}
+}
+
+func TestHandleAccuracyReports_LowTrafficOverpredictionTriggers(t *testing.T) {
+	enabled := true
+	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+		Enabled:              true,
+		PrimaryMetric:        "MAE",
+		RecentBufferSize:     5,
+		MinBufferSamples:     3,
+		MinStd:               1,
+		FixedFloor:           5000,
+		ZScoreThreshold:      3,
+		DecisionWindowSize:   3,
+		RequiredHitsInWindow: 2,
+		DegradationPolicy: &factory.DegradationPolicyConfig{
+			MinDecisionTrafficScale: 1024,
+		},
+		LowTrafficPolicy: &factory.LowTrafficPolicyConfig{
+			Enabled:                  &enabled,
+			MaxActualTrafficScale:    1024,
+			MinPredictedTrafficScale: 4096,
+			PredictionOvershootRatio: 4.0,
+		},
+	})
+
+	m := NewMtlfService(nil)
+	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	triggered := 0
+	m.onRetrainTriggered = func(modelURL string, store *nwdaf_context.ModelAccuracyStore) {
+		triggered++
+	}
+
+	scope := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 3)
+	prefillScope(scope, 150, 150, 150)
+
+	report := testAccuracyReportWithMetricsAndPredicted(
+		testModelURL,
+		testScopeKey,
+		map[string]float64{"MAE": 200},
+		100,
+		5000,
+	)
+
+	m.HandleAccuracyReports(testModelURL, []anlf.AccuracyReport{report}, store)
+	if got := scope.LowTrafficHitCount(); got != 1 {
+		t.Fatalf("LowTrafficHitCount() after first hit = %d, want 1", got)
+	}
+	if triggered != 0 {
+		t.Fatalf("triggered = %d, want 0 after first low-traffic hit", triggered)
+	}
+
+	m.HandleAccuracyReports(testModelURL, []anlf.AccuracyReport{report}, store)
+	if triggered != 1 {
+		t.Fatalf("triggered = %d, want 1 after second low-traffic hit", triggered)
+	}
+	if !store.IsRetraining() {
+		t.Fatal("store.IsRetraining() = false, want true after low-traffic overprediction trigger")
+	}
+}
+
+func TestHandleAccuracyReports_LowTrafficOverpredictionRequiresPredictedFloor(t *testing.T) {
+	enabled := true
+	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+		Enabled:              true,
+		PrimaryMetric:        "MAE",
+		RecentBufferSize:     5,
+		MinBufferSamples:     3,
+		MinStd:               1,
+		FixedFloor:           5000,
+		ZScoreThreshold:      3,
+		DecisionWindowSize:   3,
+		RequiredHitsInWindow: 1,
+		DegradationPolicy: &factory.DegradationPolicyConfig{
+			MinDecisionTrafficScale: 1024,
+		},
+		LowTrafficPolicy: &factory.LowTrafficPolicyConfig{
+			Enabled:                  &enabled,
+			MaxActualTrafficScale:    1024,
+			MinPredictedTrafficScale: 4096,
+			PredictionOvershootRatio: 4.0,
+		},
+	})
+
+	m := NewMtlfService(nil)
+	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	scope := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 3)
+	prefillScope(scope, 150, 150, 150)
+
+	report := testAccuracyReportWithMetricsAndPredicted(
+		testModelURL,
+		testScopeKey,
+		map[string]float64{"MAE": 200},
+		100,
+		2000,
+	)
+
+	m.HandleAccuracyReports(testModelURL, []anlf.AccuracyReport{report}, store)
+	if got := scope.LowTrafficHitCount(); got != 0 {
+		t.Fatalf("LowTrafficHitCount() = %d, want 0 when predicted traffic floor is not met", got)
+	}
+	if store.IsRetraining() {
+		t.Fatal("store.IsRetraining() = true, want false when predicted traffic floor is not met")
 	}
 }

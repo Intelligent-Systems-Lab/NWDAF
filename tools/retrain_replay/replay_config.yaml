@@ -31,3 +31,10 @@ report:
   progress_every_slots: 120
   chart_downsample:
   emit_synthetic_log: false
+
+analysis:
+  catTransitions:
+    - seconds: 1800
+      label: "CAT1→CAT2"
+    - seconds: 3600
+      label: "CAT2→CAT3"
