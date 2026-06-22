@@ -15,9 +15,7 @@ func TestNewGroupResolver_NilConfig(t *testing.T) {
 
 	if resolver == nil {
 		t.Fatal("NewGroupResolver should not return nil")
-	}
-
-	if len(resolver.groups) != 0 {
+	} else if len(resolver.groups) != 0 {
 		t.Errorf("Expected empty groups map, got %d entries", len(resolver.groups))
 	}
 }

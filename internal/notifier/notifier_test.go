@@ -1,7 +1,11 @@
 package notifier
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -275,6 +279,7 @@ func TestNewNotificationScheduler(t *testing.T) {
 	onComplete := func(subId string, reason string) {}
 
 	scheduler := NewNotificationScheduler(
+		context.Background(),
 		"test-sub-id",
 		"http://localhost:9090/callback",
 		10,
@@ -305,5 +310,48 @@ func TestNewNotificationScheduler(t *testing.T) {
 	}
 	if scheduler.reportCount != 0 {
 		t.Errorf("reportCount should be initialized to 0, got %v", scheduler.reportCount)
+	}
+}
+
+func TestNotificationScheduler_StopsWhenParentContextCancelled(t *testing.T) {
+	var requestCount atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	baseCtx, cancel := context.WithCancel(context.Background())
+	scheduler := NewNotificationScheduler(
+		baseCtx,
+		"test-sub-id",
+		server.URL,
+		1,
+		[]models.NwdafEventsSubscriptionEventSubscription{
+			{Event: models.NwdafEvent_ABNORMAL_BEHAVIOUR},
+		},
+		"",
+		0,
+		nil,
+		nil,
+	)
+
+	scheduler.Start()
+	defer scheduler.Stop()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for requestCount.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if requestCount.Load() == 0 {
+		t.Fatal("expected initial notification to be sent")
+	}
+
+	cancel()
+	time.Sleep(1200 * time.Millisecond)
+
+	if got := requestCount.Load(); got != 1 {
+		t.Fatalf("expected scheduler to stop after parent cancellation, got %d requests", got)
 	}
 }

@@ -83,9 +83,7 @@ func TestHandleUpfNotification_Basic(t *testing.T) {
 	data := bucket.Get("192.168.1.1")
 	if data == nil {
 		t.Fatal("Traffic data should be stored for IP")
-	}
-
-	if len(data.RawUpfData) != 1 {
+	} else if len(data.RawUpfData) != 1 {
 		t.Fatalf("RawUpfData length = %d, want 1", len(data.RawUpfData))
 	}
 
@@ -381,8 +379,7 @@ func TestHandleUpfNotification_FullVolumeMeasurement(t *testing.T) {
 	data := bucket.Get("10.0.0.1")
 	if data == nil {
 		t.Fatal("Traffic data should be stored for IP")
-	}
-	if len(data.RawUpfData) != 1 {
+	} else if len(data.RawUpfData) != 1 {
 		t.Fatalf("RawUpfData length = %d, want 1", len(data.RawUpfData))
 	}
 
@@ -445,8 +442,7 @@ func TestHandleUpfNotification_PacketThroughput(t *testing.T) {
 	data := bucket.Get("10.0.0.2")
 	if data == nil {
 		t.Fatal("Traffic data should be stored for IP")
-	}
-	if len(data.RawUpfData) != 1 {
+	} else if len(data.RawUpfData) != 1 {
 		t.Fatalf("RawUpfData length = %d, want 1", len(data.RawUpfData))
 	}
 

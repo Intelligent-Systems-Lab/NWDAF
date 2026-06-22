@@ -40,11 +40,10 @@ func TestTrafficDataBucket_AddUpfData(t *testing.T) {
 	data1 := bucket.GetOrCreate("192.168.1.1")
 	if data1 == nil {
 		t.Fatal("GetOrCreate returned nil")
-	}
-	if data1.IpAddress != testIpAddress {
+	} else if data1.IpAddress != testIpAddress {
 		t.Errorf("IpAddress = %q, want %q", data1.IpAddress, "192.168.1.1")
 	}
-	if data1.CorrelationId != testCorsId {
+	if data1 != nil && data1.CorrelationId != testCorsId {
 		t.Errorf("CorrelationId = %q, want %q", data1.CorrelationId, "test-corr-001")
 	}
 
@@ -256,13 +255,10 @@ func TestNWDAFContext_GetOrCreateTrafficData(t *testing.T) {
 	data := ctx.GetOrCreateTrafficData(correlationId, ipAddr)
 	if data == nil {
 		t.Fatal("GetOrCreateTrafficData returned nil")
-	}
-
-	if data.CorrelationId != correlationId {
+	} else if data.CorrelationId != correlationId {
 		t.Errorf("CorrelationId = %q, want %q", data.CorrelationId, correlationId)
 	}
-
-	if data.IpAddress != ipAddr {
+	if data != nil && data.IpAddress != ipAddr {
 		t.Errorf("IpAddress = %q, want %q", data.IpAddress, ipAddr)
 	}
 }
@@ -306,8 +302,7 @@ func TestNWDAFContext_SmfSubscription(t *testing.T) {
 	sub, isNew := ctx.GetOrCreateSmfSubscription(correlationId, nwdafSubId)
 	if sub == nil {
 		t.Fatal("GetOrCreateSmfSubscription returned nil")
-	}
-	if !isNew {
+	} else if !isNew {
 		t.Error("First GetOrCreateSmfSubscription should return isNew=true")
 	}
 
@@ -321,24 +316,24 @@ func TestNWDAFContext_SmfSubscription(t *testing.T) {
 	}
 
 	// Update with details
-	sub.Lock()
-	sub.TargetType = TargetType_SUPI
-	sub.Supi = "imsi-001"
-	sub.SmfEndpoint = "http://smf:8080"
-	sub.SmfSubId = "smf-sub-001"
-	sub.Unlock()
+	if sub != nil {
+		sub.Lock()
+		sub.TargetType = TargetType_SUPI
+		sub.Supi = "imsi-001"
+		sub.SmfEndpoint = "http://smf:8080"
+		sub.SmfSubId = "smf-sub-001"
+		sub.Unlock()
+	}
 
 	// Retrieve and verify
 	retrieved := ctx.GetSmfSubscription(correlationId)
 	if retrieved == nil {
 		t.Fatal("GetSmfSubscription should return stored sub")
-	}
-
-	if retrieved.TargetType != TargetType_SUPI {
+	} else if retrieved.TargetType != TargetType_SUPI {
 		t.Errorf("TargetType = %q, want %q", retrieved.TargetType, TargetType_SUPI)
 	}
 
-	if retrieved.Supi != "imsi-001" {
+	if retrieved != nil && retrieved.Supi != "imsi-001" {
 		t.Errorf("Supi = %q, want %q", retrieved.Supi, "imsi-001")
 	}
 

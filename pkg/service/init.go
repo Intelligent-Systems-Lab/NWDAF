@@ -200,6 +200,10 @@ func (a *NwdafApp) Terminate() {
 func (a *NwdafApp) terminateProcedure() {
 	logger.MainLog.Infof("Terminating NWDAF...")
 
+	if a.nwdafCtx != nil {
+		a.nwdafCtx.StopAllSubscriptionSchedulers()
+	}
+
 	if a.sbiServer != nil {
 		a.sbiServer.Shutdown(context.Background())
 	}

@@ -330,8 +330,8 @@ func TestRecordScopedPair_TracksWindowAndSubID(t *testing.T) {
 		TargetTime: now.Add(10 * time.Second),
 	}, matchedPair{predUl: 110, predDl: 210, actualUl: 100, actualDl: 200})
 
-	acc := scopedPairs["group:group-a"]
-	if acc == nil {
+	acc, ok := scopedPairs["group:group-a"]
+	if !ok || acc == nil {
 		t.Fatal("recordScopedPair() did not create accumulator")
 	}
 	if len(acc.pairs) != 2 {
@@ -343,7 +343,7 @@ func TestRecordScopedPair_TracksWindowAndSubID(t *testing.T) {
 	if acc.windowEnd != now.Add(10*time.Second) {
 		t.Fatalf("acc.windowEnd = %v, want %v", acc.windowEnd, now.Add(10*time.Second))
 	}
-	if _, ok := acc.nwdafSubIDs["sub-a"]; !ok {
+	if _, hasSub := acc.nwdafSubIDs["sub-a"]; !hasSub {
 		t.Fatal("acc.nwdafSubIDs missing sub-a")
 	}
 }

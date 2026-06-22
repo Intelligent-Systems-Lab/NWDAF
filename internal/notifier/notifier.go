@@ -15,6 +15,7 @@ import (
 
 // NotificationScheduler manages periodic notifications for subscriptions
 type NotificationScheduler struct {
+	baseCtx         context.Context
 	subscriptionId  string
 	notificationURI string
 	repPeriod       int32 // seconds
@@ -36,6 +37,7 @@ type NotificationScheduler struct {
 
 // NewNotificationScheduler creates a new scheduler for a subscription
 func NewNotificationScheduler(
+	baseCtx context.Context,
 	subscriptionId string,
 	notificationURI string,
 	repPeriod int32,
@@ -45,7 +47,12 @@ func NewNotificationScheduler(
 	monDur *time.Time,
 	onComplete func(subscriptionId string, reason string),
 ) *NotificationScheduler {
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+
 	return &NotificationScheduler{
+		baseCtx:         baseCtx,
 		subscriptionId:  subscriptionId,
 		notificationURI: notificationURI,
 		repPeriod:       repPeriod,
@@ -66,7 +73,7 @@ func (s *NotificationScheduler) Start() {
 		return // Already running
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(s.baseCtx)
 	s.cancel = cancel
 
 	s.wg.Add(1)
@@ -104,9 +111,15 @@ func (s *NotificationScheduler) run(ctx context.Context) {
 	ticker := time.NewTicker(time.Duration(s.repPeriod) * time.Second)
 	defer ticker.Stop()
 
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+
 	// Send first notification immediately (if allowed)
 	if s.shouldContinue() {
-		s.sendNotification()
+		s.sendNotification(ctx)
 	} else {
 		s.handleCompletion("LIMIT_REACHED_BEFORE_START")
 		return
@@ -121,7 +134,7 @@ func (s *NotificationScheduler) run(ctx context.Context) {
 				s.handleCompletion("LIMIT_REACHED")
 				return
 			}
-			s.sendNotification()
+			s.sendNotification(ctx)
 		}
 	}
 }
@@ -160,7 +173,7 @@ func (s *NotificationScheduler) handleCompletion(reason string) {
 }
 
 // sendNotification sends a notification to the consumer
-func (s *NotificationScheduler) sendNotification() {
+func (s *NotificationScheduler) sendNotification(parentCtx context.Context) {
 	// Increment report count
 	s.mu.Lock()
 	s.reportCount++
@@ -180,7 +193,7 @@ func (s *NotificationScheduler) sendNotification() {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(parentCtx, 10*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.notificationURI, bytes.NewBuffer(jsonData))

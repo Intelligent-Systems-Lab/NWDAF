@@ -75,8 +75,7 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	sub1 := ctx.GetSmfSubscription(correlationId1)
 	if sub1 == nil {
 		t.Fatal("Expected SmfSubscription to be created")
-	}
-	if sub1.RefCount != 1 {
+	} else if sub1.RefCount != 1 {
 		t.Errorf("Expected RefCount=1, got %d", sub1.RefCount)
 	}
 
@@ -376,9 +375,7 @@ func TestTriggerMlModelProvisioning_StaticUrl(t *testing.T) {
 	mlInfo := ctx.GetMlModelInfo(subId)
 	if mlInfo == nil {
 		t.Fatal("Expected MlModelInfo to be created")
-	}
-
-	if mlInfo.ModelUrl != "file:///test/model.pth" {
+	} else if mlInfo.ModelUrl != "file:///test/model.pth" {
 		t.Errorf("Expected ModelUrl to be %s, got %s", "file:///test/model.pth", mlInfo.ModelUrl)
 	}
 }

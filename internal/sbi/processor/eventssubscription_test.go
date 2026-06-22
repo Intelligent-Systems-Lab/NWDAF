@@ -1,9 +1,20 @@
 package processor
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"path"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
+	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/nwdaf/internal/sbi/consumer"
+	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -45,6 +56,19 @@ func TestValidateSupportedEvent(t *testing.T) {
 			}
 		})
 	}
+}
+
+type subscriptionTestApp struct {
+	ctx      context.Context
+	consumer *consumer.Consumer
+}
+
+func (a *subscriptionTestApp) CancelContext() context.Context {
+	return a.ctx
+}
+
+func (a *subscriptionTestApp) Consumer() *consumer.Consumer {
+	return a.consumer
 }
 
 func TestValidateUeCommunication(t *testing.T) {
@@ -728,5 +752,227 @@ func TestApplyAndValidateDefaults(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHandleUpdateSubscription_ReappliesDefaultValidation(t *testing.T) {
+	ctx := setupTestContext()
+	p := newTestProcessor()
+
+	subscriptionID := "sub-update-defaults"
+	ctx.AddSubscription(&nwdaf_context.Subscription{
+		ID:              subscriptionID,
+		NotificationURI: "http://consumer.example/callback",
+		EventSubs: []models.NwdafEventsSubscriptionEventSubscription{
+			{
+				Event: models.NwdafEvent_UE_COMMUNICATION,
+				TgtUe: &models.TargetUeInformation{Supis: []string{"imsi-old"}},
+			},
+		},
+	})
+
+	req := &models.NnwdafEventsSubscription{
+		EventSubscriptions: []models.NwdafEventsSubscriptionEventSubscription{
+			{
+				Event: models.NwdafEvent_UE_COMMUNICATION,
+				TgtUe: &models.TargetUeInformation{Supis: []string{"imsi-new"}},
+			},
+		},
+		NotificationURI: "http://consumer.example/callback",
+	}
+
+	response, problemDetails := p.HandleUpdateSubscription(subscriptionID, req)
+	if response != nil {
+		t.Fatalf("expected nil response on invalid update, got %+v", response)
+	}
+	if problemDetails == nil {
+		t.Fatal("expected update to fail default validation")
+	} else if int(problemDetails.Status) != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want %d", problemDetails.Status, http.StatusNotImplemented)
+	} else if problemDetails.Cause != "THRESHOLD_NOT_IMPLEMENTED" {
+		t.Fatalf("cause = %s, want THRESHOLD_NOT_IMPLEMENTED", problemDetails.Cause)
+	}
+}
+
+func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
+	ctx := setupTestContext()
+
+	var (
+		mu            sync.Mutex
+		postedSupis   []string
+		deletedSubIDs []string
+		postCount     int
+	)
+
+	smfServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			var req struct {
+				Supi string `json:"supi"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("failed to decode SMF request: %v", err)
+			}
+
+			mu.Lock()
+			postCount++
+			subID := fmt.Sprintf("smf-sub-%d", postCount)
+			postedSupis = append(postedSupis, req.Supi)
+			mu.Unlock()
+
+			w.Header().Set("Location", consumer.SmfEventExposurePath+"/"+subID)
+			w.WriteHeader(http.StatusCreated)
+			return
+
+		case http.MethodDelete:
+			mu.Lock()
+			deletedSubIDs = append(deletedSubIDs, path.Base(r.URL.Path))
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		t.Fatalf("unexpected SMF method: %s", r.Method)
+	}))
+	defer smfServer.Close()
+
+	oldCfg := factory.NwdafConfig
+	factory.NwdafConfig = &factory.Config{
+		Configuration: &factory.Configuration{
+			Smf: &factory.SmfConfig{
+				Enabled:   true,
+				Endpoints: []string{smfServer.URL},
+				NotifUris: &factory.NotifUris{
+					Smf: "http://127.0.0.1:8080/collector/notify",
+					Upf: "http://127.0.0.1:8080/collector/upf-notify",
+				},
+			},
+		},
+	}
+	defer func() { factory.NwdafConfig = oldCfg }()
+
+	consumerClient, err := consumer.NewConsumer()
+	if err != nil {
+		t.Fatalf("failed to create consumer: %v", err)
+	}
+
+	baseCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	p := NewProcessor(&subscriptionTestApp{
+		ctx:      baseCtx,
+		consumer: consumerClient,
+	})
+
+	subscriptionID := "sub-reconcile"
+	ctx.AddSubscription(&nwdaf_context.Subscription{
+		ID:              subscriptionID,
+		NotificationURI: "http://consumer.example/callback",
+		NotifCorrId:     "notif-old",
+		EventSubs: []models.NwdafEventsSubscriptionEventSubscription{
+			{
+				Event: models.NwdafEvent_UE_COMMUNICATION,
+				TgtUe: &models.TargetUeInformation{Supis: []string{"imsi-old"}},
+			},
+		},
+	})
+
+	p.triggerTargetDataCollection(
+		ctx,
+		consumerClient,
+		[]string{smfServer.URL},
+		[]DataCollectionTarget{{Supi: "imsi-old"}},
+		subscriptionID,
+		"http://127.0.0.1:8080/collector/notify",
+		"http://127.0.0.1:8080/collector/upf-notify",
+		10,
+	)
+
+	oldCorrelationID, found := ctx.GetSmfCorrelationId("supi=imsi-old", smfServer.URL)
+	if !found {
+		t.Fatal("expected initial SMF correlation for old target")
+	}
+	oldSmfSub := ctx.GetSmfSubscription(oldCorrelationID)
+	if oldSmfSub == nil {
+		t.Fatal("expected initial SMF subscription to exist")
+	}
+	_, oldSmfSubID, _ := oldSmfSub.GetInfo()
+
+	mlInfo := nwdaf_context.NewMlModelInfo(models.NwdafEvent_UE_COMMUNICATION, "mtlf-old")
+	mlInfo.SetModelUrl("file:///models/old-model")
+	ctx.SetMlModelInfo(subscriptionID, mlInfo)
+	shared, _ := ctx.GetOrCreateSharedModel("file:///models/old-model", models.NwdafEvent_UE_COMMUNICATION)
+	shared.AddSubscriber(subscriptionID)
+
+	past := time.Now().Add(-time.Second)
+	req := &models.NnwdafEventsSubscription{
+		EventSubscriptions: []models.NwdafEventsSubscriptionEventSubscription{
+			{
+				Event: models.NwdafEvent_UE_COMMUNICATION,
+				TgtUe: &models.TargetUeInformation{Supis: []string{"imsi-new"}},
+			},
+		},
+		NotificationURI: "http://consumer.example/new-callback",
+		NotifCorrId:     "notif-new",
+		EvtReq: &models.ReportingInformation{
+			NotifMethod: models.SmfEventExposureNotificationMethod_PERIODIC,
+			RepPeriod:   1,
+			MonDur:      &past,
+		},
+	}
+
+	response, problemDetails := p.HandleUpdateSubscription(subscriptionID, req)
+	if problemDetails != nil {
+		t.Fatalf("HandleUpdateSubscription returned problem: %+v", problemDetails)
+	}
+	if response == nil {
+		t.Fatal("expected update response")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := ctx.GetSmfCorrelationId("supi=imsi-new", smfServer.URL); ok {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if _, ok := ctx.GetSmfCorrelationId("supi=imsi-old", smfServer.URL); ok {
+		t.Fatal("old SMF correlation should be removed after update")
+	}
+	if ctx.GetSmfSubscription(oldCorrelationID) != nil {
+		t.Fatal("old SMF subscription should be deleted after update")
+	}
+
+	newCorrelationID, ok := ctx.GetSmfCorrelationId("supi=imsi-new", smfServer.URL)
+	if !ok {
+		t.Fatal("new SMF correlation should exist after update")
+	}
+	if newCorrelationID == oldCorrelationID {
+		t.Fatal("expected update to create a fresh correlation for the new target")
+	}
+
+	resources := ctx.GetNwdafSubResources(subscriptionID)
+	if len(resources) != 1 {
+		t.Fatalf("resource count = %d, want 1", len(resources))
+	}
+	if resources[0].Supi != "imsi-new" {
+		t.Fatalf("resource supi = %s, want imsi-new", resources[0].Supi)
+	}
+
+	if ctx.GetMlModelInfo(subscriptionID) != nil {
+		t.Fatal("stale ML model info should be cleared during update")
+	}
+	if ctx.GetSharedModel("file:///models/old-model") != nil {
+		t.Fatal("stale shared model should be removed during update")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Contains(postedSupis, "imsi-old") || !slices.Contains(postedSupis, "imsi-new") {
+		t.Fatalf("posted SUPIs = %v, want both old and new", postedSupis)
+	}
+	if !slices.Contains(deletedSubIDs, oldSmfSubID) {
+		t.Fatalf("deleted subscription IDs = %v, want %s", deletedSubIDs, oldSmfSubID)
 	}
 }

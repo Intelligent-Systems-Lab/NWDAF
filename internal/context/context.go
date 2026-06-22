@@ -176,6 +176,33 @@ func (c *NWDAFContext) GetAllSubscriptions() []*Subscription {
 	return subs
 }
 
+// StopAllSubscriptionSchedulers stops every active subscription scheduler.
+// The stop calls run outside the context lock so scheduler shutdown can block
+// without stalling subscription reads or updates.
+func (c *NWDAFContext) StopAllSubscriptionSchedulers() int {
+	c.mu.Lock()
+	schedulers := make([]interface{ Stop() }, 0, len(c.subscriptions))
+	for _, sub := range c.subscriptions {
+		if sub.Scheduler == nil {
+			continue
+		}
+
+		schedulers = append(schedulers, sub.Scheduler)
+		sub.Scheduler = nil
+	}
+	c.mu.Unlock()
+
+	for _, scheduler := range schedulers {
+		scheduler.Stop()
+	}
+
+	if len(schedulers) > 0 {
+		logger.CtxLog.Infof("Stopped %d subscription schedulers", len(schedulers))
+	}
+
+	return len(schedulers)
+}
+
 // SubscriptionCount returns the number of active subscriptions
 func (c *NWDAFContext) SubscriptionCount() int {
 	c.mu.RLock()

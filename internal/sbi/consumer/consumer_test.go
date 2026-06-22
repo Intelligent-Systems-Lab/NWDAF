@@ -14,8 +14,7 @@ func TestNewConsumer(t *testing.T) {
 	}
 	if c == nil {
 		t.Fatal("NewConsumer() returned nil")
-	}
-	if c.NsmfService == nil {
+	} else if c.NsmfService == nil {
 		t.Error("NsmfService should be initialized")
 	}
 }
@@ -45,17 +44,17 @@ func TestNsmfServiceHTTPClient(t *testing.T) {
 	client := c.NsmfService.HTTPClient()
 	if client == nil {
 		t.Fatal("HTTPClient() returned nil")
-	}
+	} else {
+		// Same client should be returned (single instance)
+		client2 := c.NsmfService.HTTPClient()
+		if client != client2 {
+			t.Error("HTTPClient() should return the same instance")
+		}
 
-	// Same client should be returned (single instance)
-	client2 := c.NsmfService.HTTPClient()
-	if client != client2 {
-		t.Error("HTTPClient() should return the same instance")
-	}
-
-	// Verify timeout is set
-	if client.Timeout == 0 {
-		t.Error("HTTP client timeout should be set")
+		// Verify timeout is set
+		if client.Timeout == 0 {
+			t.Error("HTTP client timeout should be set")
+		}
 	}
 }
 

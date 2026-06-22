@@ -71,30 +71,7 @@ func (p *Processor) HandleCreateSubscription(
 	logger.ProcLog.Infof("Subscription created: %s", subscriptionId)
 
 	// Start notification scheduler for PERIODIC notifications
-
-	isPeriodic := subscription.NotifMethod == string(models.NwdafEventsSubscriptionNotificationMethod_PERIODIC)
-	if isPeriodic && subscription.RepPeriod > 0 {
-		// Create completion callback to handle scheduler termination
-		onComplete := func(subId string, reason string) {
-			logger.ProcLog.Infof("Subscription %s notification completed: %s", subId, reason)
-			if sub := nwdaf_context.GetSelf().GetSubscription(subId); sub != nil {
-				sub.IsActive = false
-			}
-		}
-
-		scheduler := notifier.NewNotificationScheduler(
-			subscriptionId,
-			req.NotificationURI,
-			subscription.RepPeriod,
-			req.EventSubscriptions,
-			subscription.NotifCorrId,
-			subscription.MaxReportNbr,
-			subscription.MonDur,
-			onComplete,
-		)
-		scheduler.Start()
-		subscription.Scheduler = scheduler
-	}
+	p.startSubscriptionScheduler(subscription)
 
 	// Trigger data collection from source NFs using consumer
 	// Per 3GPP TS 23.288 §6.2: NWDAF invokes Nnf_EventExposure_Subscribe to collect data
@@ -109,16 +86,8 @@ func (p *Processor) HandleCreateSubscription(
 	}()
 
 	// Prepare response
-	response := &models.NnwdafEventsSubscription{
-		EventSubscriptions: req.EventSubscriptions,
-		NotificationURI:    req.NotificationURI,
-		NotifCorrId:        req.NotifCorrId,
-		EvtReq:             req.EvtReq,
-	}
-
-	// Add failEventReports if any events failed
+	response := buildSubscriptionResponse(req, failEventReports)
 	if len(failEventReports) > 0 {
-		response.FailEventReports = failEventReports
 		logger.ProcLog.Infof("Subscription created with %d failed events", len(failEventReports))
 	}
 
@@ -149,6 +118,11 @@ func (p *Processor) HandleUpdateSubscription(
 		return nil, problemDetails
 	}
 
+	// Phase 1.5: Apply defaults and validate notification method
+	if problemDetails := p.applyAndValidateDefaults(req); problemDetails != nil {
+		return nil, problemDetails
+	}
+
 	// Phase 2: Collect soft failures (failEventReports)
 	failEventReports := p.collectFailEventReports(req.EventSubscriptions)
 
@@ -162,72 +136,35 @@ func (p *Processor) HandleUpdateSubscription(
 	}
 
 	// Stop existing scheduler before updating
-	if existing.Scheduler != nil {
-		existing.Scheduler.Stop()
-	}
+	stopSubscriptionScheduler(existing)
+
+	// Reconcile external collection and ML state before storing the replacement.
+	p.cleanupDataCollection(subscriptionId)
+	p.cleanupMlModelState(subscriptionId)
 
 	// Update subscription
-	subscription := &nwdaf_context.Subscription{
-		ID:              subscriptionId,
-		NotificationURI: req.NotificationURI,
-		NotifCorrId:     req.NotifCorrId,
-		EventSubs:       req.EventSubscriptions,
-		EvtReq:          req.EvtReq,
-		CreatedAt:       existing.CreatedAt,
-		IsActive:        true,
-	}
-
-	// Populate notification control fields from EvtReq
-	if req.EvtReq != nil {
-		subscription.NotifMethod = string(req.EvtReq.NotifMethod)
-		subscription.RepPeriod = req.EvtReq.RepPeriod
-		subscription.MaxReportNbr = req.EvtReq.MaxReportNbr
-		if req.EvtReq.MonDur != nil {
-			monDur := *req.EvtReq.MonDur
-			subscription.MonDur = &monDur
-		}
-	}
+	subscription := buildSubscription(subscriptionId, req)
+	subscription.CreatedAt = existing.CreatedAt
 
 	ctx.UpdateSubscription(subscription)
 
 	// Start new scheduler if PERIODIC notification requested
-	isPeriodic := subscription.NotifMethod == string(models.NwdafEventsSubscriptionNotificationMethod_PERIODIC)
-	if isPeriodic && subscription.RepPeriod > 0 {
-		// Create completion callback to handle scheduler termination
-		onComplete := func(subId string, reason string) {
-			logger.ProcLog.Infof("Subscription %s notification completed: %s", subId, reason)
-			if sub := nwdaf_context.GetSelf().GetSubscription(subId); sub != nil {
-				sub.IsActive = false
-			}
-		}
+	p.startSubscriptionScheduler(subscription)
 
-		scheduler := notifier.NewNotificationScheduler(
-			subscriptionId,
-			req.NotificationURI,
-			subscription.RepPeriod,
-			req.EventSubscriptions,
-			subscription.NotifCorrId,
-			subscription.MaxReportNbr,
-			subscription.MonDur,
-			onComplete,
-		)
-		scheduler.Start()
-		subscription.Scheduler = scheduler
-	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.ProcLog.Errorf("Panic in TriggerDataCollection for subscription %s: %v", subscriptionId, r)
+			}
+		}()
+		p.TriggerDataCollection(req.EventSubscriptions, subscriptionId)
+	}()
 
 	logger.ProcLog.Infof("Subscription updated: %s", subscriptionId)
 
 	// Prepare response
-	response := &models.NnwdafEventsSubscription{
-		EventSubscriptions: req.EventSubscriptions,
-		NotificationURI:    req.NotificationURI,
-		NotifCorrId:        req.NotifCorrId,
-		EvtReq:             req.EvtReq,
-	}
-
-	// Add failEventReports if any events failed
+	response := buildSubscriptionResponse(req, failEventReports)
 	if len(failEventReports) > 0 {
-		response.FailEventReports = failEventReports
 		logger.ProcLog.Infof("Subscription updated with %d failed events", len(failEventReports))
 	}
 
@@ -251,18 +188,108 @@ func (p *Processor) HandleDeleteSubscription(subscriptionId string) *models.Prob
 	}
 
 	// Stop scheduler if running
-	if subscription.Scheduler != nil {
-		subscription.Scheduler.Stop()
-	}
+	stopSubscriptionScheduler(subscription)
 
 	// Cleanup SMF subscriptions and data collection resources
 	p.cleanupDataCollection(subscriptionId)
 
-	// Cleanup ML model: registry + accuracy monitor
-	if mlInfo := ctx.GetMlModelInfo(subscriptionId); mlInfo != nil {
-		modelUrl := mlInfo.ModelUrl
+	p.cleanupMlModelState(subscriptionId)
 
-		// Layer 1: Registry — remove subscriber
+	ctx.DeleteSubscription(subscriptionId)
+	logger.ProcLog.Infof("Subscription deleted: %s", subscriptionId)
+	return nil
+}
+
+func buildSubscription(
+	subscriptionId string,
+	req *models.NnwdafEventsSubscription,
+) *nwdaf_context.Subscription {
+	subscription := &nwdaf_context.Subscription{
+		ID:              subscriptionId,
+		NotificationURI: req.NotificationURI,
+		NotifCorrId:     req.NotifCorrId,
+		EventSubs:       req.EventSubscriptions,
+		EvtReq:          req.EvtReq,
+		IsActive:        true,
+	}
+
+	if req.EvtReq != nil {
+		subscription.NotifMethod = string(req.EvtReq.NotifMethod)
+		subscription.RepPeriod = req.EvtReq.RepPeriod
+		subscription.MaxReportNbr = req.EvtReq.MaxReportNbr
+		if req.EvtReq.MonDur != nil {
+			monDur := *req.EvtReq.MonDur
+			subscription.MonDur = &monDur
+		}
+	}
+
+	return subscription
+}
+
+func buildSubscriptionResponse(
+	req *models.NnwdafEventsSubscription,
+	failEventReports []models.FailureEventInfo,
+) *models.NnwdafEventsSubscription {
+	response := &models.NnwdafEventsSubscription{
+		EventSubscriptions: req.EventSubscriptions,
+		NotificationURI:    req.NotificationURI,
+		NotifCorrId:        req.NotifCorrId,
+		EvtReq:             req.EvtReq,
+	}
+
+	if len(failEventReports) > 0 {
+		response.FailEventReports = failEventReports
+	}
+
+	return response
+}
+
+func stopSubscriptionScheduler(subscription *nwdaf_context.Subscription) {
+	if subscription == nil || subscription.Scheduler == nil {
+		return
+	}
+
+	subscription.Scheduler.Stop()
+	subscription.Scheduler = nil
+}
+
+func (p *Processor) startSubscriptionScheduler(subscription *nwdaf_context.Subscription) {
+	isPeriodic := subscription.NotifMethod == string(models.NwdafEventsSubscriptionNotificationMethod_PERIODIC)
+	if !isPeriodic || subscription.RepPeriod <= 0 {
+		return
+	}
+
+	onComplete := func(subId string, reason string) {
+		logger.ProcLog.Infof("Subscription %s notification completed: %s", subId, reason)
+		if sub := nwdaf_context.GetSelf().GetSubscription(subId); sub != nil {
+			sub.IsActive = false
+		}
+	}
+
+	scheduler := notifier.NewNotificationScheduler(
+		p.nwdaf.CancelContext(),
+		subscription.ID,
+		subscription.NotificationURI,
+		subscription.RepPeriod,
+		subscription.EventSubs,
+		subscription.NotifCorrId,
+		subscription.MaxReportNbr,
+		subscription.MonDur,
+		onComplete,
+	)
+	scheduler.Start()
+	subscription.Scheduler = scheduler
+}
+
+func (p *Processor) cleanupMlModelState(subscriptionId string) {
+	ctx := nwdaf_context.GetSelf()
+	mlInfo := ctx.GetMlModelInfo(subscriptionId)
+	if mlInfo == nil {
+		return
+	}
+
+	modelUrl := mlInfo.ModelUrl
+	if modelUrl != "" {
 		if shared := ctx.GetSharedModel(modelUrl); shared != nil {
 			remaining := shared.RemoveSubscriber(subscriptionId)
 			if remaining == 0 {
@@ -270,15 +297,10 @@ func (p *Processor) HandleDeleteSubscription(subscriptionId string) *models.Prob
 			}
 		}
 
-		// Layer 2: Accuracy monitor — stop if no subscribers remain
 		p.anlf.StopAccuracyMonitorForModel(modelUrl)
-
-		ctx.DeleteMlModelInfo(subscriptionId)
 	}
 
-	ctx.DeleteSubscription(subscriptionId)
-	logger.ProcLog.Infof("Subscription deleted: %s", subscriptionId)
-	return nil
+	ctx.DeleteMlModelInfo(subscriptionId)
 }
 
 // validateSubscriptionRequest is the unified validation entry point for Create/Update
