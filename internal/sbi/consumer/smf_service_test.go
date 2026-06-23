@@ -7,7 +7,10 @@ import (
 	"github.com/h2non/gock"
 )
 
-const testSmfEndpoint = "http://127.0.0.10:8000"
+const (
+	testSmfEndpoint       = "http://127.0.0.10:8000"
+	testSmfSubscriptionID = "sub-123"
+)
 
 func TestNsmfService_SubscribeToSmf(t *testing.T) {
 	service := NewNsmfService()
@@ -36,14 +39,14 @@ func TestNsmfService_SubscribeToSmf(t *testing.T) {
 			RepPeriod:   opts.RepPeriod,
 		}).
 		Reply(http.StatusCreated).
-		SetHeader("Location", SmfEventExposurePath+"/sub-123")
+		SetHeader("Location", SmfEventExposurePath+"/"+testSmfSubscriptionID)
 
 	subscriptionID, err := service.SubscribeToSmf(testSmfEndpoint, opts)
 	if err != nil {
 		t.Fatalf("SubscribeToSmf returned error: %v", err)
 	}
-	if subscriptionID != "sub-123" {
-		t.Fatalf("SubscribeToSmf returned %q, want %q", subscriptionID, "sub-123")
+	if subscriptionID != testSmfSubscriptionID {
+		t.Fatalf("SubscribeToSmf returned %q, want %q", subscriptionID, testSmfSubscriptionID)
 	}
 	if !gock.IsDone() {
 		t.Fatal("expected SMF subscription request to match gock expectation")
@@ -79,10 +82,10 @@ func TestNsmfService_UnsubscribeFromSmf(t *testing.T) {
 	defer gock.RestoreClient(service.HTTPClient())
 
 	gock.New(testSmfEndpoint).
-		Delete(SmfEventExposurePath + "/sub-123").
+		Delete(SmfEventExposurePath + "/" + testSmfSubscriptionID).
 		Reply(http.StatusNoContent)
 
-	if err := service.UnsubscribeFromSmf(testSmfEndpoint, "sub-123"); err != nil {
+	if err := service.UnsubscribeFromSmf(testSmfEndpoint, testSmfSubscriptionID); err != nil {
 		t.Fatalf("UnsubscribeFromSmf returned error: %v", err)
 	}
 	if !gock.IsDone() {

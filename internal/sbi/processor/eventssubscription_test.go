@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/mock/gomock"
+
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/factory"
@@ -752,7 +754,7 @@ func TestApplyAndValidateDefaults(t *testing.T) {
 
 func TestHandleUpdateSubscription_ReappliesDefaultValidation(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	subscriptionID := "sub-update-defaults"
 	ctx.AddSubscription(&nwdaf_context.Subscription{
@@ -791,7 +793,28 @@ func TestHandleUpdateSubscription_ReappliesDefaultValidation(t *testing.T) {
 
 func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 	ctx := setupTestContext()
-	smfService := &fakeSmfService{}
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	smfService := NewMockSmfServiceClient(ctrl)
+	var subscribedSupis []string
+	var unsubscribeCalls []string
+	subscribeCount := 0
+	smfService.EXPECT().
+		SubscribeToSmf("http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
+		DoAndReturn(func(_ string, opts consumer.SmfSubscriptionOptions) (string, error) {
+			subscribeCount++
+			subscribedSupis = append(subscribedSupis, opts.Supi)
+			return "smf-sub-" + opts.Supi, nil
+		}).
+		Times(2)
+	smfService.EXPECT().
+		UnsubscribeFromSmf("http://smf.example", gomock.Any()).
+		DoAndReturn(func(_ string, subscriptionID string) error {
+			unsubscribeCalls = append(unsubscribeCalls, subscriptionID)
+			return nil
+		}).
+		Times(1)
 
 	oldCfg := factory.NwdafConfig
 	factory.NwdafConfig = &factory.Config{
@@ -920,20 +943,16 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 	if ctx.GetSharedModel("file:///models/old-model") != nil {
 		t.Fatal("stale shared model should be removed during update")
 	}
-	if len(smfService.subscribeCalls) != 2 {
-		t.Fatalf("expected two SMF subscribe calls, got %d", len(smfService.subscribeCalls))
+	if subscribeCount != 2 {
+		t.Fatalf("expected two SMF subscribe calls, got %d", subscribeCount)
 	}
-	gotSupis := []string{
-		smfService.subscribeCalls[0].opts.Supi,
-		smfService.subscribeCalls[1].opts.Supi,
+	if !slices.Equal(subscribedSupis, []string{"imsi-old", "imsi-new"}) {
+		t.Fatalf("subscribed SUPIs = %v, want %v", subscribedSupis, []string{"imsi-old", "imsi-new"})
 	}
-	if !slices.Equal(gotSupis, []string{"imsi-old", "imsi-new"}) {
-		t.Fatalf("subscribed SUPIs = %v, want %v", gotSupis, []string{"imsi-old", "imsi-new"})
+	if len(unsubscribeCalls) != 1 {
+		t.Fatalf("expected one SMF unsubscribe call, got %d", len(unsubscribeCalls))
 	}
-	if len(smfService.unsubscribeCalls) != 1 {
-		t.Fatalf("expected one SMF unsubscribe call, got %d", len(smfService.unsubscribeCalls))
-	}
-	if !slices.Contains([]string{smfService.unsubscribeCalls[0].subscriptionID}, oldSmfSubID) {
-		t.Fatalf("unsubscribe calls = %+v, want %s", smfService.unsubscribeCalls, oldSmfSubID)
+	if !slices.Contains(unsubscribeCalls, oldSmfSubID) {
+		t.Fatalf("unsubscribe calls = %v, want %s", unsubscribeCalls, oldSmfSubID)
 	}
 }

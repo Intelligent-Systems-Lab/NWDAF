@@ -3,20 +3,34 @@ package consumer
 import (
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
+
+	"github.com/h2non/gock"
 )
 
-// TestNewDaisyClient tests DaisyClient initialization
+const testDaisyEndpoint = "http://127.0.0.40:8000"
+
+func newInterceptedDaisyClient(t *testing.T) *DaisyClient {
+	t.Helper()
+
+	client := NewDaisyClient(testDaisyEndpoint)
+	gock.InterceptClient(client.HTTPClient())
+	t.Cleanup(func() {
+		gock.Off()
+		gock.RestoreClient(client.HTTPClient())
+	})
+
+	return client
+}
+
 func TestNewDaisyClient(t *testing.T) {
-	endpoint := "http://127.0.0.1:9887"
-	client := NewDaisyClient(endpoint)
+	client := NewDaisyClient(testDaisyEndpoint)
 
 	if client == nil {
 		t.Fatal("NewDaisyClient() returned nil")
 	}
-	if client.GetEndpoint() != endpoint {
-		t.Errorf("GetEndpoint() = %v, want %v", client.GetEndpoint(), endpoint)
+	if client.GetEndpoint() != testDaisyEndpoint {
+		t.Errorf("GetEndpoint() = %v, want %v", client.GetEndpoint(), testDaisyEndpoint)
 	}
 	if client.HTTPClient() == nil {
 		t.Error("HTTPClient() returned nil")
@@ -26,82 +40,105 @@ func TestNewDaisyClient(t *testing.T) {
 	}
 }
 
-// TestTriggerTrainingAsync_Success tests async training request with 202 response
-func TestTriggerTrainingAsync_Success(t *testing.T) {
-	var receivedPayload map[string]any
+func TestDaisyClient_TriggerTrainingAsync(t *testing.T) {
+	client := newInterceptedDaisyClient(t)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("Method = %v, want POST", r.Method)
-		}
-		if r.URL.Path != DaisyPublishTaskPath {
-			t.Errorf("Path = %v, want %v", r.URL.Path, DaisyPublishTaskPath)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&receivedPayload); err != nil {
-			t.Fatalf("Failed to decode request body: %v", err)
-		}
-		w.WriteHeader(http.StatusAccepted)
-	}))
-	defer server.Close()
-
-	const cbURL = "http://nwdaf:8080/mtlf/training-complete"
-	client := NewDaisyClient(server.URL)
+	callbackURL := "http://nwdaf:8080/mtlf/training-complete"
 	task := map[string]any{"NUM_ROUNDS": float64(2)}
 
-	taskId, err := client.TriggerTrainingAsync(task, cbURL, "")
+	gock.New(testDaisyEndpoint).
+		Post(DaisyPublishTaskPath).
+		MatchHeader("Content-Type", "application/json").
+		JSON(map[string]any{
+			"NUM_ROUNDS":        float64(2),
+			DaisyTIDKey:         "task-123",
+			DaisyCallbackURLKey: callbackURL,
+		}).
+		Reply(http.StatusAccepted)
+
+	taskID, err := client.TriggerTrainingAsync(task, callbackURL, "task-123")
 	if err != nil {
-		t.Fatalf("TriggerTrainingAsync() error = %v", err)
+		t.Fatalf("TriggerTrainingAsync returned error: %v", err)
 	}
-	if taskId == "" {
-		t.Error("TriggerTrainingAsync() should return non-empty taskId")
+	if taskID != "task-123" {
+		t.Fatalf("TriggerTrainingAsync returned %q, want %q", taskID, "task-123")
 	}
-	if receivedPayload[DaisyCallbackURLKey] != cbURL {
-		t.Errorf("callback_url = %v, want %v", receivedPayload[DaisyCallbackURLKey], cbURL)
-	}
-	if _, ok := receivedPayload[DaisyTIDKey]; !ok {
-		t.Error("TID should be set in payload")
-	}
-	if receivedPayload[DaisyTIDKey] != taskId {
-		t.Errorf("returned taskId = %v does not match payload TID = %v",
-			taskId, receivedPayload[DaisyTIDKey])
+	if !gock.IsDone() {
+		t.Fatal("expected Daisy training request to match gock expectation")
 	}
 }
 
-// TestTriggerTrainingAsync_Rejected tests error when Daisy returns non-202
-func TestTriggerTrainingAsync_Rejected(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		if _, err := w.Write([]byte(`{"error":"busy"}`)); err != nil {
-			t.Logf("failed to write response: %v", err)
-		}
-	}))
-	defer server.Close()
+func TestDaisyClient_TriggerTrainingAsyncOmitsCallbackWhenEmpty(t *testing.T) {
+	client := newInterceptedDaisyClient(t)
 
-	client := NewDaisyClient(server.URL)
-	_, err := client.TriggerTrainingAsync(map[string]any{}, "http://callback", "")
-	if err == nil {
-		t.Error("TriggerTrainingAsync() should return error when server rejects")
+	gock.New(testDaisyEndpoint).
+		Post(DaisyPublishTaskPath).
+		MatchHeader("Content-Type", "application/json").
+		JSON(map[string]any{
+			DaisyTIDKey: "task-456",
+		}).
+		Reply(http.StatusAccepted)
+
+	taskID, err := client.TriggerTrainingAsync(map[string]any{}, "", "task-456")
+	if err != nil {
+		t.Fatalf("TriggerTrainingAsync returned error: %v", err)
+	}
+	if taskID != "task-456" {
+		t.Fatalf("TriggerTrainingAsync returned %q, want %q", taskID, "task-456")
+	}
+	if !gock.IsDone() {
+		t.Fatal("expected Daisy training request without callback to match gock expectation")
 	}
 }
 
-// TestTriggerTrainingAsync_NoCallbackURL tests that callback_url is omitted when empty
-func TestTriggerTrainingAsync_NoCallbackURL(t *testing.T) {
-	var receivedPayload map[string]any
+func TestDaisyClient_TriggerTrainingAsyncRejectsFailureStatus(t *testing.T) {
+	client := newInterceptedDaisyClient(t)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewDecoder(r.Body).Decode(&receivedPayload); err != nil {
-			t.Fatalf("Failed to decode request body: %v", err)
-		}
-		w.WriteHeader(http.StatusAccepted)
-	}))
-	defer server.Close()
+	gock.New(testDaisyEndpoint).
+		Post(DaisyPublishTaskPath).
+		Reply(http.StatusInternalServerError).
+		BodyString(`{"error":"busy"}`)
 
-	client := NewDaisyClient(server.URL)
-	_, err := client.TriggerTrainingAsync(map[string]any{}, "", "")
-	if err != nil {
-		t.Fatalf("TriggerTrainingAsync() error = %v", err)
+	if _, err := client.TriggerTrainingAsync(map[string]any{}, "", "task-789"); err == nil {
+		t.Fatal("expected TriggerTrainingAsync to fail on non-202 status")
 	}
-	if _, ok := receivedPayload[DaisyCallbackURLKey]; ok {
-		t.Error("callback_url should not be set when empty string is passed")
+}
+
+func TestDaisyClient_UploadData(t *testing.T) {
+	client := newInterceptedDaisyClient(t)
+
+	upfEventNotifs := []json.RawMessage{
+		json.RawMessage(`{"event":"usage-1"}`),
+		json.RawMessage(`{"event":"usage-2"}`),
+	}
+
+	gock.New(testDaisyEndpoint).
+		Post(DaisyUploadDataPath).
+		MatchHeader("Content-Type", "application/json").
+		JSON(DaisyUploadDataRequest{
+			TID:            "task-123",
+			GroupId:        "group-A",
+			UpfEventNotifs: upfEventNotifs,
+		}).
+		Reply(http.StatusCreated)
+
+	if err := client.UploadData("task-123", "group-A", upfEventNotifs); err != nil {
+		t.Fatalf("UploadData returned error: %v", err)
+	}
+	if !gock.IsDone() {
+		t.Fatal("expected Daisy upload request to match gock expectation")
+	}
+}
+
+func TestDaisyClient_UploadDataReturnsErrorOnFailureStatus(t *testing.T) {
+	client := newInterceptedDaisyClient(t)
+
+	gock.New(testDaisyEndpoint).
+		Post(DaisyUploadDataPath).
+		Reply(http.StatusBadGateway).
+		BodyString("backend unavailable")
+
+	if err := client.UploadData("task-123", "group-A", nil); err == nil {
+		t.Fatal("expected UploadData to fail on non-success status")
 	}
 }

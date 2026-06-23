@@ -1,160 +1,131 @@
 package consumer
 
 import (
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
+
+	"github.com/h2non/gock"
 )
 
+const testMlServiceEndpoint = "http://127.0.0.30:8000"
+
+func newInterceptedMlServiceClient(t *testing.T) *MlServiceClient {
+	t.Helper()
+
+	client := NewMlServiceClient(testMlServiceEndpoint)
+	gock.InterceptClient(client.HTTPClient())
+	t.Cleanup(func() {
+		gock.Off()
+		gock.RestoreClient(client.HTTPClient())
+	})
+
+	return client
+}
+
 func TestMlServiceClient_InitializeModel(t *testing.T) {
-	tests := []struct {
-		name           string
-		serverResponse func(w http.ResponseWriter, r *http.Request)
-		modelUrl       string
-		wantModelId    string
-		wantErr        bool
-	}{
-		{
-			name: "successful model load",
-			serverResponse: func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodPost {
-					t.Errorf("expected POST, got %s", r.Method)
-				}
-				if r.URL.Path != "/model/load" {
-					t.Errorf("expected /model/load, got %s", r.URL.Path)
-				}
+	client := newInterceptedMlServiceClient(t)
 
-				var req LoadModelRequest
-				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-					t.Errorf("failed to decode request: %v", err)
-				}
-				if req.ModelUrl != "http://example.com/model.h5" {
-					t.Errorf("expected model URL http://example.com/model.h5, got %s", req.ModelUrl)
-				}
+	gock.New(testMlServiceEndpoint).
+		Post("/model/load").
+		MatchHeader("Content-Type", "application/json").
+		JSON(LoadModelRequest{ModelUrl: "http://example.com/model.h5"}).
+		Reply(http.StatusCreated).
+		JSON(LoadModelResponse{ModelId: "test-model-123"})
 
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusOK)
-				//nolint:errcheck
-				json.NewEncoder(w).Encode(LoadModelResponse{ModelId: "test-model-123"})
-			},
-			modelUrl:    "http://example.com/model.h5",
-			wantModelId: "test-model-123",
-			wantErr:     false,
-		},
-		{
-			name: "server error",
-			serverResponse: func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusInternalServerError)
-				//nolint:errcheck
-				w.Write([]byte("internal error"))
-			},
-			modelUrl:    "http://example.com/model.h5",
-			wantModelId: "",
-			wantErr:     true,
-		},
+	modelID, err := client.InitializeModel("http://example.com/model.h5")
+	if err != nil {
+		t.Fatalf("InitializeModel returned error: %v", err)
 	}
+	if modelID != "test-model-123" {
+		t.Fatalf("InitializeModel returned %q, want %q", modelID, "test-model-123")
+	}
+	if !gock.IsDone() {
+		t.Fatal("expected ML model initialization request to match gock expectation")
+	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(tt.serverResponse))
-			defer server.Close()
+func TestMlServiceClient_InitializeModelReturnsErrorOnFailureStatus(t *testing.T) {
+	client := newInterceptedMlServiceClient(t)
 
-			client := NewMlServiceClient(server.URL)
-			modelId, err := client.InitializeModel(tt.modelUrl)
+	gock.New(testMlServiceEndpoint).
+		Post("/model/load").
+		Reply(http.StatusInternalServerError).
+		BodyString("internal error")
 
-			if (err != nil) != tt.wantErr {
-				t.Errorf("InitializeModel() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if modelId != tt.wantModelId {
-				t.Errorf("InitializeModel() = %v, want %v", modelId, tt.wantModelId)
-			}
-		})
+	if _, err := client.InitializeModel("http://example.com/model.h5"); err == nil {
+		t.Fatal("expected InitializeModel to fail on non-success status")
+	}
+}
+
+func TestMlServiceClient_UnloadModel(t *testing.T) {
+	client := newInterceptedMlServiceClient(t)
+
+	gock.New(testMlServiceEndpoint).
+		Post("/model/unload").
+		MatchHeader("Content-Type", "application/json").
+		JSON(UnloadModelRequest{ModelId: "model-123"}).
+		Reply(http.StatusOK).
+		JSON(UnloadModelResponse{ModelId: "model-123", Status: "unloaded"})
+
+	if err := client.UnloadModel("model-123"); err != nil {
+		t.Fatalf("UnloadModel returned error: %v", err)
+	}
+	if !gock.IsDone() {
+		t.Fatal("expected ML model unload request to match gock expectation")
 	}
 }
 
 func TestMlServiceClient_Predict(t *testing.T) {
-	tests := []struct {
-		name           string
-		serverResponse func(w http.ResponseWriter, r *http.Request)
-		modelId        string
-		trafficData    []TrafficObservation
-		wantCount      int
-		wantErr        bool
-	}{
-		{
-			name: "successful prediction",
-			serverResponse: func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodPost {
-					t.Errorf("expected POST, got %s", r.Method)
-				}
-				if r.URL.Path != "/predict" {
-					t.Errorf("expected /predict, got %s", r.URL.Path)
-				}
+	client := newInterceptedMlServiceClient(t)
 
-				var req PredictRequest
-				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-					t.Errorf("failed to decode request: %v", err)
-				}
-				if req.ModelId != "model-123" {
-					t.Errorf("expected model ID model-123, got %s", req.ModelId)
-				}
-
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusOK)
-				//nolint:errcheck
-				json.NewEncoder(w).Encode(PredictResponse{
-					PredictedData: []UeCommunicationPrediction{
-						{
-							Ts:         "2025-01-01T00:00:00Z",
-							TrafChar:   TrafficCharacterization{UlVol: 1000, DlVol: 2000},
-							Confidence: 85,
-						},
-					},
-				})
-			},
-			modelId: "model-123",
-			trafficData: []TrafficObservation{
-				{
-					Ts:       "2024-12-31T23:59:00Z",
-					UlVol:    500,
-					DlVol:    1000,
-					TotalVol: 1500,
-				},
-			},
-			wantCount: 1,
-			wantErr:   false,
-		},
+	trafficData := []TrafficObservation{
 		{
-			name: "model not found",
-			serverResponse: func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusNotFound)
-				//nolint:errcheck
-				w.Write([]byte("model not found"))
-			},
-			modelId:     "invalid-model",
-			trafficData: []TrafficObservation{},
-			wantCount:   0,
-			wantErr:     true,
+			Ts:       "2024-12-31T23:59:00Z",
+			UlVol:    500,
+			DlVol:    1000,
+			TotalVol: 1500,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(tt.serverResponse))
-			defer server.Close()
-
-			client := NewMlServiceClient(server.URL)
-			resp, err := client.Predict(tt.modelId, tt.trafficData)
-
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Predict() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if !tt.wantErr && len(resp.PredictedData) != tt.wantCount {
-				t.Errorf("Predict() returned %d predictions, want %d", len(resp.PredictedData), tt.wantCount)
-			}
+	gock.New(testMlServiceEndpoint).
+		Post("/predict").
+		MatchHeader("Content-Type", "application/json").
+		JSON(PredictRequest{
+			ModelId:        "model-123",
+			HistoricalData: trafficData,
+		}).
+		Reply(http.StatusOK).
+		JSON(PredictResponse{
+			PredictedData: []UeCommunicationPrediction{
+				{
+					Ts:         "2025-01-01T00:00:00Z",
+					TrafChar:   TrafficCharacterization{UlVol: 1000, DlVol: 2000},
+					Confidence: 85,
+				},
+			},
 		})
+
+	resp, err := client.Predict("model-123", trafficData)
+	if err != nil {
+		t.Fatalf("Predict returned error: %v", err)
+	}
+	if len(resp.PredictedData) != 1 {
+		t.Fatalf("Predict returned %d predictions, want 1", len(resp.PredictedData))
+	}
+	if !gock.IsDone() {
+		t.Fatal("expected ML prediction request to match gock expectation")
+	}
+}
+
+func TestMlServiceClient_PredictReturnsDecodeError(t *testing.T) {
+	client := newInterceptedMlServiceClient(t)
+
+	gock.New(testMlServiceEndpoint).
+		Post("/predict").
+		Reply(http.StatusOK).
+		BodyString("{invalid json")
+
+	if _, err := client.Predict("model-123", nil); err == nil {
+		t.Fatal("expected Predict to fail on invalid JSON response")
 	}
 }

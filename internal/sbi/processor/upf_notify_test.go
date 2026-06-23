@@ -5,8 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/mock/gomock"
+
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
-	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -14,17 +15,6 @@ const (
 	testCorsId = "test-corr-001"
 	testDnn    = "internet"
 )
-
-// mockNwdafApp implements NwdafApp for testing
-type mockNwdafApp struct{}
-
-func (m *mockNwdafApp) CancelContext() context.Context {
-	return context.Background()
-}
-
-func (m *mockNwdafApp) Consumer() *consumer.Consumer {
-	return nil
-}
 
 func setupTestContext() *nwdaf_context.NWDAFContext {
 	nwdaf_context.Init()
@@ -34,8 +24,17 @@ func setupTestContext() *nwdaf_context.NWDAFContext {
 	return ctx
 }
 
-func newTestProcessor() *Processor {
-	return NewProcessor(&mockNwdafApp{})
+func newTestProcessor(t *testing.T) *Processor {
+	t.Helper()
+
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	mockApp := NewMockNwdafApp(ctrl)
+	mockApp.EXPECT().CancelContext().Return(context.Background()).AnyTimes()
+	mockApp.EXPECT().Consumer().Return(nil).AnyTimes()
+
+	return NewProcessor(mockApp)
 }
 
 // =============================================================================
@@ -44,7 +43,7 @@ func newTestProcessor() *Processor {
 
 func TestHandleUpfNotification_Basic(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	correlationId := testCorsId
 	ts := time.Now()
@@ -98,7 +97,7 @@ func TestHandleUpfNotification_Basic(t *testing.T) {
 
 func TestHandleUpfNotification_MultipleItems(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	correlationId := testCorsId
 
@@ -145,7 +144,7 @@ func TestHandleUpfNotification_MultipleItems(t *testing.T) {
 
 func TestHandleUpfNotification_DataAccumulation(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	correlationId := testCorsId
 
@@ -201,7 +200,7 @@ func TestHandleUpfNotification_DataAccumulation(t *testing.T) {
 
 func TestHandleUpfNotification_MissingCorrelationId(t *testing.T) {
 	setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	notif := &UpfNotificationData{
 		CorrelationId: "", // Missing
@@ -222,7 +221,7 @@ func TestHandleUpfNotification_MissingCorrelationId(t *testing.T) {
 
 func TestHandleUpfNotification_UpdateSmfSubscription(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	correlationId := testCorsId
 
@@ -254,7 +253,7 @@ func TestHandleUpfNotification_UpdateSmfSubscription(t *testing.T) {
 
 func TestHandleUpfNotification_WithMetadata(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	correlationId := testCorsId
 	snssai := &models.Snssai{Sst: 1, Sd: "010203"}
@@ -296,7 +295,7 @@ func TestHandleUpfNotification_WithMetadata(t *testing.T) {
 
 func TestHandleUpfNotification_ThroughputMeasurement(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	correlationId := testCorsId
 
@@ -340,7 +339,7 @@ func TestHandleUpfNotification_ThroughputMeasurement(t *testing.T) {
 
 func TestHandleUpfNotification_FullVolumeMeasurement(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	correlationId := testCorsId
 	ts := time.Now()
@@ -406,7 +405,7 @@ func TestHandleUpfNotification_FullVolumeMeasurement(t *testing.T) {
 
 func TestHandleUpfNotification_PacketThroughput(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	correlationId := testCorsId
 

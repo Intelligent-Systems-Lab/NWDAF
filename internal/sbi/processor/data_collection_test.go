@@ -1,61 +1,31 @@
 package processor
 
 import (
-	"fmt"
-	"net/http"
 	"testing"
+
+	"go.uber.org/mock/gomock"
 
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
 
-type fakeSmfService struct {
-	subscribeCalls []struct {
-		endpoint string
-		opts     consumer.SmfSubscriptionOptions
-	}
-	unsubscribeCalls []struct {
-		endpoint       string
-		subscriptionID string
-	}
-	nextID int
-}
-
-func (f *fakeSmfService) SubscribeToSmf(
-	smfEndpoint string,
-	opts consumer.SmfSubscriptionOptions,
-) (string, error) {
-	f.subscribeCalls = append(f.subscribeCalls, struct {
-		endpoint string
-		opts     consumer.SmfSubscriptionOptions
-	}{
-		endpoint: smfEndpoint,
-		opts:     opts,
-	})
-	f.nextID++
-	return fmt.Sprintf("smf-sub-%d", f.nextID), nil
-}
-
-func (f *fakeSmfService) UnsubscribeFromSmf(smfEndpoint string, subscriptionID string) error {
-	f.unsubscribeCalls = append(f.unsubscribeCalls, struct {
-		endpoint       string
-		subscriptionID string
-	}{
-		endpoint:       smfEndpoint,
-		subscriptionID: subscriptionID,
-	})
-	return nil
-}
-
-func (f *fakeSmfService) HTTPClient() *http.Client {
-	return &http.Client{}
-}
-
 func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor()
-	smfService := &fakeSmfService{}
+	p := newTestProcessor(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	smfService := NewMockSmfServiceClient(ctrl)
+	smfService.EXPECT().
+		SubscribeToSmf("http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
+		DoAndReturn(func(_ string, opts consumer.SmfSubscriptionOptions) (string, error) {
+			if opts.Supi != "imsi-208930000000003" {
+				t.Fatalf("SubscribeToSmf SUPI = %q, want %q", opts.Supi, "imsi-208930000000003")
+			}
+			return "smf-sub-1", nil
+		}).
+		Times(1)
 	smfConsumer := consumer.NewConsumerWithServices(smfService, nil, nil)
 
 	// 3. Define Targets
@@ -152,9 +122,6 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	if found4 {
 		t.Error("Mapping should be removed after last reference removed")
 	}
-	if len(smfService.subscribeCalls) != 1 {
-		t.Fatalf("expected one SMF subscription call, got %d", len(smfService.subscribeCalls))
-	}
 }
 
 // =============================================================================
@@ -220,8 +187,19 @@ func TestDataCollectionTarget_OriginalGroupIdTracking(t *testing.T) {
 
 func TestTriggerTargetDataCollection_WithOriginalGroupId(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor()
-	smfService := &fakeSmfService{}
+	p := newTestProcessor(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	smfService := NewMockSmfServiceClient(ctrl)
+	var gotSupis []string
+	smfService.EXPECT().
+		SubscribeToSmf("http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
+		DoAndReturn(func(_ string, opts consumer.SmfSubscriptionOptions) (string, error) {
+			gotSupis = append(gotSupis, opts.Supi)
+			return "smf-sub-" + opts.Supi, nil
+		}).
+		Times(3)
 	smfConsumer := consumer.NewConsumerWithServices(smfService, nil, nil)
 
 	// Simulate Group ID resolution: group → multiple SUPIs
@@ -276,15 +254,26 @@ func TestTriggerTargetDataCollection_WithOriginalGroupId(t *testing.T) {
 				resource.OriginalGroupId, groupId)
 		}
 	}
-	if len(smfService.subscribeCalls) != len(targets) {
-		t.Fatalf("expected %d SMF subscription calls, got %d", len(targets), len(smfService.subscribeCalls))
+	if len(gotSupis) != len(targets) {
+		t.Fatalf("expected %d SMF subscription calls, got %d", len(targets), len(gotSupis))
 	}
 }
 
 func TestTriggerTargetDataCollection_MixedSupiAndGroup(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor()
-	smfService := &fakeSmfService{}
+	p := newTestProcessor(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	smfService := NewMockSmfServiceClient(ctrl)
+	var subscribeCalls int
+	smfService.EXPECT().
+		SubscribeToSmf("http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
+		DoAndReturn(func(_ string, _ consumer.SmfSubscriptionOptions) (string, error) {
+			subscribeCalls++
+			return "smf-sub", nil
+		}).
+		Times(4)
 	smfConsumer := consumer.NewConsumerWithServices(smfService, nil, nil)
 
 	// Mix of direct SUPI and Group-resolved SUPIs
@@ -329,8 +318,8 @@ func TestTriggerTargetDataCollection_MixedSupiAndGroup(t *testing.T) {
 	if groupCounts["group-B"] != 1 {
 		t.Errorf("Expected 1 from group-B, got %d", groupCounts["group-B"])
 	}
-	if len(smfService.subscribeCalls) != len(targets) {
-		t.Fatalf("expected %d SMF subscription calls, got %d", len(targets), len(smfService.subscribeCalls))
+	if subscribeCalls != len(targets) {
+		t.Fatalf("expected %d SMF subscription calls, got %d", len(targets), subscribeCalls)
 	}
 }
 
@@ -340,7 +329,7 @@ func TestTriggerTargetDataCollection_MixedSupiAndGroup(t *testing.T) {
 
 func TestTriggerMlModelProvisioning_StaticUrl(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	// 1. Setup Config with Static Model URL
 	// Create minimal config structure
@@ -386,7 +375,7 @@ func TestTriggerMlModelProvisioning_StaticUrl(t *testing.T) {
 
 func TestTriggerMlModelProvisioning_MtlfDisabledNoStaticUrl(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	// Setup Config: MTLF disabled, no static URL
 	cfg := &factory.Config{

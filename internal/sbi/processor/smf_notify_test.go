@@ -13,7 +13,7 @@ import (
 
 func TestHandleSmfNotification_Basic(t *testing.T) {
 	setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	ts := time.Now()
 	notif := &models.NsmfEventExposureNotification{
@@ -37,7 +37,7 @@ func TestHandleSmfNotification_Basic(t *testing.T) {
 
 func TestHandleSmfNotification_EnrichTrafficData(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	correlationId := testCorsId
 
@@ -85,7 +85,7 @@ func TestHandleSmfNotification_EnrichTrafficData(t *testing.T) {
 
 func TestHandleSmfNotification_MultipleEvents(t *testing.T) {
 	setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	ts := time.Now()
 	notif := &models.NsmfEventExposureNotification{
@@ -114,7 +114,7 @@ func TestHandleSmfNotification_MultipleEvents(t *testing.T) {
 
 func TestHandleSmfNotification_MissingSupi(t *testing.T) {
 	setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	notif := &models.NsmfEventExposureNotification{
 		NotifId: "test-corr-001",
@@ -136,7 +136,7 @@ func TestHandleSmfNotification_MissingSupi(t *testing.T) {
 
 func TestHandleSmfNotification_NoMatchingBucket(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	correlationId := testCorsId
 	// Don't create bucket - simulating SMF notification before UPF
@@ -169,7 +169,7 @@ func TestHandleSmfNotification_NoMatchingBucket(t *testing.T) {
 
 func TestHandleSmfNotification_EnrichMultipleTrafficData(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor()
+	p := newTestProcessor(t)
 
 	correlationId := testCorsId
 
