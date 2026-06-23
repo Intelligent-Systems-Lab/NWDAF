@@ -41,17 +41,24 @@ func (s *Server) getCollectorRoutes() []Route {
 func (s *Server) HandleCollectorNotify(c *gin.Context) {
 	var notification models.NsmfEventExposureNotification
 
-	if err := c.ShouldBindJSON(&notification); err != nil {
-		logger.SBILog.Errorf("Failed to parse notification: %v", err)
-		util.GinProblemJson(c, openapi.ProblemDetailsMalformedReqSyntax(err.Error()))
+	requestBody, err := c.GetRawData()
+	if err != nil {
+		logger.SBILog.Errorf("Get Request Body error: %+v", err)
+		util.GinProblemJson(c, openapi.ProblemDetailsSystemFailure(err.Error()))
+		return
+	}
+
+	if deserializeErr := openapi.Deserialize(&notification, requestBody, "application/json"); deserializeErr != nil {
+		logger.SBILog.Errorf("Deserialize notification error: %v", deserializeErr)
+		util.GinProblemJson(c, openapi.ProblemDetailsMalformedReqSyntax(deserializeErr.Error()))
 		return
 	}
 
 	// Process the notification using processor
 	proc := s.Processor()
-	if err := proc.HandleSmfNotification(&notification); err != nil {
-		logger.SBILog.Errorf("Failed to handle notification: %v", err)
-		util.GinProblemJson(c, openapi.ProblemDetailsSystemFailure(err.Error()))
+	if handleErr := proc.HandleSmfNotification(&notification); handleErr != nil {
+		logger.SBILog.Errorf("Failed to handle notification: %v", handleErr)
+		util.GinProblemJson(c, openapi.ProblemDetailsSystemFailure(handleErr.Error()))
 		return
 	}
 

@@ -22,7 +22,7 @@ func TestHandleMlModelProvisionNotify_InvalidJSON(t *testing.T) {
 	}
 
 	problem := decodeProblemDetailsResponse(t, recorder)
-	if problem.Title != "Malformed request syntax" {
+	if problem.Title != malformedRequestSyntaxTitle {
 		t.Fatalf("title = %q", problem.Title)
 	}
 	if problem.Cause != "" {

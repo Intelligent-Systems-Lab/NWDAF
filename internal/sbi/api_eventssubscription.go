@@ -18,8 +18,15 @@ func (s *Server) HandleCreateSubscription(c *gin.Context) {
 	logger.SBILog.Info("Handle CreateSubscription")
 
 	var req models.NnwdafEventsSubscription
-	if err := c.ShouldBindJSON(&req); err != nil {
-		util.GinProblemJson(c, openapi.ProblemDetailsMalformedReqSyntax(err.Error()))
+	requestBody, err := c.GetRawData()
+	if err != nil {
+		logger.SBILog.Errorf("Get Request Body error: %+v", err)
+		util.GinProblemJson(c, openapi.ProblemDetailsSystemFailure(err.Error()))
+		return
+	}
+
+	if deserializeErr := openapi.Deserialize(&req, requestBody, "application/json"); deserializeErr != nil {
+		util.GinProblemJson(c, openapi.ProblemDetailsMalformedReqSyntax(deserializeErr.Error()))
 		return
 	}
 
@@ -48,8 +55,15 @@ func (s *Server) HandleUpdateSubscription(c *gin.Context) {
 	logger.SBILog.Infof("Handle UpdateSubscription: %s", subscriptionId)
 
 	var req models.NnwdafEventsSubscription
-	if err := c.ShouldBindJSON(&req); err != nil {
-		util.GinProblemJson(c, openapi.ProblemDetailsMalformedReqSyntax(err.Error()))
+	requestBody, err := c.GetRawData()
+	if err != nil {
+		logger.SBILog.Errorf("Get Request Body error: %+v", err)
+		util.GinProblemJson(c, openapi.ProblemDetailsSystemFailure(err.Error()))
+		return
+	}
+
+	if deserializeErr := openapi.Deserialize(&req, requestBody, "application/json"); deserializeErr != nil {
+		util.GinProblemJson(c, openapi.ProblemDetailsMalformedReqSyntax(deserializeErr.Error()))
 		return
 	}
 

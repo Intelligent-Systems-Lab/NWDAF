@@ -9,26 +9,8 @@ import (
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/util"
 	"github.com/free5gc/openapi"
+	"github.com/free5gc/openapi/models"
 )
-
-// MlModelAddr represents ML model file address per TS 29.520
-type MlModelAddr struct {
-	MLModelUrl string `json:"mLModelUrl,omitempty"`
-	MlFileFqdn string `json:"mlFileFqdn,omitempty"`
-}
-
-// MlEventNotif represents a single ML event notification per TS 29.520
-type MlEventNotif struct {
-	Event        string       `json:"event"`
-	NotifCorreId string       `json:"notifCorreId,omitempty"`
-	MLFileAddr   *MlModelAddr `json:"mLFileAddr,omitempty"`
-}
-
-// NwdafMlModelProvNotif represents ML Model Provision notification per TS 29.520
-type NwdafMlModelProvNotif struct {
-	SubscriptionId string         `json:"subscriptionId"`
-	EventNotifs    []MlEventNotif `json:"eventNotifs"`
-}
 
 // HandleMlModelProvisionNotify handles ML Model Provision notifications from MTLF
 // Per TS 29.520 §5.4.5.2: Callback for ML Model Provision notifications
@@ -37,10 +19,17 @@ func (s *Server) HandleMlModelProvisionNotify(c *gin.Context) {
 	logger.SBILog.Info("Received ML Model Provision notification")
 
 	// Per TS 29.520, notification body is an array of NwdafMlModelProvNotif
-	var notifications []NwdafMlModelProvNotif
-	if err := c.ShouldBindJSON(&notifications); err != nil {
-		logger.SBILog.Errorf("Failed to parse ML Model Provision notification: %v", err)
-		util.GinProblemJson(c, openapi.ProblemDetailsMalformedReqSyntax(err.Error()))
+	var notifications []models.NwdafMlModelProvNotif
+	requestBody, err := c.GetRawData()
+	if err != nil {
+		logger.SBILog.Errorf("Get Request Body error: %+v", err)
+		util.GinProblemJson(c, openapi.ProblemDetailsSystemFailure(err.Error()))
+		return
+	}
+
+	if deserializeErr := openapi.Deserialize(&notifications, requestBody, "application/json"); deserializeErr != nil {
+		logger.SBILog.Errorf("Failed to deserialize ML Model Provision notification: %v", deserializeErr)
+		util.GinProblemJson(c, openapi.ProblemDetailsMalformedReqSyntax(deserializeErr.Error()))
 		return
 	}
 
@@ -61,7 +50,7 @@ func (s *Server) HandleMlModelProvisionNotify(c *gin.Context) {
 }
 
 // processMlModelNotification processes a single ML model notification
-func (s *Server) processMlModelNotification(ctx *nwdaf_context.NWDAFContext, notif *NwdafMlModelProvNotif) {
+func (s *Server) processMlModelNotification(ctx *nwdaf_context.NWDAFContext, notif *models.NwdafMlModelProvNotif) {
 	logger.SBILog.Infof("Processing ML Model notification for subscription: %s", notif.SubscriptionId)
 
 	// Find the corresponding NWDAF subscription by correlation ID (we used subscriptionId as notifId)

@@ -16,6 +16,8 @@ import (
 	"github.com/free5gc/openapi/models"
 )
 
+const malformedRequestSyntaxTitle = "Malformed request syntax"
+
 type handlerTestApp struct {
 	cfg *factory.Config
 }
