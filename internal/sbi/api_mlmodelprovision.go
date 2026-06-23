@@ -7,6 +7,8 @@ import (
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
+	"github.com/free5gc/nwdaf/internal/util"
+	"github.com/free5gc/openapi"
 )
 
 // MlModelAddr represents ML model file address per TS 29.520
@@ -38,7 +40,7 @@ func (s *Server) HandleMlModelProvisionNotify(c *gin.Context) {
 	var notifications []NwdafMlModelProvNotif
 	if err := c.ShouldBindJSON(&notifications); err != nil {
 		logger.SBILog.Errorf("Failed to parse ML Model Provision notification: %v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid notification format"})
+		util.GinProblemJson(c, openapi.ProblemDetailsMalformedReqSyntax(err.Error()))
 		return
 	}
 

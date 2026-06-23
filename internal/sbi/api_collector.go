@@ -7,6 +7,8 @@ import (
 
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/sbi/processor"
+	"github.com/free5gc/nwdaf/internal/util"
+	"github.com/free5gc/openapi"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -39,13 +41,9 @@ func (s *Server) getCollectorRoutes() []Route {
 func (s *Server) HandleCollectorNotify(c *gin.Context) {
 	var notification models.NsmfEventExposureNotification
 
-	if err := c.BindJSON(&notification); err != nil {
+	if err := c.ShouldBindJSON(&notification); err != nil {
 		logger.SBILog.Errorf("Failed to parse notification: %v", err)
-		c.JSON(http.StatusBadRequest, models.ProblemDetails{
-			Status: http.StatusBadRequest,
-			Cause:  "INVALID_JSON",
-			Detail: err.Error(),
-		})
+		util.GinProblemJson(c, openapi.ProblemDetailsMalformedReqSyntax(err.Error()))
 		return
 	}
 
@@ -53,11 +51,7 @@ func (s *Server) HandleCollectorNotify(c *gin.Context) {
 	proc := s.Processor()
 	if err := proc.HandleSmfNotification(&notification); err != nil {
 		logger.SBILog.Errorf("Failed to handle notification: %v", err)
-		c.JSON(http.StatusInternalServerError, models.ProblemDetails{
-			Status: http.StatusInternalServerError,
-			Cause:  "INTERNAL_ERROR",
-			Detail: err.Error(),
-		})
+		util.GinProblemJson(c, openapi.ProblemDetailsSystemFailure(err.Error()))
 		return
 	}
 
@@ -70,13 +64,9 @@ func (s *Server) HandleCollectorNotify(c *gin.Context) {
 func (s *Server) HandleUpfNotify(c *gin.Context) {
 	var notification processor.UpfNotificationData
 
-	if err := c.BindJSON(&notification); err != nil {
+	if err := c.ShouldBindJSON(&notification); err != nil {
 		logger.SBILog.Errorf("Failed to parse UPF notification: %v", err)
-		c.JSON(http.StatusBadRequest, models.ProblemDetails{
-			Status: http.StatusBadRequest,
-			Cause:  "INVALID_JSON",
-			Detail: err.Error(),
-		})
+		util.GinProblemJson(c, openapi.ProblemDetailsMalformedReqSyntax(err.Error()))
 		return
 	}
 
@@ -86,11 +76,7 @@ func (s *Server) HandleUpfNotify(c *gin.Context) {
 	proc := s.Processor()
 	if err := proc.HandleUpfNotification(&notification); err != nil {
 		logger.SBILog.Errorf("Failed to handle UPF notification: %v", err)
-		c.JSON(http.StatusInternalServerError, models.ProblemDetails{
-			Status: http.StatusInternalServerError,
-			Cause:  "INTERNAL_ERROR",
-			Detail: err.Error(),
-		})
+		util.GinProblemJson(c, openapi.ProblemDetailsSystemFailure(err.Error()))
 		return
 	}
 

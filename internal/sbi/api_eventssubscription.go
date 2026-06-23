@@ -7,7 +7,9 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/free5gc/nwdaf/internal/logger"
+	"github.com/free5gc/nwdaf/internal/util"
 	"github.com/free5gc/nwdaf/pkg/factory"
+	"github.com/free5gc/openapi"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -17,18 +19,13 @@ func (s *Server) HandleCreateSubscription(c *gin.Context) {
 
 	var req models.NnwdafEventsSubscription
 	if err := c.ShouldBindJSON(&req); err != nil {
-		problemDetails := models.ProblemDetails{
-			Status: http.StatusBadRequest,
-			Cause:  "INVALID_JSON",
-			Detail: err.Error(),
-		}
-		c.JSON(http.StatusBadRequest, problemDetails)
+		util.GinProblemJson(c, openapi.ProblemDetailsMalformedReqSyntax(err.Error()))
 		return
 	}
 
 	response, subscriptionId, problemDetails := s.Processor().HandleCreateSubscription(&req)
 	if problemDetails != nil {
-		c.JSON(int(problemDetails.Status), problemDetails)
+		util.GinProblemJson(c, problemDetails)
 		return
 	}
 
@@ -52,18 +49,13 @@ func (s *Server) HandleUpdateSubscription(c *gin.Context) {
 
 	var req models.NnwdafEventsSubscription
 	if err := c.ShouldBindJSON(&req); err != nil {
-		problemDetails := models.ProblemDetails{
-			Status: http.StatusBadRequest,
-			Cause:  "INVALID_JSON",
-			Detail: err.Error(),
-		}
-		c.JSON(http.StatusBadRequest, problemDetails)
+		util.GinProblemJson(c, openapi.ProblemDetailsMalformedReqSyntax(err.Error()))
 		return
 	}
 
 	response, problemDetails := s.Processor().HandleUpdateSubscription(subscriptionId, &req)
 	if problemDetails != nil {
-		c.JSON(int(problemDetails.Status), problemDetails)
+		util.GinProblemJson(c, problemDetails)
 		return
 	}
 
@@ -77,7 +69,7 @@ func (s *Server) HandleDeleteSubscription(c *gin.Context) {
 
 	problemDetails := s.Processor().HandleDeleteSubscription(subscriptionId)
 	if problemDetails != nil {
-		c.JSON(int(problemDetails.Status), problemDetails)
+		util.GinProblemJson(c, problemDetails)
 		return
 	}
 

@@ -1,7 +1,6 @@
 package sbi
 
 import (
-	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -22,12 +21,12 @@ func TestHandleMlModelProvisionNotify_InvalidJSON(t *testing.T) {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
 	}
 
-	var body map[string]string
-	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
-		t.Fatalf("failed to decode body: %v", err)
+	problem := decodeProblemDetailsResponse(t, recorder)
+	if problem.Title != "Malformed request syntax" {
+		t.Fatalf("title = %q", problem.Title)
 	}
-	if body["error"] != "Invalid notification format" {
-		t.Fatalf("error = %q", body["error"])
+	if problem.Cause != "" {
+		t.Fatalf("cause = %q, want empty", problem.Cause)
 	}
 }
 

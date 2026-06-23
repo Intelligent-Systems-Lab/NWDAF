@@ -3,13 +3,17 @@ package sbi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http/httptest"
+	"testing"
 
 	"github.com/gin-gonic/gin"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/sbi/processor"
+	"github.com/free5gc/nwdaf/internal/util"
 	"github.com/free5gc/nwdaf/pkg/factory"
+	"github.com/free5gc/openapi/models"
 )
 
 type handlerTestApp struct {
@@ -56,4 +60,19 @@ func newJSONRequestContext(method, target string, body []byte) (*gin.Context, *h
 	c.Request = httptest.NewRequest(method, target, bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 	return c, recorder
+}
+
+func decodeProblemDetailsResponse(t *testing.T, recorder *httptest.ResponseRecorder) models.ProblemDetails {
+	t.Helper()
+
+	if contentType := recorder.Header().Get("Content-Type"); contentType != util.ProblemJSONContentType {
+		t.Fatalf("Content-Type = %q, want %q", contentType, util.ProblemJSONContentType)
+	}
+
+	var problem models.ProblemDetails
+	if err := json.Unmarshal(recorder.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("failed to decode problem details: %v", err)
+	}
+
+	return problem
 }

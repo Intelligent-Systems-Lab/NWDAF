@@ -1,13 +1,13 @@
 package sbi
 
 import (
-	"encoding/json"
 	"net/http"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/mock/gomock"
 
+	"github.com/free5gc/nwdaf/internal/util"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -58,12 +58,12 @@ func TestHandleCreateSubscription_InvalidJSON(t *testing.T) {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
 	}
 
-	var problem models.ProblemDetails
-	if err := json.Unmarshal(recorder.Body.Bytes(), &problem); err != nil {
-		t.Fatalf("failed to decode problem details: %v", err)
+	problem := decodeProblemDetailsResponse(t, recorder)
+	if problem.Title != "Malformed request syntax" {
+		t.Fatalf("title = %q", problem.Title)
 	}
-	if problem.Cause != "INVALID_JSON" {
-		t.Fatalf("cause = %q, want %q", problem.Cause, "INVALID_JSON")
+	if problem.Cause != "" {
+		t.Fatalf("cause = %q, want empty", problem.Cause)
 	}
 }
 
@@ -97,6 +97,9 @@ func TestHandleUpdateSubscription_ProcessorFailure(t *testing.T) {
 
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
+	}
+	if contentType := recorder.Header().Get("Content-Type"); contentType != util.ProblemJSONContentType {
+		t.Fatalf("Content-Type = %q, want %q", contentType, util.ProblemJSONContentType)
 	}
 }
 

@@ -1,7 +1,6 @@
 package sbi
 
 import (
-	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -18,12 +17,12 @@ func TestHandleDaisyTrainingComplete_InvalidPayload(t *testing.T) {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
 	}
 
-	var body map[string]string
-	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
-		t.Fatalf("failed to decode body: %v", err)
+	problem := decodeProblemDetailsResponse(t, recorder)
+	if problem.Title != "Malformed request syntax" {
+		t.Fatalf("title = %q", problem.Title)
 	}
-	if body["error"] != "invalid payload" {
-		t.Fatalf("error = %q", body["error"])
+	if problem.Cause != "" {
+		t.Fatalf("cause = %q, want empty", problem.Cause)
 	}
 }
 
@@ -35,6 +34,17 @@ func TestHandleDaisyTrainingComplete_MissingTaskID(t *testing.T) {
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+
+	problem := decodeProblemDetailsResponse(t, recorder)
+	if problem.Title != "Mandatory IEs are missing" {
+		t.Fatalf("title = %q", problem.Title)
+	}
+	if problem.Cause != "MANDATORY_IE_MISSING" {
+		t.Fatalf("cause = %q", problem.Cause)
+	}
+	if problem.Detail != "task_id is required" {
+		t.Fatalf("detail = %q", problem.Detail)
 	}
 }
 

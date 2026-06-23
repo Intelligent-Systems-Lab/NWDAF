@@ -6,6 +6,9 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/free5gc/nwdaf/internal/logger"
+	"github.com/free5gc/nwdaf/internal/util"
+	"github.com/free5gc/openapi"
+	"github.com/free5gc/openapi/models"
 )
 
 // DaisyTrainingCompleteNotif is the callback payload sent by Daisy when async
@@ -24,11 +27,16 @@ func (s *Server) HandleDaisyTrainingComplete(c *gin.Context) {
 	var notif DaisyTrainingCompleteNotif
 	if err := c.ShouldBindJSON(&notif); err != nil {
 		logger.SBILog.Errorf("Failed to parse Daisy training callback: %v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		util.GinProblemJson(c, openapi.ProblemDetailsMalformedReqSyntax(err.Error()))
 		return
 	}
 	if notif.TaskId == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing task_id"})
+		util.GinProblemJson(c, &models.ProblemDetails{
+			Title:  "Mandatory IEs are missing",
+			Status: http.StatusBadRequest,
+			Cause:  "MANDATORY_IE_MISSING",
+			Detail: "task_id is required",
+		})
 		return
 	}
 

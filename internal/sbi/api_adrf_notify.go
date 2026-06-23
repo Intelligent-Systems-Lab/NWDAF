@@ -6,6 +6,8 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/free5gc/nwdaf/internal/logger"
+	"github.com/free5gc/nwdaf/internal/util"
+	"github.com/free5gc/openapi"
 )
 
 // NadrfDataRetrievalNotification is the callback payload from ADRF (TS 29.575).
@@ -28,7 +30,7 @@ func (s *Server) HandleAdrfRetrievalNotify(c *gin.Context) {
 	var notif NadrfDataRetrievalNotification
 	if err := c.ShouldBindJSON(&notif); err != nil {
 		logger.SBILog.Errorf("Failed to parse ADRF retrieval notification: %v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		util.GinProblemJson(c, openapi.ProblemDetailsMalformedReqSyntax(err.Error()))
 		return
 	}
 
