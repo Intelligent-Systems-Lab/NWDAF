@@ -19,17 +19,14 @@ const (
 // NsmfService handles SMF Event Exposure API interactions
 // Exported to allow method promotion via embedding in Consumer
 type NsmfService struct {
-	consumer *Consumer
-
 	// Single HTTP client - Go's http.Client is safe for concurrent use
 	// and handles connection pooling internally
 	httpClient *http.Client
 }
 
 // NewNsmfService creates a new NsmfService with optimized HTTP client
-func NewNsmfService(c *Consumer) *NsmfService {
+func NewNsmfService() *NsmfService {
 	return &NsmfService{
-		consumer: c,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{

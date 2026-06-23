@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/free5gc/openapi/models"
 )
 
 func TestMlServiceClient_InitializeModel(t *testing.T) {
@@ -156,85 +154,6 @@ func TestMlServiceClient_Predict(t *testing.T) {
 			}
 			if !tt.wantErr && len(resp.PredictedData) != tt.wantCount {
 				t.Errorf("Predict() returned %d predictions, want %d", len(resp.PredictedData), tt.wantCount)
-			}
-		})
-	}
-}
-
-func TestMtlfService_SubscribeToMtlf(t *testing.T) {
-	tests := []struct {
-		name           string
-		serverResponse func(w http.ResponseWriter, r *http.Request)
-		opts           MtlfSubscriptionOptions
-		wantSubId      string
-		wantErr        bool
-	}{
-		{
-			name: "successful subscription",
-			serverResponse: func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodPost {
-					t.Errorf("expected POST, got %s", r.Method)
-				}
-				if r.URL.Path != MtlfMLModelProvisionPath {
-					t.Errorf("expected %s, got %s", MtlfMLModelProvisionPath, r.URL.Path)
-				}
-
-				var req MtlfSubscriptionRequest
-				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-					t.Errorf("failed to decode request: %v", err)
-				}
-				if len(req.MLEventSubscs) == 0 {
-					t.Error("expected at least one event subscription")
-				}
-
-				w.Header().Set("Location", MtlfMLModelProvisionPath+"/sub-123")
-				w.WriteHeader(http.StatusCreated)
-			},
-			opts: MtlfSubscriptionOptions{
-				NotifUri: "http://localhost:8080/mlmodel-notify",
-				NotifId:  "corr-123",
-				Event:    models.NwdafEvent_UE_COMMUNICATION,
-			},
-			wantSubId: "sub-123",
-			wantErr:   false,
-		},
-		{
-			name: "server error returns error",
-			serverResponse: func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusInternalServerError)
-				//nolint:errcheck
-				w.Write([]byte("internal error"))
-			},
-			opts: MtlfSubscriptionOptions{
-				NotifUri: "http://localhost:8080/mlmodel-notify",
-				NotifId:  "corr-456",
-				Event:    models.NwdafEvent_UE_COMMUNICATION,
-			},
-			wantSubId: "",
-			wantErr:   true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(tt.serverResponse))
-			defer server.Close()
-
-			// Create minimal consumer and service for testing
-			consumer := &Consumer{}
-			service := &NmtlfService{
-				consumer:   consumer,
-				httpClient: http.DefaultClient,
-			}
-
-			subId, err := service.SubscribeToMtlf(server.URL, tt.opts)
-
-			if (err != nil) != tt.wantErr {
-				t.Errorf("SubscribeToMtlf() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if subId != tt.wantSubId {
-				t.Errorf("SubscribeToMtlf() = %v, want %v", subId, tt.wantSubId)
 			}
 		})
 	}

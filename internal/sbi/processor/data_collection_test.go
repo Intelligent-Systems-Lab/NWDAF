@@ -1,8 +1,8 @@
 package processor
 
 import (
+	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
@@ -10,34 +10,53 @@ import (
 	"github.com/free5gc/openapi/models"
 )
 
-// MockRoundTripper for intercepting HTTP requests
-type MockRoundTripper struct {
-	RoundTripFunc func(req *http.Request) (*http.Response, error)
+type fakeSmfService struct {
+	subscribeCalls []struct {
+		endpoint string
+		opts     consumer.SmfSubscriptionOptions
+	}
+	unsubscribeCalls []struct {
+		endpoint       string
+		subscriptionID string
+	}
+	nextID int
 }
 
-func (m *MockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	return m.RoundTripFunc(req)
+func (f *fakeSmfService) SubscribeToSmf(
+	smfEndpoint string,
+	opts consumer.SmfSubscriptionOptions,
+) (string, error) {
+	f.subscribeCalls = append(f.subscribeCalls, struct {
+		endpoint string
+		opts     consumer.SmfSubscriptionOptions
+	}{
+		endpoint: smfEndpoint,
+		opts:     opts,
+	})
+	f.nextID++
+	return fmt.Sprintf("smf-sub-%d", f.nextID), nil
+}
+
+func (f *fakeSmfService) UnsubscribeFromSmf(smfEndpoint string, subscriptionID string) error {
+	f.unsubscribeCalls = append(f.unsubscribeCalls, struct {
+		endpoint       string
+		subscriptionID string
+	}{
+		endpoint:       smfEndpoint,
+		subscriptionID: subscriptionID,
+	})
+	return nil
+}
+
+func (f *fakeSmfService) HTTPClient() *http.Client {
+	return &http.Client{}
 }
 
 func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	ctx := setupTestContext()
 	p := newTestProcessor()
-
-	// 1. Start Mock SMF Server
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-		w.Header().Set("Location", r.URL.String()+"/sub-123")
-		if _, err := w.Write([]byte(`{"notifId": "test-notif-id"}`)); err != nil {
-			t.Logf("Failed to write response: %v", err)
-		}
-	}))
-	defer ts.Close()
-
-	// 2. Setup Consumer (real one, will talk to httptest server)
-	smfConsumer, err := consumer.NewConsumer()
-	if err != nil {
-		t.Fatalf("Failed to create consumer: %v", err)
-	}
+	smfService := &fakeSmfService{}
+	smfConsumer := consumer.NewConsumerWithServices(smfService, nil, nil)
 
 	// 3. Define Targets
 	targetSupi := "imsi-208930000000003"
@@ -49,7 +68,8 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 
 	// 4. Trigger First Subscription
 	nwdafSubId1 := "nwdaf-sub-01"
-	smfEndpoints := []string{ts.URL}
+	smfEndpoint := "http://smf.example"
+	smfEndpoints := []string{smfEndpoint}
 
 	// Access unexported method via reflection? No, I am in package processor!
 	// But triggerTargetDataCollection is in data_collection.go which belongs to package processor.
@@ -66,8 +86,8 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	)
 
 	// 5. Verify First Subscription
-	targetKey := targetSupi + "@" + ts.URL
-	correlationId1, found := ctx.GetSmfCorrelationId("supi="+targetSupi, ts.URL)
+	targetKey := targetSupi + "@" + smfEndpoint
+	correlationId1, found := ctx.GetSmfCorrelationId("supi="+targetSupi, smfEndpoint)
 	if !found {
 		t.Fatalf("Expected SMF mapping for key %s", targetKey)
 	}
@@ -93,7 +113,7 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	)
 
 	// 7. Verify Reuse
-	correlationId2, found2 := ctx.GetSmfCorrelationId("supi="+targetSupi, ts.URL)
+	correlationId2, found2 := ctx.GetSmfCorrelationId("supi="+targetSupi, smfEndpoint)
 	if !found2 {
 		t.Fatal("Expected SMF mapping to exist")
 	}
@@ -116,7 +136,7 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	}
 
 	// Mapping should still exist
-	_, found3 := ctx.GetSmfCorrelationId("supi="+targetSupi, ts.URL)
+	_, found3 := ctx.GetSmfCorrelationId("supi="+targetSupi, smfEndpoint)
 	if !found3 {
 		t.Error("Mapping should persist until last reference removed")
 	}
@@ -128,9 +148,12 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	}
 
 	// Mapping should be gone
-	_, found4 := ctx.GetSmfCorrelationId("supi="+targetSupi, ts.URL)
+	_, found4 := ctx.GetSmfCorrelationId("supi="+targetSupi, smfEndpoint)
 	if found4 {
 		t.Error("Mapping should be removed after last reference removed")
+	}
+	if len(smfService.subscribeCalls) != 1 {
+		t.Fatalf("expected one SMF subscription call, got %d", len(smfService.subscribeCalls))
 	}
 }
 
@@ -198,21 +221,8 @@ func TestDataCollectionTarget_OriginalGroupIdTracking(t *testing.T) {
 func TestTriggerTargetDataCollection_WithOriginalGroupId(t *testing.T) {
 	ctx := setupTestContext()
 	p := newTestProcessor()
-
-	// Mock SMF Server
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-		w.Header().Set("Location", r.URL.String()+"/sub-123")
-		if _, err := w.Write([]byte(`{"notifId": "test-notif-id"}`)); err != nil {
-			t.Logf("Failed to write response: %v", err)
-		}
-	}))
-	defer ts.Close()
-
-	smfConsumer, err := consumer.NewConsumer()
-	if err != nil {
-		t.Fatalf("Failed to create consumer: %v", err)
-	}
+	smfService := &fakeSmfService{}
+	smfConsumer := consumer.NewConsumerWithServices(smfService, nil, nil)
 
 	// Simulate Group ID resolution: group → multiple SUPIs
 	groupId := "group-test-001"
@@ -227,7 +237,7 @@ func TestTriggerTargetDataCollection_WithOriginalGroupId(t *testing.T) {
 	p.triggerTargetDataCollection(
 		ctx,
 		smfConsumer,
-		[]string{ts.URL},
+		[]string{"http://smf.example"},
 		targets,
 		nwdafSubId,
 		"http://nwdaf/notify",
@@ -237,7 +247,7 @@ func TestTriggerTargetDataCollection_WithOriginalGroupId(t *testing.T) {
 
 	// Verify: Each SUPI should have its own SMF subscription
 	for _, target := range targets {
-		correlationId, found := ctx.GetSmfCorrelationId("supi="+target.Supi, ts.URL)
+		correlationId, found := ctx.GetSmfCorrelationId("supi="+target.Supi, "http://smf.example")
 		if !found {
 			t.Errorf("Expected SMF mapping for supi=%s", target.Supi)
 			continue
@@ -266,25 +276,16 @@ func TestTriggerTargetDataCollection_WithOriginalGroupId(t *testing.T) {
 				resource.OriginalGroupId, groupId)
 		}
 	}
+	if len(smfService.subscribeCalls) != len(targets) {
+		t.Fatalf("expected %d SMF subscription calls, got %d", len(targets), len(smfService.subscribeCalls))
+	}
 }
 
 func TestTriggerTargetDataCollection_MixedSupiAndGroup(t *testing.T) {
 	ctx := setupTestContext()
 	p := newTestProcessor()
-
-	// Mock SMF Server
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-		if _, err := w.Write([]byte(`{"notifId": "test"}`)); err != nil {
-			t.Logf("Failed to write response: %v", err)
-		}
-	}))
-	defer ts.Close()
-
-	smfConsumer, err := consumer.NewConsumer()
-	if err != nil {
-		t.Fatalf("Failed to create consumer: %v", err)
-	}
+	smfService := &fakeSmfService{}
+	smfConsumer := consumer.NewConsumerWithServices(smfService, nil, nil)
 
 	// Mix of direct SUPI and Group-resolved SUPIs
 	targets := []DataCollectionTarget{
@@ -299,7 +300,7 @@ func TestTriggerTargetDataCollection_MixedSupiAndGroup(t *testing.T) {
 	p.triggerTargetDataCollection(
 		ctx,
 		smfConsumer,
-		[]string{ts.URL},
+		[]string{"http://smf.example"},
 		targets,
 		nwdafSubId,
 		"http://nwdaf/notify",
@@ -327,6 +328,9 @@ func TestTriggerTargetDataCollection_MixedSupiAndGroup(t *testing.T) {
 	}
 	if groupCounts["group-B"] != 1 {
 		t.Errorf("Expected 1 from group-B, got %d", groupCounts["group-B"])
+	}
+	if len(smfService.subscribeCalls) != len(targets) {
+		t.Fatalf("expected %d SMF subscription calls, got %d", len(targets), len(smfService.subscribeCalls))
 	}
 }
 

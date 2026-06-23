@@ -7,8 +7,6 @@ Network Data Analytics Function (NWDAF) implementation based on 3GPP TS 29.520.
 - Go 1.21+
 - MongoDB (optional — NWDAF falls back to in-memory without it)
 
-See [docs/testing.md](docs/testing.md) for MongoDB setup instructions.
-
 ## Build
 
 ```bash
@@ -21,14 +19,12 @@ make build
 
 ## Testing
 
-See [docs/testing.md](docs/testing.md) for detailed testing instructions.
-
 ```bash
 # Unit tests
-go test ./... -v
+go test ./...
 
-# API tests (requires server running)
-./test/scripts/test_api.sh all
+# Lint
+make lint
 ```
 
 ## License

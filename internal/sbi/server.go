@@ -16,6 +16,7 @@ import (
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/sbi/processor"
 	"github.com/free5gc/nwdaf/pkg/factory"
+	"github.com/free5gc/openapi/models"
 )
 
 type Route struct {
@@ -49,19 +50,37 @@ type nwdafApp interface {
 	CancelContext() context.Context
 }
 
+type processorAPI interface {
+	HandleCreateSubscription(
+		req *models.NnwdafEventsSubscription,
+	) (*models.NnwdafEventsSubscription, string, *models.ProblemDetails)
+	HandleUpdateSubscription(
+		subscriptionID string,
+		req *models.NnwdafEventsSubscription,
+	) (*models.NnwdafEventsSubscription, *models.ProblemDetails)
+	HandleDeleteSubscription(subscriptionID string) *models.ProblemDetails
+	HandleSmfNotification(notification *models.NsmfEventExposureNotification) error
+	HandleUpfNotification(notification *processor.UpfNotificationData) error
+	InitializeMlModel(nwdafSubID string, mlInfo *nwdaf_context.MlModelInfo, modelURL string)
+	HandleDaisyCallback(taskID, modelURL, status, errMsg string)
+	HandleAdrfRetrievalNotify(notifCorrID string, fetchCorrIDs []string, terminationReq bool)
+}
+
 type Server struct {
 	nwdafApp
 
 	httpServer *http.Server
 	router     *gin.Engine
+	processor  processorAPI
 }
 
 func NewServer(nwdaf nwdafApp) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 
 	s := &Server{
-		nwdafApp: nwdaf,
-		router:   gin.New(),
+		nwdafApp:  nwdaf,
+		router:    gin.New(),
+		processor: nwdaf.Processor(),
 	}
 
 	// Setup middleware
@@ -126,6 +145,10 @@ func (s *Server) getEventsSubscriptionRoutes() []Route {
 			APIFunc: s.HandleDeleteSubscription,
 		},
 	}
+}
+
+func (s *Server) Processor() processorAPI {
+	return s.processor
 }
 
 func (s *Server) Run(traceCtx context.Context, wg *sync.WaitGroup) error {

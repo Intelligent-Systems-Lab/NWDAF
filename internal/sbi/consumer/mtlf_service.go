@@ -1,16 +1,15 @@
 package consumer
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/free5gc/openapi/models"
+	MLModelProvision "github.com/free5gc/openapi/nwdaf/MLModelProvision"
 )
 
 const (
@@ -21,14 +20,15 @@ const (
 // NmtlfService handles MTLF ML Model Provision API interactions
 // Per TS 29.520 §5.4: Nnwdaf_MLModelProvision Service API
 type NmtlfService struct {
-	consumer   *Consumer
 	httpClient *http.Client
+
+	mu         sync.Mutex
+	apiClients map[string]*MLModelProvision.APIClient
 }
 
 // NewNmtlfService creates a new NmtlfService with HTTP client
-func NewNmtlfService(c *Consumer) *NmtlfService {
+func NewNmtlfService() *NmtlfService {
 	return &NmtlfService{
-		consumer: c,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
@@ -37,6 +37,7 @@ func NewNmtlfService(c *Consumer) *NmtlfService {
 				IdleConnTimeout:     90 * time.Second,
 			},
 		},
+		apiClients: make(map[string]*MLModelProvision.APIClient),
 	}
 }
 
@@ -48,19 +49,6 @@ type MtlfSubscriptionOptions struct {
 	TgtUe    *models.TargetUeInformation // Target UE information
 }
 
-// MtlfEventSubscription represents ML event subscription per TS 29.520
-type MtlfEventSubscription struct {
-	MLEvent string                      `json:"mLEvent"`
-	TgtUe   *models.TargetUeInformation `json:"tgtUe,omitempty"`
-}
-
-// MtlfSubscriptionRequest represents NwdafMLModelProvSubsc per TS 29.520 §5.4
-type MtlfSubscriptionRequest struct {
-	MLEventSubscs []MtlfEventSubscription `json:"mLEventSubscs"`
-	NotifUri      string                  `json:"notifUri"`
-	NotifCorreId  string                  `json:"notifCorreId,omitempty"`
-}
-
 // SubscribeToMtlf creates an ML Model Provision subscription to MTLF
 // Per TS 29.520 §5.4.3.2.3.1: POST to /subscriptions
 func (s *NmtlfService) SubscribeToMtlf(
@@ -70,31 +58,36 @@ func (s *NmtlfService) SubscribeToMtlf(
 	consumerLog.Infof("Subscribing to MTLF: endpoint=%s, event=%s, notifId=%s",
 		mtlfEndpoint, opts.Event, opts.NotifId)
 
-	// Build subscription request
-	eventSubs := []MtlfEventSubscription{
-		{
-			MLEvent: string(opts.Event),
-			TgtUe:   opts.TgtUe,
+	requestModel := models.NwdafMlModelProvSubsc{
+		MLEventSubscs: []models.MlEventSubscription{
+			{
+				MLEvent: opts.Event,
+				TgtUe:   opts.TgtUe,
+			},
 		},
+		NotifUri:     opts.NotifUri,
+		NotifCorreId: opts.NotifId,
 	}
 
-	request := MtlfSubscriptionRequest{
-		MLEventSubscs: eventSubs,
-		NotifUri:      opts.NotifUri,
-		NotifCorreId:  opts.NotifId,
-	}
+	request := &MLModelProvision.CreateNWDAFMLModelProvisionSubcriptionRequest{}
+	request.SetNwdafMlModelProvSubsc(requestModel)
 
-	subscriptionId, err := s.sendSubscribeRequest(mtlfEndpoint, &request)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	response, err := s.apiClient(mtlfEndpoint).SubscriptionsCollectionApi.
+		CreateNWDAFMLModelProvisionSubcription(ctx, request)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to create MTLF subscription: %w", err)
 	}
 
-	if subscriptionId == "" {
-		subscriptionId = opts.NotifId
+	subscriptionID := parseResourceID(response.Location)
+	if subscriptionID == "" {
+		subscriptionID = opts.NotifId
 	}
 
-	consumerLog.Infof("MTLF subscription created: id=%s", subscriptionId)
-	return subscriptionId, nil
+	consumerLog.Infof("MTLF subscription created: id=%s", subscriptionID)
+	return subscriptionID, nil
 }
 
 // UnsubscribeFromMtlf deletes an ML Model Provision subscription from MTLF
@@ -105,92 +98,49 @@ func (s *NmtlfService) UnsubscribeFromMtlf(
 ) error {
 	consumerLog.Infof("Unsubscribing from MTLF: endpoint=%s, subId=%s", mtlfEndpoint, subscriptionId)
 
-	url := mtlfEndpoint + MtlfMLModelProvisionPath + "/" + subscriptionId
+	request := &MLModelProvision.DeleteNWDAFMLModelProvisionSubcriptionRequest{}
+	request.SetSubscriptionId(subscriptionId)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send request to MTLF: %w", err)
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			consumerLog.Debugf("failed to close response body: %v", closeErr)
-		}
-	}()
-
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return fmt.Errorf("MTLF unsubscription failed: status=%d", resp.StatusCode)
-		}
-		return fmt.Errorf("MTLF unsubscription failed: status=%d, body=%s", resp.StatusCode, string(body))
+	if _, err := s.apiClient(mtlfEndpoint).IndividualNWDAFMLModelProvisionSubscriptionDocumentApi.
+		DeleteNWDAFMLModelProvisionSubcription(ctx, request); err != nil {
+		return fmt.Errorf("failed to delete MTLF subscription: %w", err)
 	}
 
 	consumerLog.Infof("MTLF subscription deleted: id=%s", subscriptionId)
 	return nil
 }
 
-// sendSubscribeRequest sends a POST subscription request to MTLF
-func (s *NmtlfService) sendSubscribeRequest(mtlfEndpoint string, request *MtlfSubscriptionRequest) (string, error) {
-	url := mtlfEndpoint + MtlfMLModelProvisionPath
+func (s *NmtlfService) apiClient(mtlfEndpoint string) *MLModelProvision.APIClient {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	jsonData, err := json.Marshal(request)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal request: %w", err)
+	if client, ok := s.apiClients[mtlfEndpoint]; ok {
+		return client
 	}
 
-	consumerLog.Debugf("MTLF subscription request: %s", string(jsonData))
+	configuration := MLModelProvision.NewConfiguration()
+	configuration.SetBasePath(mtlfEndpoint)
+	configuration.SetHTTPClient(s.httpClient)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to send request to MTLF: %w", err)
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			consumerLog.Debugf("failed to close response body: %v", closeErr)
-		}
-	}()
-
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return "", fmt.Errorf("MTLF subscription failed: status=%d", resp.StatusCode)
-		}
-		return "", fmt.Errorf("MTLF subscription failed: status=%d, body=%s", resp.StatusCode, string(body))
-	}
-
-	return s.parseSubscriptionId(resp), nil
-}
-
-// parseSubscriptionId extracts subscription ID from response Location header
-func (s *NmtlfService) parseSubscriptionId(resp *http.Response) string {
-	location := resp.Header.Get("Location")
-	if location != "" {
-		if idx := strings.LastIndex(location, "/"); idx >= 0 {
-			return location[idx+1:]
-		}
-		return location
-	}
-	return ""
+	client := MLModelProvision.NewAPIClient(configuration)
+	s.apiClients[mtlfEndpoint] = client
+	return client
 }
 
 // HTTPClient returns the underlying HTTP client for testing
 func (s *NmtlfService) HTTPClient() *http.Client {
 	return s.httpClient
+}
+
+func parseResourceID(location string) string {
+	if location == "" {
+		return ""
+	}
+	if idx := strings.LastIndex(location, "/"); idx >= 0 {
+		return location[idx+1:]
+	}
+	return location
 }

@@ -1,10 +1,55 @@
 package consumer
 
 import (
+	"net/http"
 	"testing"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 )
+
+type testSmfService struct {
+	subscribeCalled   bool
+	unsubscribeCalled bool
+	subscriptionID    string
+	err               error
+	httpClient        *http.Client
+}
+
+func (s *testSmfService) SubscribeToSmf(_ string, _ SmfSubscriptionOptions) (string, error) {
+	s.subscribeCalled = true
+	return s.subscriptionID, s.err
+}
+
+func (s *testSmfService) UnsubscribeFromSmf(_ string, _ string) error {
+	s.unsubscribeCalled = true
+	return s.err
+}
+
+func (s *testSmfService) HTTPClient() *http.Client {
+	return s.httpClient
+}
+
+type testMtlfService struct {
+	subscribeCalled   bool
+	unsubscribeCalled bool
+	subscriptionID    string
+	err               error
+	httpClient        *http.Client
+}
+
+func (s *testMtlfService) SubscribeToMtlf(_ string, _ MtlfSubscriptionOptions) (string, error) {
+	s.subscribeCalled = true
+	return s.subscriptionID, s.err
+}
+
+func (s *testMtlfService) UnsubscribeFromMtlf(_ string, _ string) error {
+	s.unsubscribeCalled = true
+	return s.err
+}
+
+func (s *testMtlfService) HTTPClient() *http.Client {
+	return s.httpClient
+}
 
 // TestNewConsumer tests Consumer initialization
 func TestNewConsumer(t *testing.T) {
@@ -14,8 +59,10 @@ func TestNewConsumer(t *testing.T) {
 	}
 	if c == nil {
 		t.Fatal("NewConsumer() returned nil")
-	} else if c.NsmfService == nil {
-		t.Error("NsmfService should be initialized")
+	} else if c.SmfService() == nil {
+		t.Error("SMF service should be initialized")
+	} else if c.MtlfService() == nil {
+		t.Error("MTLF service should be initialized")
 	}
 }
 
@@ -41,12 +88,12 @@ func TestNsmfServiceHTTPClient(t *testing.T) {
 	}
 
 	// Get the HTTP client - should be a single instance
-	client := c.NsmfService.HTTPClient()
+	client := c.SmfService().HTTPClient()
 	if client == nil {
 		t.Fatal("HTTPClient() returned nil")
 	} else {
 		// Same client should be returned (single instance)
-		client2 := c.NsmfService.HTTPClient()
+		client2 := c.SmfService().HTTPClient()
 		if client != client2 {
 			t.Error("HTTPClient() should return the same instance")
 		}
@@ -58,21 +105,36 @@ func TestNsmfServiceHTTPClient(t *testing.T) {
 	}
 }
 
-// TestEmbeddedMethodPromotion tests that NsmfService methods are promoted to Consumer
-func TestEmbeddedMethodPromotion(t *testing.T) {
-	nwdaf_context.Init()
-	c, err := NewConsumer()
-	if err != nil {
-		t.Fatalf("NewConsumer failed: %v", err)
+func TestConsumerDelegatesToInjectedServices(t *testing.T) {
+	smfService := &testSmfService{
+		subscriptionID: "smf-sub-1",
+		httpClient:     &http.Client{},
+	}
+	mtlfService := &testMtlfService{
+		subscriptionID: "mtlf-sub-1",
+		httpClient:     &http.Client{},
+	}
+	c := NewConsumerWithServices(smfService, mtlfService, nil)
+
+	if _, err := c.SubscribeToSmf("http://smf", SmfSubscriptionOptions{}); err != nil {
+		t.Fatalf("SubscribeToSmf returned error: %v", err)
+	}
+	if _, err := c.SubscribeToMtlf("http://mtlf", MtlfSubscriptionOptions{}); err != nil {
+		t.Fatalf("SubscribeToMtlf returned error: %v", err)
+	}
+	if err := c.UnsubscribeFromSmf("http://smf", "smf-sub-1"); err != nil {
+		t.Fatalf("UnsubscribeFromSmf returned error: %v", err)
+	}
+	if err := c.UnsubscribeFromMtlf("http://mtlf", "mtlf-sub-1"); err != nil {
+		t.Fatalf("UnsubscribeFromMtlf returned error: %v", err)
 	}
 
-	// These methods should be accessible directly on Consumer via embedding
-	// We can't call them without a real SMF, but we can verify they exist
-
-	// Verify the method exists and is callable (will fail due to no SMF, but that's ok)
-	// The point is to verify the method is promoted
-	_ = c.SubscribeToSmf
-	_ = c.UnsubscribeFromSmf
+	if !smfService.subscribeCalled || !smfService.unsubscribeCalled {
+		t.Fatal("expected SMF service delegation to be invoked")
+	}
+	if !mtlfService.subscribeCalled || !mtlfService.unsubscribeCalled {
+		t.Fatal("expected MTLF service delegation to be invoked")
+	}
 }
 
 // TestExtendedEventSubscription tests UPF event subscription model

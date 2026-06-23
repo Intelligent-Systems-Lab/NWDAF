@@ -12,6 +12,20 @@ import (
 	"github.com/free5gc/openapi/models"
 )
 
+func waitUntil(t *testing.T, timeout time.Duration, condition func() bool, failure string) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatal(failure)
+}
+
 // TestShouldContinue_MaxReportNbrLimit tests that shouldContinue returns false when maxReportNbr is reached
 func TestShouldContinue_MaxReportNbrLimit(t *testing.T) {
 	tests := []struct {
@@ -349,9 +363,15 @@ func TestNotificationScheduler_StopsWhenParentContextCancelled(t *testing.T) {
 	}
 
 	cancel()
-	time.Sleep(1200 * time.Millisecond)
+	waitUntil(t, 1500*time.Millisecond, func() bool {
+		return requestCount.Load() >= 1
+	}, "expected scheduler to send the initial notification before cancellation settles")
 
-	if got := requestCount.Load(); got != 1 {
-		t.Fatalf("expected scheduler to stop after parent cancellation, got %d requests", got)
+	stabilityDeadline := time.Now().Add(1200 * time.Millisecond)
+	for time.Now().Before(stabilityDeadline) {
+		if got := requestCount.Load(); got != 1 {
+			t.Fatalf("expected scheduler to stop after parent cancellation, got %d requests", got)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

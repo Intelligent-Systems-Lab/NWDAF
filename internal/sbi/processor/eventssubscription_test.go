@@ -2,13 +2,8 @@ package processor
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"net/http"
-	"net/http/httptest"
-	"path"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 
@@ -796,52 +791,14 @@ func TestHandleUpdateSubscription_ReappliesDefaultValidation(t *testing.T) {
 
 func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 	ctx := setupTestContext()
-
-	var (
-		mu            sync.Mutex
-		postedSupis   []string
-		deletedSubIDs []string
-		postCount     int
-	)
-
-	smfServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodPost:
-			var req struct {
-				Supi string `json:"supi"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				t.Fatalf("failed to decode SMF request: %v", err)
-			}
-
-			mu.Lock()
-			postCount++
-			subID := fmt.Sprintf("smf-sub-%d", postCount)
-			postedSupis = append(postedSupis, req.Supi)
-			mu.Unlock()
-
-			w.Header().Set("Location", consumer.SmfEventExposurePath+"/"+subID)
-			w.WriteHeader(http.StatusCreated)
-			return
-
-		case http.MethodDelete:
-			mu.Lock()
-			deletedSubIDs = append(deletedSubIDs, path.Base(r.URL.Path))
-			mu.Unlock()
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-
-		t.Fatalf("unexpected SMF method: %s", r.Method)
-	}))
-	defer smfServer.Close()
+	smfService := &fakeSmfService{}
 
 	oldCfg := factory.NwdafConfig
 	factory.NwdafConfig = &factory.Config{
 		Configuration: &factory.Configuration{
 			Smf: &factory.SmfConfig{
 				Enabled:   true,
-				Endpoints: []string{smfServer.URL},
+				Endpoints: []string{"http://smf.example"},
 				NotifUris: &factory.NotifUris{
 					Smf: "http://127.0.0.1:8080/collector/notify",
 					Upf: "http://127.0.0.1:8080/collector/upf-notify",
@@ -851,10 +808,7 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 	}
 	defer func() { factory.NwdafConfig = oldCfg }()
 
-	consumerClient, err := consumer.NewConsumer()
-	if err != nil {
-		t.Fatalf("failed to create consumer: %v", err)
-	}
+	consumerClient := consumer.NewConsumerWithServices(smfService, nil, nil)
 
 	baseCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -880,7 +834,7 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 	p.triggerTargetDataCollection(
 		ctx,
 		consumerClient,
-		[]string{smfServer.URL},
+		[]string{"http://smf.example"},
 		[]DataCollectionTarget{{Supi: "imsi-old"}},
 		subscriptionID,
 		"http://127.0.0.1:8080/collector/notify",
@@ -888,7 +842,7 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 		10,
 	)
 
-	oldCorrelationID, found := ctx.GetSmfCorrelationId("supi=imsi-old", smfServer.URL)
+	oldCorrelationID, found := ctx.GetSmfCorrelationId("supi=imsi-old", "http://smf.example")
 	if !found {
 		t.Fatal("expected initial SMF correlation for old target")
 	}
@@ -931,20 +885,20 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, ok := ctx.GetSmfCorrelationId("supi=imsi-new", smfServer.URL); ok {
+		if _, ok := ctx.GetSmfCorrelationId("supi=imsi-new", "http://smf.example"); ok {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	if _, ok := ctx.GetSmfCorrelationId("supi=imsi-old", smfServer.URL); ok {
+	if _, ok := ctx.GetSmfCorrelationId("supi=imsi-old", "http://smf.example"); ok {
 		t.Fatal("old SMF correlation should be removed after update")
 	}
 	if ctx.GetSmfSubscription(oldCorrelationID) != nil {
 		t.Fatal("old SMF subscription should be deleted after update")
 	}
 
-	newCorrelationID, ok := ctx.GetSmfCorrelationId("supi=imsi-new", smfServer.URL)
+	newCorrelationID, ok := ctx.GetSmfCorrelationId("supi=imsi-new", "http://smf.example")
 	if !ok {
 		t.Fatal("new SMF correlation should exist after update")
 	}
@@ -966,13 +920,20 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 	if ctx.GetSharedModel("file:///models/old-model") != nil {
 		t.Fatal("stale shared model should be removed during update")
 	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	if !slices.Contains(postedSupis, "imsi-old") || !slices.Contains(postedSupis, "imsi-new") {
-		t.Fatalf("posted SUPIs = %v, want both old and new", postedSupis)
+	if len(smfService.subscribeCalls) != 2 {
+		t.Fatalf("expected two SMF subscribe calls, got %d", len(smfService.subscribeCalls))
 	}
-	if !slices.Contains(deletedSubIDs, oldSmfSubID) {
-		t.Fatalf("deleted subscription IDs = %v, want %s", deletedSubIDs, oldSmfSubID)
+	gotSupis := []string{
+		smfService.subscribeCalls[0].opts.Supi,
+		smfService.subscribeCalls[1].opts.Supi,
+	}
+	if !slices.Equal(gotSupis, []string{"imsi-old", "imsi-new"}) {
+		t.Fatalf("subscribed SUPIs = %v, want %v", gotSupis, []string{"imsi-old", "imsi-new"})
+	}
+	if len(smfService.unsubscribeCalls) != 1 {
+		t.Fatalf("expected one SMF unsubscribe call, got %d", len(smfService.unsubscribeCalls))
+	}
+	if !slices.Contains([]string{smfService.unsubscribeCalls[0].subscriptionID}, oldSmfSubID) {
+		t.Fatalf("unsubscribe calls = %+v, want %s", smfService.unsubscribeCalls, oldSmfSubID)
 	}
 }

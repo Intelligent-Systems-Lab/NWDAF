@@ -3,6 +3,8 @@
 package consumer
 
 import (
+	"net/http"
+
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/pkg/factory"
@@ -10,24 +12,44 @@ import (
 
 var consumerLog = logger.ConsLog
 
-// Consumer aggregates all external NF service clients
-// NsmfService and NmtlfService are embedded, so their exported methods are automatically
-// promoted to Consumer (no manual wrapper methods needed)
-type Consumer struct {
-	*NsmfService
-	*NmtlfService
-	Adrf *AdrfClient // nil if ADRF not configured
+type SmfServiceClient interface {
+	SubscribeToSmf(smfEndpoint string, opts SmfSubscriptionOptions) (string, error)
+	UnsubscribeFromSmf(smfEndpoint string, subscriptionId string) error
+	HTTPClient() *http.Client
 }
 
-// NewConsumer creates a new Consumer with all service clients initialized
+type MtlfServiceClient interface {
+	SubscribeToMtlf(mtlfEndpoint string, opts MtlfSubscriptionOptions) (string, error)
+	UnsubscribeFromMtlf(mtlfEndpoint string, subscriptionId string) error
+	HTTPClient() *http.Client
+}
+
+// Consumer aggregates all external NF service clients.
+type Consumer struct {
+	smfService  SmfServiceClient
+	mtlfService MtlfServiceClient
+	Adrf        *AdrfClient // nil if ADRF not configured
+}
+
+func NewConsumerWithServices(
+	smfService SmfServiceClient,
+	mtlfService MtlfServiceClient,
+	adrf *AdrfClient,
+) *Consumer {
+	return &Consumer{
+		smfService:  smfService,
+		mtlfService: mtlfService,
+		Adrf:        adrf,
+	}
+}
+
+// NewConsumer creates a new Consumer with all service clients initialized.
 func NewConsumer() (*Consumer, error) {
-	c := &Consumer{}
-
-	// Initialize SMF service with the consumer reference
-	c.NsmfService = NewNsmfService(c)
-
-	// Initialize MTLF service with the consumer reference
-	c.NmtlfService = NewNmtlfService(c)
+	c := NewConsumerWithServices(
+		NewNsmfService(),
+		NewNmtlfService(),
+		nil,
+	)
 
 	if factory.NwdafConfig != nil && factory.NwdafConfig.Configuration != nil &&
 		factory.NwdafConfig.Configuration.Adrf.AdrfEnabled() {
@@ -42,4 +64,28 @@ func NewConsumer() (*Consumer, error) {
 // Context returns the NWDAF context
 func (c *Consumer) Context() *nwdaf_context.NWDAFContext {
 	return nwdaf_context.GetSelf()
+}
+
+func (c *Consumer) SubscribeToSmf(smfEndpoint string, opts SmfSubscriptionOptions) (string, error) {
+	return c.smfService.SubscribeToSmf(smfEndpoint, opts)
+}
+
+func (c *Consumer) UnsubscribeFromSmf(smfEndpoint string, subscriptionId string) error {
+	return c.smfService.UnsubscribeFromSmf(smfEndpoint, subscriptionId)
+}
+
+func (c *Consumer) SubscribeToMtlf(mtlfEndpoint string, opts MtlfSubscriptionOptions) (string, error) {
+	return c.mtlfService.SubscribeToMtlf(mtlfEndpoint, opts)
+}
+
+func (c *Consumer) UnsubscribeFromMtlf(mtlfEndpoint string, subscriptionId string) error {
+	return c.mtlfService.UnsubscribeFromMtlf(mtlfEndpoint, subscriptionId)
+}
+
+func (c *Consumer) SmfService() SmfServiceClient {
+	return c.smfService
+}
+
+func (c *Consumer) MtlfService() MtlfServiceClient {
+	return c.mtlfService
 }
