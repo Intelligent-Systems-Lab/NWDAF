@@ -4,6 +4,7 @@
 package anlf
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 // NwdafApp defines the app-level dependencies needed by AnLF.
 type NwdafApp interface {
 	app.App
+	CancelContext() context.Context
 }
 
 // AnlfService is the AnLF entry point.

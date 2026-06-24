@@ -10,7 +10,6 @@
 package sbi
 
 import (
-	context "context"
 	reflect "reflect"
 
 	context0 "github.com/free5gc/nwdaf/internal/context"
@@ -41,20 +40,6 @@ func NewMocknwdafApp(ctrl *gomock.Controller) *MocknwdafApp {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MocknwdafApp) EXPECT() *MocknwdafAppMockRecorder {
 	return m.recorder
-}
-
-// CancelContext mocks base method.
-func (m *MocknwdafApp) CancelContext() context.Context {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CancelContext")
-	ret0, _ := ret[0].(context.Context)
-	return ret0
-}
-
-// CancelContext indicates an expected call of CancelContext.
-func (mr *MocknwdafAppMockRecorder) CancelContext() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CancelContext", reflect.TypeOf((*MocknwdafApp)(nil).CancelContext))
 }
 
 // Config mocks base method.

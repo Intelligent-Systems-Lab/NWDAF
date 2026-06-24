@@ -1,7 +1,6 @@
 package consumer
 
 import (
-	"context"
 	"net/http"
 	"testing"
 
@@ -84,10 +83,6 @@ func (a *testConsumerApp) Context() *nwdaf_context.NWDAFContext {
 	return a.ctx
 }
 
-func (a *testConsumerApp) CancelContext() context.Context {
-	return context.Background()
-}
-
 // TestNewConsumer tests Consumer initialization
 func TestNewConsumer(t *testing.T) {
 	c, err := NewConsumer(newTestConsumerApp(nil))
@@ -153,7 +148,7 @@ func TestConsumerDelegatesToInjectedServices(t *testing.T) {
 		subscriptionID: "mtlf-sub-1",
 		httpClient:     &http.Client{},
 	}
-	c := NewConsumerWithServices(nil, smfService, mtlfService, nil)
+	c := newConsumerWithServices(nil, smfService, mtlfService, nil)
 
 	if _, err := c.SubscribeToSmf("http://smf", SmfSubscriptionOptions{}); err != nil {
 		t.Fatalf("SubscribeToSmf returned error: %v", err)

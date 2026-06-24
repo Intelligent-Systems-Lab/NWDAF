@@ -57,7 +57,7 @@ func TestValidateSupportedEvent(t *testing.T) {
 
 type subscriptionTestApp struct {
 	ctx      context.Context
-	consumer *consumer.Consumer
+	consumer consumer.ConsumerAPI
 }
 
 func (a *subscriptionTestApp) SetLogEnable(bool) {}
@@ -82,7 +82,7 @@ func (a *subscriptionTestApp) CancelContext() context.Context {
 	return a.ctx
 }
 
-func (a *subscriptionTestApp) Consumer() *consumer.Consumer {
+func (a *subscriptionTestApp) Consumer() consumer.ConsumerAPI {
 	return a.consumer
 }
 
@@ -814,11 +814,12 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	smfService := NewMockSmfServiceClient(ctrl)
+	consumerClient := NewMockConsumerAPI(ctrl)
 	var subscribedSupis []string
 	var unsubscribeCalls []string
 	subscribeCount := 0
-	smfService.EXPECT().
+	consumerClient.EXPECT().AdrfClient().Return(nil).AnyTimes()
+	consumerClient.EXPECT().
 		SubscribeToSmf("http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
 		DoAndReturn(func(_ string, opts consumer.SmfSubscriptionOptions) (string, error) {
 			subscribeCount++
@@ -826,7 +827,7 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 			return "smf-sub-" + opts.Supi, nil
 		}).
 		Times(2)
-	smfService.EXPECT().
+	consumerClient.EXPECT().
 		UnsubscribeFromSmf("http://smf.example", gomock.Any()).
 		DoAndReturn(func(_ string, subscriptionID string) error {
 			unsubscribeCalls = append(unsubscribeCalls, subscriptionID)
@@ -848,8 +849,6 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 		},
 	}
 	defer func() { factory.NwdafConfig = oldCfg }()
-
-	consumerClient := consumer.NewConsumerWithServices(nil, smfService, nil, nil)
 
 	baseCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()

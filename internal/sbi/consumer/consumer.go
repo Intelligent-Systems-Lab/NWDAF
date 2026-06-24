@@ -28,6 +28,14 @@ type MtlfServiceClient interface {
 	HTTPClient() *http.Client
 }
 
+type ConsumerAPI interface {
+	SubscribeToSmf(smfEndpoint string, opts SmfSubscriptionOptions) (string, error)
+	UnsubscribeFromSmf(smfEndpoint string, subscriptionId string) error
+	SubscribeToMtlf(mtlfEndpoint string, opts MtlfSubscriptionOptions) (string, error)
+	UnsubscribeFromMtlf(mtlfEndpoint string, subscriptionId string) error
+	AdrfClient() *AdrfClient
+}
+
 // Consumer aggregates all external NF service clients.
 type Consumer struct {
 	nwdaf
@@ -37,7 +45,7 @@ type Consumer struct {
 	Adrf        *AdrfClient // nil if ADRF not configured
 }
 
-func NewConsumerWithServices(
+func newConsumerWithServices(
 	nwdaf nwdaf,
 	smfService SmfServiceClient,
 	mtlfService MtlfServiceClient,
@@ -53,7 +61,7 @@ func NewConsumerWithServices(
 
 // NewConsumer creates a new Consumer with all service clients initialized.
 func NewConsumer(nwdaf nwdaf) (*Consumer, error) {
-	c := NewConsumerWithServices(
+	c := newConsumerWithServices(
 		nwdaf,
 		NewNsmfService(),
 		NewNmtlfService(),
@@ -102,4 +110,8 @@ func (c *Consumer) SmfService() SmfServiceClient {
 
 func (c *Consumer) MtlfService() MtlfServiceClient {
 	return c.mtlfService
+}
+
+func (c *Consumer) AdrfClient() *AdrfClient {
+	return c.Adrf
 }

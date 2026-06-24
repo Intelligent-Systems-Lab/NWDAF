@@ -16,8 +16,9 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	smfService := NewMockSmfServiceClient(ctrl)
-	smfService.EXPECT().
+	smfConsumer := NewMockConsumerAPI(ctrl)
+	smfConsumer.EXPECT().AdrfClient().Return(nil).AnyTimes()
+	smfConsumer.EXPECT().
 		SubscribeToSmf("http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
 		DoAndReturn(func(_ string, opts consumer.SmfSubscriptionOptions) (string, error) {
 			if opts.Supi != "imsi-208930000000003" {
@@ -26,7 +27,6 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 			return "smf-sub-1", nil
 		}).
 		Times(1)
-	smfConsumer := consumer.NewConsumerWithServices(nil, smfService, nil, nil)
 
 	// 3. Define Targets
 	targetSupi := "imsi-208930000000003"
@@ -191,16 +191,16 @@ func TestTriggerTargetDataCollection_WithOriginalGroupId(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	smfService := NewMockSmfServiceClient(ctrl)
+	smfConsumer := NewMockConsumerAPI(ctrl)
 	var gotSupis []string
-	smfService.EXPECT().
+	smfConsumer.EXPECT().AdrfClient().Return(nil).AnyTimes()
+	smfConsumer.EXPECT().
 		SubscribeToSmf("http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
 		DoAndReturn(func(_ string, opts consumer.SmfSubscriptionOptions) (string, error) {
 			gotSupis = append(gotSupis, opts.Supi)
 			return "smf-sub-" + opts.Supi, nil
 		}).
 		Times(3)
-	smfConsumer := consumer.NewConsumerWithServices(nil, smfService, nil, nil)
 
 	// Simulate Group ID resolution: group → multiple SUPIs
 	groupId := "group-test-001"
@@ -265,16 +265,16 @@ func TestTriggerTargetDataCollection_MixedSupiAndGroup(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	smfService := NewMockSmfServiceClient(ctrl)
+	smfConsumer := NewMockConsumerAPI(ctrl)
 	var subscribeCalls int
-	smfService.EXPECT().
+	smfConsumer.EXPECT().AdrfClient().Return(nil).AnyTimes()
+	smfConsumer.EXPECT().
 		SubscribeToSmf("http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
 		DoAndReturn(func(_ string, _ consumer.SmfSubscriptionOptions) (string, error) {
 			subscribeCalls++
 			return "smf-sub", nil
 		}).
 		Times(4)
-	smfConsumer := consumer.NewConsumerWithServices(nil, smfService, nil, nil)
 
 	// Mix of direct SUPI and Group-resolved SUPIs
 	targets := []DataCollectionTarget{

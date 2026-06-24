@@ -96,7 +96,7 @@ func (a *NwdafApp) Processor() *processor.Processor {
 	return a.processor
 }
 
-func (a *NwdafApp) Consumer() *consumer.Consumer {
+func (a *NwdafApp) Consumer() consumer.ConsumerAPI {
 	return a.consumer
 }
 

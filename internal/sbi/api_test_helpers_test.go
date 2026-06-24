@@ -2,7 +2,6 @@ package sbi
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
@@ -42,10 +41,6 @@ func (a *handlerTestApp) Context() *nwdaf_context.NWDAFContext {
 
 func (a *handlerTestApp) Processor() *processor.Processor {
 	return nil
-}
-
-func (a *handlerTestApp) CancelContext() context.Context {
-	return context.Background()
 }
 
 func newHandlerTestServer(proc processorAPI) *Server {

@@ -154,7 +154,7 @@ func (t DataCollectionTarget) Identifier() string {
 // Per TS 23.502 §4.15.4.5.2: Group IDs are already resolved to SUPIs before this function
 func (p *Processor) triggerTargetDataCollection(
 	ctx *nwdaf_context.NWDAFContext,
-	smfConsumer *consumer.Consumer,
+	smfConsumer consumer.ConsumerAPI,
 	endpoints []string,
 	targets []DataCollectionTarget,
 	subscriptionId string,

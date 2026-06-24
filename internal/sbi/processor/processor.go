@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"context"
 	"sync"
 
 	"github.com/free5gc/nwdaf/internal/anlf"
@@ -13,7 +14,8 @@ import (
 
 type NwdafApp interface {
 	app.App
-	Consumer() *consumer.Consumer
+	CancelContext() context.Context
+	Consumer() consumer.ConsumerAPI
 }
 
 type Processor struct {
@@ -55,12 +57,12 @@ func NewProcessor(nwdaf NwdafApp) *Processor {
 
 	// ADRF buffer: forward UPF notifications to ADRF for retrain dataset.
 	if c := p.nwdaf.Consumer(); c != nil {
-		if c.Adrf != nil {
+		if adrfClient := c.AdrfClient(); adrfClient != nil {
 			threshold := 1
 			if cfg := p.nwdaf.Config(); cfg != nil && cfg.Configuration != nil {
 				threshold = cfg.Configuration.Adrf.StorageThresholdOrDefault()
 			}
-			p.adrfBuffer = newAdrfBuffer(threshold, c.Adrf)
+			p.adrfBuffer = newAdrfBuffer(threshold, adrfClient)
 			logger.ProcLog.Infof("ADRF buffer initialized: threshold=%d", threshold)
 		}
 	}

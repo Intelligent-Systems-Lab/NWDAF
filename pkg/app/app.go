@@ -1,8 +1,6 @@
 package app
 
 import (
-	"context"
-
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
@@ -17,5 +15,4 @@ type App interface {
 
 	Config() *factory.Config
 	Context() *nwdaf_context.NWDAFContext
-	CancelContext() context.Context
 }
