@@ -6,21 +6,19 @@ import (
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
-	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
 // SwapModel loads a new model and unloads the old one via the ML Service.
 // Called by MTLF (via processor callback) during model hot-swap after retraining.
 // Returns the new model ID assigned by the ML Service.
 func (a *AnlfService) SwapModel(newModelUrl, oldModelId string) (string, error) {
-	cfg := factory.NwdafConfig
-	if cfg == nil || cfg.Configuration == nil ||
-		cfg.Configuration.MlService == nil || !cfg.Configuration.MlService.Enabled ||
-		cfg.Configuration.MlService.Endpoint == "" {
+	cfg := a.config()
+	mlServiceEndpoint := mlServiceEndpoint(cfg)
+	if mlServiceEndpoint == "" {
 		return "", fmt.Errorf("ML Service not configured")
 	}
 
-	mlClient := consumer.NewMlServiceClient(cfg.Configuration.MlService.Endpoint)
+	mlClient := consumer.NewMlServiceClient(mlServiceEndpoint)
 
 	newModelId, err := mlClient.InitializeModel(newModelUrl)
 	if err != nil {
@@ -48,17 +46,10 @@ func (a *AnlfService) InitializeMlModel(
 	logger.AnlfLog.Infof("Initializing ML model: sub=%s, url=%s", nwdafSubId, modelUrl)
 
 	// Get ML service configuration
-	cfg := factory.NwdafConfig
-	if cfg == nil || cfg.Configuration == nil ||
-		cfg.Configuration.MlService == nil || !cfg.Configuration.MlService.Enabled {
-		logger.AnlfLog.Warnf("ML Service not configured, cannot initialize model")
-		mlInfo.SetModelFailed(nil)
-		return
-	}
-
-	mlServiceEndpoint := cfg.Configuration.MlService.Endpoint
+	cfg := a.config()
+	mlServiceEndpoint := mlServiceEndpoint(cfg)
 	if mlServiceEndpoint == "" {
-		logger.AnlfLog.Warnf("ML Service endpoint not configured")
+		logger.AnlfLog.Warnf("ML Service not configured, cannot initialize model")
 		mlInfo.SetModelFailed(nil)
 		return
 	}

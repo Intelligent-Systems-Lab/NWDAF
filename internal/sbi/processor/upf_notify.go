@@ -9,7 +9,6 @@ import (
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
-	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 	"github.com/free5gc/util/mongoapi"
 )
@@ -196,6 +195,8 @@ func (p *Processor) processUpfNotificationItemUnified(
 	bucket *nwdaf_context.TrafficDataBucket,
 	item *UpfNotificationItem,
 ) {
+	cfg := p.config()
+
 	// Get IP address (required field per TS 29.564)
 	ipAddr := item.UeIpv4Addr
 	if ipAddr == "" {
@@ -296,9 +297,9 @@ func (p *Processor) processUpfNotificationItemUnified(
 
 		// Save to MongoDB for ground truth lookup by the accuracy monitor.
 		if nwdaf_context.IsMongoAvailable() &&
-			factory.NwdafConfig != nil && factory.NwdafConfig.Configuration != nil &&
-			factory.NwdafConfig.Configuration.Mongodb != nil {
-			dbName := factory.NwdafConfig.Configuration.Mongodb.Name
+			cfg != nil && cfg.Configuration != nil &&
+			cfg.Configuration.Mongodb != nil {
+			dbName := cfg.Configuration.Mongodb.Name
 			coll := mongoapi.Client.Database(dbName).Collection(nwdaf_context.UpfTrafficDataColl)
 			if _, err := coll.InsertOne(context.Background(), record); err != nil {
 				logger.ProcLog.Errorf("Failed to save UPF TimeSeries data: %v", err)
@@ -306,7 +307,7 @@ func (p *Processor) processUpfNotificationItemUnified(
 		}
 
 		data.RawUpfData = append(data.RawUpfData, dataPoint)
-		ringBufferSize := factory.NwdafConfig.GetRingBufferSize()
+		ringBufferSize := cfg.GetRingBufferSize()
 		if len(data.RawUpfData) > ringBufferSize {
 			drop := len(data.RawUpfData) - ringBufferSize
 			data.RawUpfData = data.RawUpfData[drop:]

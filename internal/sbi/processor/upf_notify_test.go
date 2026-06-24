@@ -8,6 +8,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -25,6 +26,10 @@ func setupTestContext() *nwdaf_context.NWDAFContext {
 }
 
 func newTestProcessor(t *testing.T) *Processor {
+	return newTestProcessorWithConfig(t, nil)
+}
+
+func newTestProcessorWithConfig(t *testing.T, cfg *factory.Config) *Processor {
 	t.Helper()
 
 	ctrl := gomock.NewController(t)
@@ -33,6 +38,7 @@ func newTestProcessor(t *testing.T) *Processor {
 	mockApp := NewMockNwdafApp(ctrl)
 	mockApp.EXPECT().CancelContext().Return(context.Background()).AnyTimes()
 	mockApp.EXPECT().Consumer().Return(nil).AnyTimes()
+	mockApp.EXPECT().Config().Return(cfg).AnyTimes()
 
 	return NewProcessor(mockApp)
 }

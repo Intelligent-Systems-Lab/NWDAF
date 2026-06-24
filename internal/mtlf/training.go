@@ -23,24 +23,9 @@ type inFlightEntry struct {
 	store *nwdaf_context.ModelAccuracyStore
 }
 
-// buildNwdafURL constructs a full NWDAF URL for the given path.
-func buildNwdafURL(urlPath string) string {
-	cfg := factory.NwdafConfig
-	if cfg == nil {
-		return ""
-	}
-	return cfg.GetSbiUri() + urlPath
-}
-
-// buildCallbackURL constructs the NWDAF callback URL that Daisy will POST to
-// when async training completes.
-func buildCallbackURL() string {
-	return buildNwdafURL("/mtlf/training-complete")
-}
-
 // StartTrainingScheduler starts background MTLF training scheduler.
 func (m *MtlfService) StartTrainingScheduler(wg *sync.WaitGroup) {
-	cfg := factory.NwdafConfig
+	cfg := m.config()
 	if cfg == nil || cfg.Configuration == nil ||
 		cfg.Configuration.Mtlf == nil || !cfg.Configuration.Mtlf.Enabled ||
 		!cfg.Configuration.Mtlf.TriggerOnStartup {
@@ -84,7 +69,7 @@ func (m *MtlfService) startRetrainWorkflow(
 	oldModelUrl string,
 	store *nwdaf_context.ModelAccuracyStore,
 ) {
-	cfg := factory.NwdafConfig
+	cfg := m.config()
 	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.Mtlf == nil {
 		store.SetRetraining(false)
 		return
@@ -113,7 +98,7 @@ func (m *MtlfService) submitDaisyTask(
 	store *nwdaf_context.ModelAccuracyStore,
 ) {
 	mtlfLog.Infof("Submitting training task to Daisy: model=%s tid=%s", oldModelUrl, tid)
-	cbURL := buildCallbackURL()
+	cbURL := m.buildCallbackURL()
 	if cbURL == "" {
 		mtlfLog.Warn("callback URL is empty; Daisy cannot notify completion")
 	}
@@ -168,7 +153,8 @@ func (m *MtlfService) HandleTrainingComplete(taskId, modelUrl, status, errMsg st
 
 // swapModelAfterRetrain handles the hot-swap of models after a successful retraining.
 func (m *MtlfService) swapModelAfterRetrain(oldModelUrl, newModelUrl string) {
-	if factory.NwdafConfig == nil || factory.NwdafConfig.Configuration == nil {
+	cfg := m.config()
+	if cfg == nil || cfg.Configuration == nil {
 		mtlfLog.Error("config not initialized; cannot perform model swap")
 		return
 	}

@@ -294,6 +294,7 @@ func TestNewNotificationScheduler(t *testing.T) {
 
 	scheduler := NewNotificationScheduler(
 		context.Background(),
+		nil,
 		"test-sub-id",
 		"http://localhost:9090/callback",
 		10,
@@ -339,6 +340,7 @@ func TestNotificationScheduler_StopsWhenParentContextCancelled(t *testing.T) {
 	baseCtx, cancel := context.WithCancel(context.Background())
 	scheduler := NewNotificationScheduler(
 		baseCtx,
+		nil,
 		"test-sub-id",
 		server.URL,
 		1,

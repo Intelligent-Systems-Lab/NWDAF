@@ -60,7 +60,7 @@ func TestHandleTrainingComplete_Failure_NilStore(t *testing.T) {
 
 // TestHandleTrainingComplete_Success_ClearsInFlight verifies that a successful
 // callback removes the in-flight entry. swapModelAfterRetrain will return early
-// because factory.NwdafConfig is nil in unit tests.
+// because no app config is provided in this unit test.
 func TestHandleTrainingComplete_Success_ClearsInFlight(t *testing.T) {
 	m := &MtlfService{}
 
@@ -96,13 +96,9 @@ func TestHandleTrainingComplete_DuplicateCallback(t *testing.T) {
 }
 
 func TestSwapModelAfterRetrain_DeletesOldMonitorState(t *testing.T) {
-	oldCfg := factory.NwdafConfig
-	factory.NwdafConfig = &factory.Config{
+	cfg := &factory.Config{
 		Configuration: &factory.Configuration{},
 	}
-	t.Cleanup(func() {
-		factory.NwdafConfig = oldCfg
-	})
 
 	nwdaf_context.Init()
 	ctx := nwdaf_context.GetSelf()
@@ -113,7 +109,7 @@ func TestSwapModelAfterRetrain_DeletesOldMonitorState(t *testing.T) {
 	oldShared, _ := ctx.GetOrCreateSharedModel(oldModelURL, models.NwdafEvent_UE_COMMUNICATION)
 	oldShared.SetModelId("old-model-id")
 
-	m := NewMtlfService(nil)
+	m := newTestMtlfService(cfg)
 	m.onModelSwapReady = func(newModelUrl, oldModelId string) (string, error) {
 		if newModelUrl != newModelURL {
 			t.Fatalf("newModelUrl = %s, want %s", newModelUrl, newModelURL)

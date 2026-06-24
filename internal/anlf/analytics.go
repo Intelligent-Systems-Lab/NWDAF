@@ -28,14 +28,8 @@ var errNoHistoricalData = fmt.Errorf("no historical data available yet")
 type TrafficObservation = consumer.TrafficObservation
 
 // getMlServiceClient returns a new ML service client if configured
-func getMlServiceClient() *consumer.MlServiceClient {
-	cfg := factory.NwdafConfig
-	if cfg == nil || cfg.Configuration == nil ||
-		cfg.Configuration.MlService == nil || !cfg.Configuration.MlService.Enabled {
-		return nil
-	}
-
-	endpoint := cfg.Configuration.MlService.Endpoint
+func getMlServiceClient(cfg *factory.Config) *consumer.MlServiceClient {
+	endpoint := mlServiceEndpoint(cfg)
 	if endpoint == "" {
 		return nil
 	}
@@ -76,14 +70,17 @@ func GenerateMockAbnormalBehaviours() []models.AbnormalBehaviour {
 // GenerateUeCommunicationAnalytics generates UE Communication analytics
 // Per TS 23.288 §6.7.3: Analytics based on collected UPF traffic data
 // Uses ML-based prediction if model is ready, returns 0 confidence when insufficient resources
-func GenerateUeCommunicationAnalytics(nwdafSubId string) models.UeCommunication {
+func GenerateUeCommunicationAnalytics(
+	nwdafSubId string,
+	cfg *factory.Config,
+) models.UeCommunication {
 	ctx := nwdaf_context.GetSelf()
 	now := time.Now()
 
 	// Check if ML model is available for this subscription
 	mlInfo := ctx.GetMlModelInfo(nwdafSubId)
 	if mlInfo != nil && mlInfo.IsReady() {
-		result, err := generateMlBasedUeCommunication(nwdafSubId, mlInfo, ctx)
+		result, err := generateMlBasedUeCommunication(nwdafSubId, mlInfo, ctx, cfg)
 		if err == nil {
 			return result
 		}
@@ -109,17 +106,18 @@ func generateMlBasedUeCommunication(
 	nwdafSubId string,
 	mlInfo *nwdaf_context.MlModelInfo,
 	ctx *nwdaf_context.NWDAFContext,
+	cfg *factory.Config,
 ) (models.UeCommunication, error) {
 	now := time.Now()
 
 	// Get ML service client
-	mlClient := getMlServiceClient()
+	mlClient := getMlServiceClient(cfg)
 	if mlClient == nil {
 		return models.UeCommunication{}, fmt.Errorf("ML service client not available")
 	}
 
 	// Resolve model params (with defaults)
-	params := getUeCommunicationModelParams()
+	params := ueCommunicationModelParams(cfg)
 	outputWindow := params.OutputWindowOrDefault()
 	samplingInterval := params.SamplingIntervalOrDefault()
 
@@ -172,7 +170,7 @@ func generateMlBasedUeCommunication(
 	var totalUl, totalDl int64
 	var totalConfidence int32
 	scopeKey := ""
-	if isAccuracyMonitorEnabled() {
+	if isAccuracyMonitorEnabled(cfg) {
 		if resolvedScopeKey, ok := resolveMonitoringScope(nwdafSubId, ctx); ok {
 			scopeKey = resolvedScopeKey
 		} else {
@@ -187,7 +185,7 @@ func generateMlBasedUeCommunication(
 
 		// Record individual predictions for accuracy monitoring
 		// Per TS 23.288 §5C: store predictions for ground truth comparison
-		if isAccuracyMonitorEnabled() {
+		if isAccuracyMonitorEnabled(cfg) {
 			store := ctx.GetModelAccuracyStore(mlInfo.ModelUrl)
 			if store != nil {
 				store.AddPrediction(nwdaf_context.PredictionRecord{
@@ -225,18 +223,6 @@ func generateMlBasedUeCommunication(
 		},
 		Confidence: avgConfidence,
 	}, nil
-}
-
-// getUeCommunicationModelParams returns the configured ModelParams for UE_COMMUNICATION.
-// Returns a zero-value ModelParams (all defaults) when not configured.
-func getUeCommunicationModelParams() *factory.ModelParams {
-	cfg := factory.NwdafConfig
-	if cfg != nil && cfg.Configuration != nil &&
-		cfg.Configuration.Analytics != nil &&
-		cfg.Configuration.Analytics.UeCommunication != nil {
-		return cfg.Configuration.Analytics.UeCommunication
-	}
-	return &factory.ModelParams{} // zero value → all helpers return defaults
 }
 
 // baseTargetTimeFromHistorical derives the first future target slot from the
@@ -501,12 +487,4 @@ func inferenceTargetLabel(nwdafSubId string, ctx *nwdaf_context.NWDAFContext) st
 	default:
 		return "supis=[" + strings.Join(supis, ",") + "]"
 	}
-}
-
-// isAccuracyMonitorEnabled checks if accuracy monitoring is configured and enabled
-func isAccuracyMonitorEnabled() bool {
-	cfg := factory.NwdafConfig
-	return cfg != nil && cfg.Configuration != nil &&
-		cfg.Configuration.Mtlf != nil && cfg.Configuration.Mtlf.Enabled &&
-		cfg.Configuration.Mtlf.AccuracyMonitor != nil && cfg.Configuration.Mtlf.AccuracyMonitor.Enabled
 }

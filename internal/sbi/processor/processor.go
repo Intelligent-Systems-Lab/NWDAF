@@ -10,6 +10,7 @@ import (
 	"github.com/free5gc/nwdaf/internal/mtlf"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/app"
+	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
 type NwdafApp interface {
@@ -24,6 +25,13 @@ type Processor struct {
 	anlf       *anlf.AnlfService
 	mtlf       *mtlf.MtlfService
 	adrfBuffer *adrfBuffer
+}
+
+func (p *Processor) config() *factory.Config {
+	if p == nil || p.nwdaf == nil {
+		return nil
+	}
+	return p.nwdaf.Config()
 }
 
 func NewProcessor(nwdaf NwdafApp) *Processor {

@@ -10,12 +10,14 @@ import (
 	"time"
 
 	"github.com/free5gc/nwdaf/internal/logger"
+	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
 
 // NotificationScheduler manages periodic notifications for subscriptions
 type NotificationScheduler struct {
 	baseCtx         context.Context
+	cfg             *factory.Config
 	subscriptionId  string
 	notificationURI string
 	repPeriod       int32 // seconds
@@ -38,6 +40,7 @@ type NotificationScheduler struct {
 // NewNotificationScheduler creates a new scheduler for a subscription
 func NewNotificationScheduler(
 	baseCtx context.Context,
+	cfg *factory.Config,
 	subscriptionId string,
 	notificationURI string,
 	repPeriod int32,
@@ -53,6 +56,7 @@ func NewNotificationScheduler(
 
 	return &NotificationScheduler{
 		baseCtx:         baseCtx,
+		cfg:             cfg,
 		subscriptionId:  subscriptionId,
 		notificationURI: notificationURI,
 		repPeriod:       repPeriod,
@@ -267,7 +271,7 @@ func (s *NotificationScheduler) buildNotification() models.NnwdafEventsSubscript
 	for i := range s.eventSubs {
 		eventSub := &s.eventSubs[i]
 		if handler, ok := GetHandler(eventSub.Event); ok {
-			eventNotifications = append(eventNotifications, handler.BuildEventNotification(s.subscriptionId, eventSub))
+			eventNotifications = append(eventNotifications, handler.BuildEventNotification(s.subscriptionId, eventSub, s.cfg))
 		}
 	}
 

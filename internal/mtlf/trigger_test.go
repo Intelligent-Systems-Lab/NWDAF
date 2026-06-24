@@ -15,11 +15,10 @@ const (
 	testScopeKeyB = "group:test-b"
 )
 
-func setTestAccuracyMonitorConfig(t *testing.T, cfg *factory.AccuracyMonitorConfig) {
+func setTestAccuracyMonitorConfig(t *testing.T, cfg *factory.AccuracyMonitorConfig) *factory.Config {
 	t.Helper()
 
-	oldCfg := factory.NwdafConfig
-	factory.NwdafConfig = &factory.Config{
+	return &factory.Config{
 		Configuration: &factory.Configuration{
 			Mtlf: &factory.MtlfConfig{
 				Enabled:         true,
@@ -27,9 +26,6 @@ func setTestAccuracyMonitorConfig(t *testing.T, cfg *factory.AccuracyMonitorConf
 			},
 		},
 	}
-	t.Cleanup(func() {
-		factory.NwdafConfig = oldCfg
-	})
 }
 
 func testAccuracyReport(modelURL, scopeKey string, current float64) anlf.AccuracyReport {
@@ -101,7 +97,7 @@ func TestComposeHitReason(t *testing.T) {
 }
 
 func TestHandleAccuracyReports_ColdStartBuildsBaselineWithoutTrigger(t *testing.T) {
-	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+	cfg := setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:             true,
 		PrimaryMetric:       "MAE",
 		RecentBufferSize:    5,
@@ -112,7 +108,7 @@ func TestHandleAccuracyReports_ColdStartBuildsBaselineWithoutTrigger(t *testing.
 		ConsecutiveBreaches: 2,
 	})
 
-	m := NewMtlfService(nil)
+	m := newTestMtlfService(cfg)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 	modelURL := testModelURL
 	scopeKey := testScopeKey
@@ -158,7 +154,7 @@ func TestHandleAccuracyReports_ColdStartBuildsBaselineWithoutTrigger(t *testing.
 }
 
 func TestHandleAccuracyReports_BaselineReadyRequiresRelGate(t *testing.T) {
-	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+	cfg := setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:             true,
 		PrimaryMetric:       "MAE",
 		RecentBufferSize:    5,
@@ -169,7 +165,7 @@ func TestHandleAccuracyReports_BaselineReadyRequiresRelGate(t *testing.T) {
 		ConsecutiveBreaches: 2,
 	})
 
-	m := NewMtlfService(nil)
+	m := newTestMtlfService(cfg)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 	modelURL := testModelURL
 	scopeKey := testScopeKey
@@ -190,7 +186,7 @@ func TestHandleAccuracyReports_BaselineReadyRequiresRelGate(t *testing.T) {
 }
 
 func TestHandleAccuracyReports_TriggersOnlyAfterBaselineReady(t *testing.T) {
-	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+	cfg := setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:             true,
 		PrimaryMetric:       "MAE",
 		RecentBufferSize:    5,
@@ -201,7 +197,7 @@ func TestHandleAccuracyReports_TriggersOnlyAfterBaselineReady(t *testing.T) {
 		ConsecutiveBreaches: 2,
 	})
 
-	m := NewMtlfService(nil)
+	m := newTestMtlfService(cfg)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 	triggered := 0
 	m.onRetrainTriggered = func(modelURL string, store *nwdaf_context.ModelAccuracyStore) {
@@ -252,7 +248,7 @@ func TestHandleAccuracyReports_TriggersOnlyAfterBaselineReady(t *testing.T) {
 }
 
 func TestHandleAccuracyReports_DecisionWindowRetainsRecentHits(t *testing.T) {
-	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+	cfg := setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:              true,
 		PrimaryMetric:        "MAE",
 		RecentBufferSize:     5,
@@ -264,7 +260,7 @@ func TestHandleAccuracyReports_DecisionWindowRetainsRecentHits(t *testing.T) {
 		RequiredHitsInWindow: 3,
 	})
 
-	m := NewMtlfService(nil)
+	m := newTestMtlfService(cfg)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 	modelURL := testModelURL
 	scopeKey := testScopeKey
@@ -293,7 +289,7 @@ func TestHandleAccuracyReports_DecisionWindowRetainsRecentHits(t *testing.T) {
 }
 
 func TestHandleAccuracyReports_DegradationLowTrafficSkipsWindowUpdate(t *testing.T) {
-	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+	cfg := setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:              true,
 		PrimaryMetric:        "MAE",
 		RecentBufferSize:     5,
@@ -308,7 +304,7 @@ func TestHandleAccuracyReports_DegradationLowTrafficSkipsWindowUpdate(t *testing
 		},
 	})
 
-	m := NewMtlfService(nil)
+	m := newTestMtlfService(cfg)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 	scope := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 3)
 	prefillScope(scope, 150, 150, 150)
@@ -328,7 +324,7 @@ func TestHandleAccuracyReports_DegradationLowTrafficSkipsWindowUpdate(t *testing
 }
 
 func TestHandleAccuracyReports_DegradationSignalDoesNotPolluteReferenceBuffer(t *testing.T) {
-	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+	cfg := setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:              true,
 		PrimaryMetric:        "MAE",
 		RecentBufferSize:     5,
@@ -341,7 +337,7 @@ func TestHandleAccuracyReports_DegradationSignalDoesNotPolluteReferenceBuffer(t 
 		RequiredHitsInWindow: 2,
 	})
 
-	m := NewMtlfService(nil)
+	m := newTestMtlfService(cfg)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 	scope := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 3)
 	prefillScope(scope, 150, 150, 150)
@@ -359,7 +355,7 @@ func TestHandleAccuracyReports_DegradationSignalDoesNotPolluteReferenceBuffer(t 
 }
 
 func TestHandleAccuracyReports_SkipWhenRetrainingInFlight(t *testing.T) {
-	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+	cfg := setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:             true,
 		PrimaryMetric:       "MAE",
 		RecentBufferSize:    5,
@@ -370,7 +366,7 @@ func TestHandleAccuracyReports_SkipWhenRetrainingInFlight(t *testing.T) {
 		ConsecutiveBreaches: 2,
 	})
 
-	m := NewMtlfService(nil)
+	m := newTestMtlfService(cfg)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 	store.SetRetraining(true)
 
@@ -386,7 +382,7 @@ func TestHandleAccuracyReports_SkipWhenRetrainingInFlight(t *testing.T) {
 }
 
 func TestHandleAccuracyReports_MultiScopeIsolation(t *testing.T) {
-	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+	cfg := setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:             true,
 		PrimaryMetric:       "MAE",
 		RecentBufferSize:    5,
@@ -397,7 +393,7 @@ func TestHandleAccuracyReports_MultiScopeIsolation(t *testing.T) {
 		ConsecutiveBreaches: 2,
 	})
 
-	m := NewMtlfService(nil)
+	m := newTestMtlfService(cfg)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 
 	scopeA := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 2)
@@ -422,7 +418,7 @@ func TestHandleAccuracyReports_MultiScopeIsolation(t *testing.T) {
 }
 
 func TestHandleAccuracyReports_AnyScopeTriggersRetrain(t *testing.T) {
-	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+	cfg := setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:             true,
 		PrimaryMetric:       "MAE",
 		RecentBufferSize:    5,
@@ -433,7 +429,7 @@ func TestHandleAccuracyReports_AnyScopeTriggersRetrain(t *testing.T) {
 		ConsecutiveBreaches: 1,
 	})
 
-	m := NewMtlfService(nil)
+	m := newTestMtlfService(cfg)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 
 	scopeA := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 1)
@@ -466,7 +462,7 @@ func TestHandleAccuracyReports_AnyScopeTriggersRetrain(t *testing.T) {
 }
 
 func TestHandleAccuracyReports_MissingPrimaryMetricSkipsScope(t *testing.T) {
-	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+	cfg := setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:             true,
 		PrimaryMetric:       "MAE",
 		RecentBufferSize:    5,
@@ -477,7 +473,7 @@ func TestHandleAccuracyReports_MissingPrimaryMetricSkipsScope(t *testing.T) {
 		ConsecutiveBreaches: 1,
 	})
 
-	m := NewMtlfService(nil)
+	m := newTestMtlfService(cfg)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 
 	m.HandleAccuracyReports(testModelURL, []anlf.AccuracyReport{{
@@ -496,7 +492,7 @@ func TestHandleAccuracyReports_MissingPrimaryMetricSkipsScope(t *testing.T) {
 }
 
 func TestHandleAccuracyReports_ZeroHistoryStillRequiresAbsGate(t *testing.T) {
-	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+	cfg := setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:             true,
 		PrimaryMetric:       "MAE",
 		RecentBufferSize:    5,
@@ -507,7 +503,7 @@ func TestHandleAccuracyReports_ZeroHistoryStillRequiresAbsGate(t *testing.T) {
 		ConsecutiveBreaches: 1,
 	})
 
-	m := NewMtlfService(nil)
+	m := newTestMtlfService(cfg)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 	scope := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 1)
 	prefillScope(scope, 0, 0, 0)
@@ -525,7 +521,7 @@ func TestHandleAccuracyReports_ZeroHistoryStillRequiresAbsGate(t *testing.T) {
 }
 
 func TestHandleAccuracyReports_DecisionWindowToleratesMisses(t *testing.T) {
-	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+	cfg := setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:              true,
 		PrimaryMetric:        "MAE",
 		RecentBufferSize:     5,
@@ -537,7 +533,7 @@ func TestHandleAccuracyReports_DecisionWindowToleratesMisses(t *testing.T) {
 		RequiredHitsInWindow: 3,
 	})
 
-	m := NewMtlfService(nil)
+	m := newTestMtlfService(cfg)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 	triggered := 0
 	m.onRetrainTriggered = func(modelURL string, store *nwdaf_context.ModelAccuracyStore) {
@@ -568,7 +564,7 @@ func TestHandleAccuracyReports_DecisionWindowToleratesMisses(t *testing.T) {
 
 func TestHandleAccuracyReports_ChronicPathTriggersWithoutDegradation(t *testing.T) {
 	enabled := true
-	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+	cfg := setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:              true,
 		PrimaryMetric:        "MAE",
 		RecentBufferSize:     5,
@@ -588,7 +584,7 @@ func TestHandleAccuracyReports_ChronicPathTriggersWithoutDegradation(t *testing.
 		},
 	})
 
-	m := NewMtlfService(nil)
+	m := newTestMtlfService(cfg)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 	triggered := 0
 	m.onRetrainTriggered = func(modelURL string, store *nwdaf_context.ModelAccuracyStore) {
@@ -624,7 +620,7 @@ func TestHandleAccuracyReports_ChronicPathTriggersWithoutDegradation(t *testing.
 
 func TestHandleAccuracyReports_ChronicPathRequiresTrafficScale(t *testing.T) {
 	enabled := true
-	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+	cfg := setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:              true,
 		PrimaryMetric:        "MAE",
 		RecentBufferSize:     5,
@@ -644,7 +640,7 @@ func TestHandleAccuracyReports_ChronicPathRequiresTrafficScale(t *testing.T) {
 		},
 	})
 
-	m := NewMtlfService(nil)
+	m := newTestMtlfService(cfg)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 	report := testAccuracyReportWithMetrics(testModelURL, testScopeKey, map[string]float64{
 		"MAE":  150,
@@ -669,7 +665,7 @@ func TestHandleAccuracyReports_ChronicPathRequiresTrafficScale(t *testing.T) {
 
 func TestHandleAccuracyReports_LowTrafficOverpredictionTriggers(t *testing.T) {
 	enabled := true
-	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+	cfg := setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:              true,
 		PrimaryMetric:        "MAE",
 		RecentBufferSize:     5,
@@ -690,7 +686,7 @@ func TestHandleAccuracyReports_LowTrafficOverpredictionTriggers(t *testing.T) {
 		},
 	})
 
-	m := NewMtlfService(nil)
+	m := newTestMtlfService(cfg)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 	triggered := 0
 	m.onRetrainTriggered = func(modelURL string, store *nwdaf_context.ModelAccuracyStore) {
@@ -727,7 +723,7 @@ func TestHandleAccuracyReports_LowTrafficOverpredictionTriggers(t *testing.T) {
 
 func TestHandleAccuracyReports_LowTrafficOverpredictionRequiresPredictedFloor(t *testing.T) {
 	enabled := true
-	setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+	cfg := setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
 		Enabled:              true,
 		PrimaryMetric:        "MAE",
 		RecentBufferSize:     5,
@@ -748,7 +744,7 @@ func TestHandleAccuracyReports_LowTrafficOverpredictionRequiresPredictedFloor(t 
 		},
 	})
 
-	m := NewMtlfService(nil)
+	m := newTestMtlfService(cfg)
 	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
 	scope := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 3)
 	prefillScope(scope, 150, 150, 150)

@@ -49,6 +49,43 @@ func NewAnlfService(nwdaf NwdafApp) *AnlfService {
 	return &AnlfService{nwdaf: nwdaf}
 }
 
+func (a *AnlfService) config() *factory.Config {
+	if a == nil || a.nwdaf == nil {
+		return nil
+	}
+	return a.nwdaf.Config()
+}
+
+func mlServiceEndpoint(cfg *factory.Config) string {
+	if cfg == nil || cfg.Configuration == nil ||
+		cfg.Configuration.MlService == nil || !cfg.Configuration.MlService.Enabled {
+		return ""
+	}
+	return cfg.Configuration.MlService.Endpoint
+}
+
+func ueCommunicationModelParams(cfg *factory.Config) *factory.ModelParams {
+	if cfg != nil && cfg.Configuration != nil &&
+		cfg.Configuration.Analytics != nil &&
+		cfg.Configuration.Analytics.UeCommunication != nil {
+		return cfg.Configuration.Analytics.UeCommunication
+	}
+	return &factory.ModelParams{}
+}
+
+func accuracyMonitorConfig(cfg *factory.Config) *factory.AccuracyMonitorConfig {
+	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.Mtlf == nil {
+		return nil
+	}
+	return cfg.Configuration.Mtlf.AccuracyMonitor
+}
+
+func isAccuracyMonitorEnabled(cfg *factory.Config) bool {
+	return cfg != nil && cfg.Configuration != nil &&
+		cfg.Configuration.Mtlf != nil && cfg.Configuration.Mtlf.Enabled &&
+		cfg.Configuration.Mtlf.AccuracyMonitor != nil && cfg.Configuration.Mtlf.AccuracyMonitor.Enabled
+}
+
 // SetOnDeviationReport registers the callback invoked when AnLF finishes computing
 // model-level deviation for a model. This callback is kept for legacy
 // compatibility while the report-based MTLF policy path is active.

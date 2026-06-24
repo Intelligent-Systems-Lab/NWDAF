@@ -57,6 +57,7 @@ func TestValidateSupportedEvent(t *testing.T) {
 
 type subscriptionTestApp struct {
 	ctx      context.Context
+	cfg      *factory.Config
 	consumer consumer.ConsumerAPI
 }
 
@@ -71,7 +72,7 @@ func (a *subscriptionTestApp) Start() {}
 func (a *subscriptionTestApp) Terminate() {}
 
 func (a *subscriptionTestApp) Config() *factory.Config {
-	return nil
+	return a.cfg
 }
 
 func (a *subscriptionTestApp) Context() *nwdaf_context.NWDAFContext {
@@ -835,8 +836,7 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 		}).
 		Times(1)
 
-	oldCfg := factory.NwdafConfig
-	factory.NwdafConfig = &factory.Config{
+	cfg := &factory.Config{
 		Configuration: &factory.Configuration{
 			Smf: &factory.SmfConfig{
 				Enabled:   true,
@@ -848,13 +848,13 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 			},
 		},
 	}
-	defer func() { factory.NwdafConfig = oldCfg }()
 
 	baseCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	p := NewProcessor(&subscriptionTestApp{
 		ctx:      baseCtx,
+		cfg:      cfg,
 		consumer: consumerClient,
 	})
 

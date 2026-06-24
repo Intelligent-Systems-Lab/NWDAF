@@ -7,7 +7,6 @@ import (
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
-	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -49,7 +48,7 @@ func (p *Processor) triggerUeCommunicationCollection(
 	subscriptionId string,
 ) {
 	// Check if SMF data collection is enabled in config
-	cfg := factory.NwdafConfig
+	cfg := p.config()
 	if cfg == nil || cfg.Configuration == nil ||
 		cfg.Configuration.Smf == nil || !cfg.Configuration.Smf.Enabled {
 		logger.ProcLog.Debugf("SMF data collection is disabled in config")
@@ -244,7 +243,7 @@ func (p *Processor) triggerMlModelProvisioning(
 	eventSub *models.NwdafEventsSubscriptionEventSubscription,
 	subscriptionId string,
 ) {
-	cfg := factory.NwdafConfig
+	cfg := p.config()
 	if cfg == nil || cfg.Configuration == nil {
 		logger.ProcLog.Debugf("Configuration missing, skipping ML model provisioning")
 		return

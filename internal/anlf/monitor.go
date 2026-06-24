@@ -19,18 +19,15 @@ import (
 func (a *AnlfService) StartAccuracyMonitorForModel(
 	modelUrl string, wg *sync.WaitGroup,
 ) {
-	cfg := factory.NwdafConfig
-	if cfg == nil || cfg.Configuration == nil ||
-		cfg.Configuration.Mtlf == nil || !cfg.Configuration.Mtlf.Enabled ||
-		cfg.Configuration.Mtlf.AccuracyMonitor == nil ||
-		!cfg.Configuration.Mtlf.AccuracyMonitor.Enabled {
+	cfg := a.config()
+	if !isAccuracyMonitorEnabled(cfg) {
 		return
 	}
 
 	nwdafCtx := nwdaf_context.GetSelf()
 	store, _ := nwdafCtx.GetOrCreateModelAccuracyStore(modelUrl)
 
-	accCfg := cfg.Configuration.Mtlf.AccuracyMonitor
+	accCfg := accuracyMonitorConfig(cfg)
 	interval := accCfg.CheckInterval
 	if interval <= 0 {
 		interval = 60
@@ -54,11 +51,7 @@ func (a *AnlfService) StartAccuracyMonitorForModel(
 // StopAccuracyMonitorForModel stops the monitor for a model if no subscribers remain.
 // Checks SharedModelInfo subscriber count to decide.
 func (a *AnlfService) StopAccuracyMonitorForModel(modelUrl string) {
-	cfg := factory.NwdafConfig
-	if cfg == nil || cfg.Configuration == nil ||
-		cfg.Configuration.Mtlf == nil ||
-		cfg.Configuration.Mtlf.AccuracyMonitor == nil ||
-		!cfg.Configuration.Mtlf.AccuracyMonitor.Enabled {
+	if !isAccuracyMonitorEnabled(a.config()) {
 		return
 	}
 
@@ -131,7 +124,7 @@ func (a *AnlfService) checkModelAccuracy(
 ) {
 	nwdafCtx := nwdaf_context.GetSelf()
 
-	samplingInterval := getUeCommunicationModelParams().SamplingIntervalOrDefault()
+	samplingInterval := ueCommunicationModelParams(a.config()).SamplingIntervalOrDefault()
 	pending := store.SnapshotPredictions()
 	if len(pending) == 0 {
 		return
@@ -260,13 +253,8 @@ func (a *AnlfService) lookupGroundTruth(
 	ctx *nwdaf_context.NWDAFContext,
 	pred nwdaf_context.PredictionRecord,
 ) *groundTruth {
-	cfg := factory.NwdafConfig
-	samplingInterval := 10
-	if cfg != nil && cfg.Configuration != nil &&
-		cfg.Configuration.Analytics != nil &&
-		cfg.Configuration.Analytics.UeCommunication != nil {
-		samplingInterval = cfg.Configuration.Analytics.UeCommunication.SamplingIntervalOrDefault()
-	}
+	cfg := a.config()
+	samplingInterval := ueCommunicationModelParams(cfg).SamplingIntervalOrDefault()
 	si := time.Duration(samplingInterval) * time.Second
 
 	corrIds := ctx.GetCorrelationIdsByNwdafSubId(pred.NwdafSubId)

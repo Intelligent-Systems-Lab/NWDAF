@@ -8,7 +8,6 @@ import (
 
 	"github.com/free5gc/nwdaf/internal/anlf"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
-	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
 const (
@@ -50,7 +49,7 @@ func (m *MtlfService) HandleAccuracyReports(
 	reports []anlf.AccuracyReport,
 	store *nwdaf_context.ModelAccuracyStore,
 ) {
-	cfg := factory.NwdafConfig
+	cfg := m.config()
 	if cfg == nil || cfg.Configuration == nil ||
 		cfg.Configuration.Mtlf == nil ||
 		cfg.Configuration.Mtlf.AccuracyMonitor == nil ||

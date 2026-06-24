@@ -329,7 +329,6 @@ func TestTriggerTargetDataCollection_MixedSupiAndGroup(t *testing.T) {
 
 func TestTriggerMlModelProvisioning_StaticUrl(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor(t)
 
 	// 1. Setup Config with Static Model URL
 	// Create minimal config structure
@@ -345,10 +344,7 @@ func TestTriggerMlModelProvisioning_StaticUrl(t *testing.T) {
 			},
 		},
 	}
-	// Save current config to restore later
-	oldCfg := factory.NwdafConfig
-	factory.NwdafConfig = cfg
-	defer func() { factory.NwdafConfig = oldCfg }()
+	p := newTestProcessorWithConfig(t, cfg)
 
 	// 2. Setup Subscription
 	subId := "test-sub-static-url"
@@ -375,7 +371,6 @@ func TestTriggerMlModelProvisioning_StaticUrl(t *testing.T) {
 
 func TestTriggerMlModelProvisioning_MtlfDisabledNoStaticUrl(t *testing.T) {
 	ctx := setupTestContext()
-	p := newTestProcessor(t)
 
 	// Setup Config: MTLF disabled, no static URL
 	cfg := &factory.Config{
@@ -386,9 +381,7 @@ func TestTriggerMlModelProvisioning_MtlfDisabledNoStaticUrl(t *testing.T) {
 			},
 		},
 	}
-	oldCfg := factory.NwdafConfig
-	factory.NwdafConfig = cfg
-	defer func() { factory.NwdafConfig = oldCfg }()
+	p := newTestProcessorWithConfig(t, cfg)
 
 	subId := "test-sub-no-action"
 	eventSub := models.NwdafEventsSubscriptionEventSubscription{

@@ -14,6 +14,7 @@ const groupAScopeKey = "group:group-a"
 
 type testNwdafApp struct {
 	ctx context.Context
+	cfg *factory.Config
 }
 
 func (a testNwdafApp) SetLogEnable(bool) {}
@@ -27,7 +28,7 @@ func (a testNwdafApp) Start() {}
 func (a testNwdafApp) Terminate() {}
 
 func (a testNwdafApp) Config() *factory.Config {
-	return nil
+	return a.cfg
 }
 
 func (a testNwdafApp) Context() *nwdaf_context.NWDAFContext {
@@ -41,11 +42,10 @@ func (a testNwdafApp) CancelContext() context.Context {
 func setTestMonitorConfig(
 	t *testing.T,
 	samplingInterval int,
-) *factory.AccuracyMonitorConfig {
+) (*factory.Config, *factory.AccuracyMonitorConfig) {
 	t.Helper()
 
-	oldCfg := factory.NwdafConfig
-	factory.NwdafConfig = &factory.Config{
+	cfg := &factory.Config{
 		Configuration: &factory.Configuration{
 			Mtlf: &factory.MtlfConfig{
 				Enabled: true,
@@ -60,11 +60,8 @@ func setTestMonitorConfig(
 			},
 		},
 	}
-	t.Cleanup(func() {
-		factory.NwdafConfig = oldCfg
-	})
 
-	return factory.NwdafConfig.Configuration.Mtlf.AccuracyMonitor
+	return cfg, cfg.Configuration.Mtlf.AccuracyMonitor
 }
 
 func addGroundTruthRecord(
@@ -368,13 +365,13 @@ func TestRecordScopedPair_TracksWindowAndSubID(t *testing.T) {
 
 func TestCheckModelAccuracy_LegacyDeviationUsesAllMatchedPairs(t *testing.T) {
 	ctx := setupCtx(t)
-	accCfg := setTestMonitorConfig(t, 5)
+	cfg, accCfg := setTestMonitorConfig(t, 5)
 	accCfg.MinSamples = 1
 
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	service := NewAnlfService(testNwdafApp{ctx: cancelCtx})
+	service := NewAnlfService(testNwdafApp{ctx: cancelCtx, cfg: cfg})
 	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
 	now := time.Now()
 
@@ -443,13 +440,13 @@ func TestCheckModelAccuracy_LegacyDeviationUsesAllMatchedPairs(t *testing.T) {
 
 func TestCheckModelAccuracy_MinSamplesSkipsCallbacks(t *testing.T) {
 	ctx := setupCtx(t)
-	accCfg := setTestMonitorConfig(t, 5)
+	cfg, accCfg := setTestMonitorConfig(t, 5)
 	accCfg.MinSamples = 2
 
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	service := NewAnlfService(testNwdafApp{ctx: cancelCtx})
+	service := NewAnlfService(testNwdafApp{ctx: cancelCtx, cfg: cfg})
 	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
 	target := time.Now().Add(-30 * time.Second)
 	addGroundTruthRecord(ctx, "sub-1", "corr-1", "10.0.0.1", target, 100, 200)
@@ -485,13 +482,13 @@ func TestCheckModelAccuracy_MinSamplesSkipsCallbacks(t *testing.T) {
 
 func TestCheckModelAccuracy_MinSamplesAppliesPerScope(t *testing.T) {
 	ctx := setupCtx(t)
-	accCfg := setTestMonitorConfig(t, 5)
+	cfg, accCfg := setTestMonitorConfig(t, 5)
 	accCfg.MinSamples = 2
 
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	service := NewAnlfService(testNwdafApp{ctx: cancelCtx})
+	service := NewAnlfService(testNwdafApp{ctx: cancelCtx, cfg: cfg})
 	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
 	now := time.Now()
 	targetA1 := now.Add(-50 * time.Second)
@@ -560,13 +557,13 @@ func TestCheckModelAccuracy_MinSamplesAppliesPerScope(t *testing.T) {
 
 func TestCheckModelAccuracy_LegacyDeviationIndependentOfPersistence(t *testing.T) {
 	ctx := setupCtx(t)
-	accCfg := setTestMonitorConfig(t, 5)
+	cfg, accCfg := setTestMonitorConfig(t, 5)
 	accCfg.MinSamples = 1
 
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	service := NewAnlfService(testNwdafApp{ctx: cancelCtx})
+	service := NewAnlfService(testNwdafApp{ctx: cancelCtx, cfg: cfg})
 	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
 	target := time.Now().Add(-30 * time.Second)
 	addGroundTruthRecord(ctx, "sub-1", "corr-1", "10.0.0.1", target, 100, 200)
@@ -670,9 +667,9 @@ func TestRunModelAccuracyLoop_ZeroWarmupKeepsPredictionsUntilTicker(t *testing.T
 
 func TestLookupGroundTruth_RejectsAdjacentSlotWithinLegacyNearestWindow(t *testing.T) {
 	ctx := setupCtx(t)
-	setTestMonitorConfig(t, 10)
+	cfg, _ := setTestMonitorConfig(t, 10)
 
-	service := NewAnlfService(testNwdafApp{ctx: context.Background()})
+	service := NewAnlfService(testNwdafApp{ctx: context.Background(), cfg: cfg})
 	target := snappedTs(100)
 	// 6 seconds late is still within the old ±10s nearest window, but should map
 	// to the next slot under the new slot-equality pairing.
@@ -690,11 +687,11 @@ func TestLookupGroundTruth_RejectsAdjacentSlotWithinLegacyNearestWindow(t *testi
 
 func TestCheckModelAccuracy_RetriesPendingPredictionBeforeDiscard(t *testing.T) {
 	setupCtx(t)
-	accCfg := setTestMonitorConfig(t, 5)
+	cfg, accCfg := setTestMonitorConfig(t, 5)
 	accCfg.CheckInterval = 20
 	accCfg.MinSamples = 1
 
-	service := NewAnlfService(testNwdafApp{ctx: context.Background()})
+	service := NewAnlfService(testNwdafApp{ctx: context.Background(), cfg: cfg})
 	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
 	target := time.Now().Add(-30 * time.Second)
 	store.AddPrediction(nwdaf_context.PredictionRecord{
@@ -725,11 +722,11 @@ func TestCheckModelAccuracy_RetriesPendingPredictionBeforeDiscard(t *testing.T) 
 
 func TestCheckModelAccuracy_LateGroundTruthMatchesOnLaterRound(t *testing.T) {
 	ctx := setupCtx(t)
-	accCfg := setTestMonitorConfig(t, 5)
+	cfg, accCfg := setTestMonitorConfig(t, 5)
 	accCfg.CheckInterval = 20
 	accCfg.MinSamples = 1
 
-	service := NewAnlfService(testNwdafApp{ctx: context.Background()})
+	service := NewAnlfService(testNwdafApp{ctx: context.Background(), cfg: cfg})
 	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
 	target := time.Now().Add(-30 * time.Second)
 	store.AddPrediction(nwdaf_context.PredictionRecord{

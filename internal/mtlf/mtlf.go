@@ -9,6 +9,7 @@ import (
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/pkg/app"
+	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
 // NwdafApp provides app-level dependencies to MtlfService.
@@ -45,6 +46,25 @@ func NewMtlfService(nwdaf NwdafApp) *MtlfService {
 		nwdaf:      nwdaf,
 		stateStore: NewMonitorStateStore(),
 	}
+}
+
+func (m *MtlfService) config() *factory.Config {
+	if m == nil || m.nwdaf == nil {
+		return nil
+	}
+	return m.nwdaf.Config()
+}
+
+func (m *MtlfService) buildNwdafURL(urlPath string) string {
+	cfg := m.config()
+	if cfg == nil {
+		return ""
+	}
+	return cfg.GetSbiUri() + urlPath
+}
+
+func (m *MtlfService) buildCallbackURL() string {
+	return m.buildNwdafURL("/mtlf/training-complete")
 }
 
 // SetWaitGroup stores the application WaitGroup for goroutine lifecycle management.
