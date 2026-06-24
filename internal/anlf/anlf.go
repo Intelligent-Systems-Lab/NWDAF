@@ -4,17 +4,17 @@
 package anlf
 
 import (
-	"context"
 	"sync"
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/nwdaf/pkg/app"
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
 // NwdafApp defines the app-level dependencies needed by AnLF.
 type NwdafApp interface {
-	CancelContext() context.Context
+	app.App
 }
 
 // AnlfService is the AnLF entry point.

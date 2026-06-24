@@ -22,6 +22,16 @@ type handlerTestApp struct {
 	cfg *factory.Config
 }
 
+func (a *handlerTestApp) SetLogEnable(bool) {}
+
+func (a *handlerTestApp) SetLogLevel(string) {}
+
+func (a *handlerTestApp) SetReportCaller(bool) {}
+
+func (a *handlerTestApp) Start() {}
+
+func (a *handlerTestApp) Terminate() {}
+
 func (a *handlerTestApp) Config() *factory.Config {
 	return a.cfg
 }

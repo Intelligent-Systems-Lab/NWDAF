@@ -1,10 +1,12 @@
 package consumer
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
 type testSmfService struct {
@@ -51,9 +53,44 @@ func (s *testMtlfService) HTTPClient() *http.Client {
 	return s.httpClient
 }
 
+type testConsumerApp struct {
+	cfg *factory.Config
+	ctx *nwdaf_context.NWDAFContext
+}
+
+func newTestConsumerApp(cfg *factory.Config) *testConsumerApp {
+	nwdaf_context.Init()
+	return &testConsumerApp{
+		cfg: cfg,
+		ctx: nwdaf_context.GetSelf(),
+	}
+}
+
+func (a *testConsumerApp) SetLogEnable(bool) {}
+
+func (a *testConsumerApp) SetLogLevel(string) {}
+
+func (a *testConsumerApp) SetReportCaller(bool) {}
+
+func (a *testConsumerApp) Start() {}
+
+func (a *testConsumerApp) Terminate() {}
+
+func (a *testConsumerApp) Config() *factory.Config {
+	return a.cfg
+}
+
+func (a *testConsumerApp) Context() *nwdaf_context.NWDAFContext {
+	return a.ctx
+}
+
+func (a *testConsumerApp) CancelContext() context.Context {
+	return context.Background()
+}
+
 // TestNewConsumer tests Consumer initialization
 func TestNewConsumer(t *testing.T) {
-	c, err := NewConsumer()
+	c, err := NewConsumer(newTestConsumerApp(nil))
 	if err != nil {
 		t.Errorf("NewConsumer() error = %v", err)
 	}
@@ -68,8 +105,8 @@ func TestNewConsumer(t *testing.T) {
 
 // TestConsumerContext tests Consumer.Context() method
 func TestConsumerContext(t *testing.T) {
-	nwdaf_context.Init()
-	c, err := NewConsumer()
+	app := newTestConsumerApp(nil)
+	c, err := NewConsumer(app)
 	if err != nil {
 		t.Fatalf("NewConsumer failed: %v", err)
 	}
@@ -77,12 +114,14 @@ func TestConsumerContext(t *testing.T) {
 	ctx := c.Context()
 	if ctx == nil {
 		t.Error("Context() returned nil")
+	} else if ctx != app.ctx {
+		t.Error("Context() should return the app-owned NWDAF context")
 	}
 }
 
 // TestNsmfServiceHTTPClient tests HTTP client is properly initialized
 func TestNsmfServiceHTTPClient(t *testing.T) {
-	c, err := NewConsumer()
+	c, err := NewConsumer(newTestConsumerApp(nil))
 	if err != nil {
 		t.Fatalf("NewConsumer failed: %v", err)
 	}
@@ -114,7 +153,7 @@ func TestConsumerDelegatesToInjectedServices(t *testing.T) {
 		subscriptionID: "mtlf-sub-1",
 		httpClient:     &http.Client{},
 	}
-	c := NewConsumerWithServices(smfService, mtlfService, nil)
+	c := NewConsumerWithServices(nil, smfService, mtlfService, nil)
 
 	if _, err := c.SubscribeToSmf("http://smf", SmfSubscriptionOptions{}); err != nil {
 		t.Fatalf("SubscribeToSmf returned error: %v", err)
@@ -134,6 +173,30 @@ func TestConsumerDelegatesToInjectedServices(t *testing.T) {
 	}
 	if !mtlfService.subscribeCalled || !mtlfService.unsubscribeCalled {
 		t.Fatal("expected MTLF service delegation to be invoked")
+	}
+}
+
+func TestNewConsumerInitializesAdrfFromAppConfig(t *testing.T) {
+	oldCfg := factory.NwdafConfig
+	factory.NwdafConfig = nil
+	t.Cleanup(func() {
+		factory.NwdafConfig = oldCfg
+	})
+
+	c, err := NewConsumer(newTestConsumerApp(&factory.Config{
+		Configuration: &factory.Configuration{
+			Adrf: &factory.AdrfConfig{
+				Url:              "http://adrf.example",
+				StorageThreshold: 3,
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("NewConsumer failed: %v", err)
+	}
+
+	if c.Adrf == nil {
+		t.Fatal("ADRF client should be initialized from app config")
 	}
 }
 

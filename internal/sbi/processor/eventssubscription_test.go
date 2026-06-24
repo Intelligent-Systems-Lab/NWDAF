@@ -60,6 +60,24 @@ type subscriptionTestApp struct {
 	consumer *consumer.Consumer
 }
 
+func (a *subscriptionTestApp) SetLogEnable(bool) {}
+
+func (a *subscriptionTestApp) SetLogLevel(string) {}
+
+func (a *subscriptionTestApp) SetReportCaller(bool) {}
+
+func (a *subscriptionTestApp) Start() {}
+
+func (a *subscriptionTestApp) Terminate() {}
+
+func (a *subscriptionTestApp) Config() *factory.Config {
+	return nil
+}
+
+func (a *subscriptionTestApp) Context() *nwdaf_context.NWDAFContext {
+	return nwdaf_context.GetSelf()
+}
+
 func (a *subscriptionTestApp) CancelContext() context.Context {
 	return a.ctx
 }
@@ -831,7 +849,7 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 	}
 	defer func() { factory.NwdafConfig = oldCfg }()
 
-	consumerClient := consumer.NewConsumerWithServices(smfService, nil, nil)
+	consumerClient := consumer.NewConsumerWithServices(nil, smfService, nil, nil)
 
 	baseCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -4,16 +4,16 @@
 package mtlf
 
 import (
-	"context"
 	"sync"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
+	"github.com/free5gc/nwdaf/pkg/app"
 )
 
 // NwdafApp provides app-level dependencies to MtlfService.
 type NwdafApp interface {
-	CancelContext() context.Context
+	app.App
 	Consumer() *consumer.Consumer
 }
 

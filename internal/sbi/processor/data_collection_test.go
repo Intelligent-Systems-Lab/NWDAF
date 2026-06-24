@@ -26,7 +26,7 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 			return "smf-sub-1", nil
 		}).
 		Times(1)
-	smfConsumer := consumer.NewConsumerWithServices(smfService, nil, nil)
+	smfConsumer := consumer.NewConsumerWithServices(nil, smfService, nil, nil)
 
 	// 3. Define Targets
 	targetSupi := "imsi-208930000000003"
@@ -200,7 +200,7 @@ func TestTriggerTargetDataCollection_WithOriginalGroupId(t *testing.T) {
 			return "smf-sub-" + opts.Supi, nil
 		}).
 		Times(3)
-	smfConsumer := consumer.NewConsumerWithServices(smfService, nil, nil)
+	smfConsumer := consumer.NewConsumerWithServices(nil, smfService, nil, nil)
 
 	// Simulate Group ID resolution: group → multiple SUPIs
 	groupId := "group-test-001"
@@ -274,7 +274,7 @@ func TestTriggerTargetDataCollection_MixedSupiAndGroup(t *testing.T) {
 			return "smf-sub", nil
 		}).
 		Times(4)
-	smfConsumer := consumer.NewConsumerWithServices(smfService, nil, nil)
+	smfConsumer := consumer.NewConsumerWithServices(nil, smfService, nil, nil)
 
 	// Mix of direct SUPI and Group-resolved SUPIs
 	targets := []DataCollectionTarget{

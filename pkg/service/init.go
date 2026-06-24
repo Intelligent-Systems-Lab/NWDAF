@@ -63,7 +63,7 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 
 	// Initialize consumer
 	var err error
-	nwdaf.consumer, err = consumer.NewConsumer()
+	nwdaf.consumer, err = consumer.NewConsumer(nwdaf)
 	if err != nil {
 		return nil, err
 	}
@@ -174,7 +174,7 @@ func (a *NwdafApp) Start() {
 	// Start MTLF training scheduler (managed by processor)
 	a.processor.StartMtlfTrainingScheduler(&a.wg)
 
-	if err := a.sbiServer.Run(context.Background(), &a.wg); err != nil {
+	if err := a.sbiServer.Run(&a.wg); err != nil {
 		logger.InitLog.Fatalf("Run SBI server failed: %+v", err)
 	}
 
@@ -205,7 +205,7 @@ func (a *NwdafApp) terminateProcedure() {
 	}
 
 	if a.sbiServer != nil {
-		a.sbiServer.Shutdown(context.Background())
+		a.sbiServer.Shutdown()
 	}
 
 	logger.InitLog.Infof("NWDAF terminated")

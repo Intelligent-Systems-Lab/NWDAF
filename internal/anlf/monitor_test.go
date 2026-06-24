@@ -16,6 +16,24 @@ type testNwdafApp struct {
 	ctx context.Context
 }
 
+func (a testNwdafApp) SetLogEnable(bool) {}
+
+func (a testNwdafApp) SetLogLevel(string) {}
+
+func (a testNwdafApp) SetReportCaller(bool) {}
+
+func (a testNwdafApp) Start() {}
+
+func (a testNwdafApp) Terminate() {}
+
+func (a testNwdafApp) Config() *factory.Config {
+	return nil
+}
+
+func (a testNwdafApp) Context() *nwdaf_context.NWDAFContext {
+	return nwdaf_context.GetSelf()
+}
+
 func (a testNwdafApp) CancelContext() context.Context {
 	return a.ctx
 }

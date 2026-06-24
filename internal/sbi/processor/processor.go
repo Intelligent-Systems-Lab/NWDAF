@@ -1,7 +1,6 @@
 package processor
 
 import (
-	"context"
 	"sync"
 
 	"github.com/free5gc/nwdaf/internal/anlf"
@@ -9,11 +8,11 @@ import (
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/mtlf"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
-	"github.com/free5gc/nwdaf/pkg/factory"
+	"github.com/free5gc/nwdaf/pkg/app"
 )
 
 type NwdafApp interface {
-	CancelContext() context.Context
+	app.App
 	Consumer() *consumer.Consumer
 }
 
@@ -58,8 +57,8 @@ func NewProcessor(nwdaf NwdafApp) *Processor {
 	if c := p.nwdaf.Consumer(); c != nil {
 		if c.Adrf != nil {
 			threshold := 1
-			if factory.NwdafConfig != nil && factory.NwdafConfig.Configuration != nil {
-				threshold = factory.NwdafConfig.Configuration.Adrf.StorageThresholdOrDefault()
+			if cfg := p.nwdaf.Config(); cfg != nil && cfg.Configuration != nil {
+				threshold = cfg.Configuration.Adrf.StorageThresholdOrDefault()
 			}
 			p.adrfBuffer = newAdrfBuffer(threshold, c.Adrf)
 			logger.ProcLog.Infof("ADRF buffer initialized: threshold=%d", threshold)

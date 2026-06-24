@@ -15,6 +15,7 @@ import (
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/sbi/processor"
+	"github.com/free5gc/nwdaf/pkg/app"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
@@ -44,10 +45,8 @@ func applyRoutes(group *gin.RouterGroup, routes []Route) {
 }
 
 type nwdafApp interface {
-	Config() *factory.Config
-	Context() *nwdaf_context.NWDAFContext
+	app.App
 	Processor() *processor.Processor
-	CancelContext() context.Context
 }
 
 type processorAPI interface {
@@ -149,14 +148,14 @@ func (s *Server) Processor() processorAPI {
 	return s.processor
 }
 
-func (s *Server) Run(traceCtx context.Context, wg *sync.WaitGroup) error {
+func (s *Server) Run(wg *sync.WaitGroup) error {
 	wg.Add(1)
 	go s.startServer(wg)
 
 	return nil
 }
 
-func (s *Server) Shutdown(traceCtx context.Context) {
+func (s *Server) Shutdown() {
 	const defaultShutdownTimeout = 2 * time.Second
 
 	if s.httpServer != nil {
