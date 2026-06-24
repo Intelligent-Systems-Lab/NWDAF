@@ -20,7 +20,7 @@ func TestHandleCreateSubscription_Success(t *testing.T) {
 		HandleCreateSubscription(gomock.AssignableToTypeOf(&models.NnwdafEventsSubscription{})).
 		Return(&models.NnwdafEventsSubscription{}, "sub-123", nil)
 
-	server := newHandlerTestServer(mockProcessor)
+	server := newHandlerTestServer(t, mockProcessor)
 	createBody := `{
 		"notificationURI":"http://consumer.example/callback",
 		"eventSubscriptions":[
@@ -45,7 +45,7 @@ func TestHandleCreateSubscription_Success(t *testing.T) {
 }
 
 func TestHandleCreateSubscription_InvalidJSON(t *testing.T) {
-	server := newHandlerTestServer(nil)
+	server := newHandlerTestServer(t, nil)
 	c, recorder := newJSONRequestContext(
 		http.MethodPost,
 		"/nnwdaf-eventssubscription/v1/subscriptions",
@@ -79,7 +79,7 @@ func TestHandleUpdateSubscription_ProcessorFailure(t *testing.T) {
 			Cause:  "SUBSCRIPTION_NOT_FOUND",
 		})
 
-	server := newHandlerTestServer(mockProcessor)
+	server := newHandlerTestServer(t, mockProcessor)
 	updateBody := `{
 		"notificationURI":"http://consumer.example/callback",
 		"eventSubscriptions":[
@@ -110,7 +110,7 @@ func TestHandleDeleteSubscription_Success(t *testing.T) {
 	mockProcessor := NewMockprocessorAPI(ctrl)
 	mockProcessor.EXPECT().HandleDeleteSubscription("sub-123").Return(nil)
 
-	server := newHandlerTestServer(mockProcessor)
+	server := newHandlerTestServer(t, mockProcessor)
 	c, recorder := newJSONRequestContext(http.MethodDelete, "/nnwdaf-eventssubscription/v1/subscriptions/sub-123", nil)
 	c.Params = []gin.Param{{Key: "subscriptionId", Value: "sub-123"}}
 

@@ -9,6 +9,7 @@ import (
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/pkg/factory"
+	"github.com/free5gc/nwdaf/pkg/mockapp"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -35,7 +36,7 @@ func newTestProcessorWithConfig(t *testing.T, cfg *factory.Config) *Processor {
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)
 
-	mockApp := NewMockNwdafApp(ctrl)
+	mockApp := mockapp.NewMockApp(ctrl)
 	mockApp.EXPECT().CancelContext().Return(context.Background()).AnyTimes()
 	mockApp.EXPECT().Consumer().Return(nil).AnyTimes()
 	mockApp.EXPECT().Config().Return(cfg).AnyTimes()

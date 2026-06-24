@@ -20,7 +20,7 @@ func TestHandleCollectorNotify_Success(t *testing.T) {
 		HandleSmfNotification(gomock.AssignableToTypeOf(&models.NsmfEventExposureNotification{})).
 		Return(nil)
 
-	server := newHandlerTestServer(mockProcessor)
+	server := newHandlerTestServer(t, mockProcessor)
 	c, recorder := newJSONRequestContext(
 		http.MethodPost,
 		"/collector/notify",
@@ -36,7 +36,7 @@ func TestHandleCollectorNotify_Success(t *testing.T) {
 }
 
 func TestHandleCollectorNotify_InvalidJSON(t *testing.T) {
-	server := newHandlerTestServer(nil)
+	server := newHandlerTestServer(t, nil)
 	c, recorder := newJSONRequestContext(http.MethodPost, "/collector/notify", []byte(`{"notifId":`))
 
 	server.HandleCollectorNotify(c)
@@ -63,7 +63,7 @@ func TestHandleUpfNotify_ProcessorFailure(t *testing.T) {
 		HandleUpfNotification(gomock.AssignableToTypeOf(&processor.UpfNotificationData{})).
 		Return(errors.New("processor failed"))
 
-	server := newHandlerTestServer(mockProcessor)
+	server := newHandlerTestServer(t, mockProcessor)
 	upfNotifyBody := `{
 		"correlationId":"corr-123",
 		"notificationItems":[

@@ -12,7 +12,7 @@ import (
 )
 
 func TestHandleMlModelProvisionNotify_InvalidJSON(t *testing.T) {
-	server := newHandlerTestServer(nil)
+	server := newHandlerTestServer(t, nil)
 	c, recorder := newJSONRequestContext(http.MethodPost, "/mlmodel-notify", []byte(`{"subscriptionId":`))
 
 	server.HandleMlModelProvisionNotify(c)
@@ -31,7 +31,7 @@ func TestHandleMlModelProvisionNotify_InvalidJSON(t *testing.T) {
 }
 
 func TestHandleMlModelProvisionNotify_EmptyNotificationList(t *testing.T) {
-	server := newHandlerTestServer(nil)
+	server := newHandlerTestServer(t, nil)
 	c, recorder := newJSONRequestContext(http.MethodPost, "/mlmodel-notify", []byte(`[]`))
 
 	server.HandleMlModelProvisionNotify(c)
@@ -58,7 +58,7 @@ func TestHandleMlModelProvisionNotify_InitializesModel(t *testing.T) {
 			close(done)
 		})
 
-	server := newHandlerTestServer(mockProcessor)
+	server := newHandlerTestServer(t, mockProcessor)
 	notificationBody := `[
 		{
 			"subscriptionId":"mtlf-sub-1",

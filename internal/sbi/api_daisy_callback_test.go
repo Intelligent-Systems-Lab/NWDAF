@@ -8,7 +8,7 @@ import (
 )
 
 func TestHandleDaisyTrainingComplete_InvalidPayload(t *testing.T) {
-	server := newHandlerTestServer(nil)
+	server := newHandlerTestServer(t, nil)
 	c, recorder := newJSONRequestContext(http.MethodPost, "/mtlf/training-complete", []byte(`{"task_id":`))
 
 	server.HandleDaisyTrainingComplete(c)
@@ -27,7 +27,7 @@ func TestHandleDaisyTrainingComplete_InvalidPayload(t *testing.T) {
 }
 
 func TestHandleDaisyTrainingComplete_MissingTaskID(t *testing.T) {
-	server := newHandlerTestServer(nil)
+	server := newHandlerTestServer(t, nil)
 	c, recorder := newJSONRequestContext(http.MethodPost, "/mtlf/training-complete", []byte(`{"status":"success"}`))
 
 	server.HandleDaisyTrainingComplete(c)
@@ -56,7 +56,7 @@ func TestHandleDaisyTrainingComplete_Success(t *testing.T) {
 	mockProcessor.EXPECT().
 		HandleDaisyCallback("task-1", "http://example.com/model.onnx", "success", "")
 
-	server := newHandlerTestServer(mockProcessor)
+	server := newHandlerTestServer(t, mockProcessor)
 	c, recorder := newJSONRequestContext(
 		http.MethodPost,
 		"/mtlf/training-complete",

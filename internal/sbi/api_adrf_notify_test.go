@@ -8,7 +8,7 @@ import (
 )
 
 func TestHandleAdrfRetrievalNotify_InvalidPayload(t *testing.T) {
-	server := newHandlerTestServer(nil)
+	server := newHandlerTestServer(t, nil)
 	c, recorder := newJSONRequestContext(http.MethodPost, "/collector/retrieval-notify", []byte(`{"notifCorrId":`))
 
 	server.HandleAdrfRetrievalNotify(c)
@@ -34,7 +34,7 @@ func TestHandleAdrfRetrievalNotify_Success(t *testing.T) {
 	mockProcessor.EXPECT().
 		HandleAdrfRetrievalNotify("corr-123", []string{"fetch-1", "fetch-2"}, true)
 
-	server := newHandlerTestServer(mockProcessor)
+	server := newHandlerTestServer(t, mockProcessor)
 	notifyBody := `{
 		"notifCorrId":"corr-123",
 		"terminationReq":true,

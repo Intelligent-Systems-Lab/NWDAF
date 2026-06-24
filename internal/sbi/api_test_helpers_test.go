@@ -7,55 +7,44 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/mock/gomock"
 
-	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/sbi/processor"
 	"github.com/free5gc/nwdaf/internal/util"
 	"github.com/free5gc/nwdaf/pkg/factory"
+	"github.com/free5gc/nwdaf/pkg/mockapp"
 	"github.com/free5gc/openapi/models"
 )
 
 const malformedRequestSyntaxTitle = "Malformed request syntax"
 
 type handlerTestApp struct {
-	cfg *factory.Config
+	*mockapp.MockApp
 }
 
-func (a *handlerTestApp) SetLogEnable(bool) {}
-
-func (a *handlerTestApp) SetLogLevel(string) {}
-
-func (a *handlerTestApp) SetReportCaller(bool) {}
-
-func (a *handlerTestApp) Start() {}
-
-func (a *handlerTestApp) Terminate() {}
-
-func (a *handlerTestApp) Config() *factory.Config {
-	return a.cfg
-}
-
-func (a *handlerTestApp) Context() *nwdaf_context.NWDAFContext {
-	return nwdaf_context.GetSelf()
-}
-
-func (a *handlerTestApp) Processor() *processor.Processor {
+func (a handlerTestApp) Processor() *processor.Processor {
 	return nil
 }
 
-func newHandlerTestServer(proc processorAPI) *Server {
-	return &Server{
-		nwdafApp: &handlerTestApp{
-			cfg: &factory.Config{
-				Configuration: &factory.Configuration{
-					Sbi: &factory.Sbi{
-						Scheme:       "http",
-						RegisterIPv4: "127.0.0.1",
-						Port:         8080,
-					},
-				},
+func newHandlerTestServer(t *testing.T, proc processorAPI) *Server {
+	t.Helper()
+
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	mockApp := mockapp.NewMockApp(ctrl)
+	mockApp.EXPECT().Config().Return(&factory.Config{
+		Configuration: &factory.Configuration{
+			Sbi: &factory.Sbi{
+				Scheme:       "http",
+				RegisterIPv4: "127.0.0.1",
+				Port:         8080,
 			},
 		},
+	}).AnyTimes()
+
+	return &Server{
+		nwdafApp:  handlerTestApp{MockApp: mockApp},
 		processor: proc,
 	}
 }
