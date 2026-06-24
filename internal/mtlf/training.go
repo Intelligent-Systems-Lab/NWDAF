@@ -1,7 +1,6 @@
 package mtlf
 
 import (
-	"fmt"
 	"maps"
 	"sync"
 	"time"
@@ -27,15 +26,10 @@ type inFlightEntry struct {
 // buildNwdafURL constructs a full NWDAF URL for the given path.
 func buildNwdafURL(urlPath string) string {
 	cfg := factory.NwdafConfig
-	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.Sbi == nil {
+	if cfg == nil {
 		return ""
 	}
-	sbi := cfg.Configuration.Sbi
-	ip := sbi.RegisterIPv4
-	if ip == "" {
-		ip = sbi.BindingIPv4
-	}
-	return fmt.Sprintf("%s://%s:%d%s", cfg.GetSbiScheme(), ip, sbi.Port, urlPath)
+	return cfg.GetSbiUri() + urlPath
 }
 
 // buildCallbackURL constructs the NWDAF callback URL that Daisy will POST to

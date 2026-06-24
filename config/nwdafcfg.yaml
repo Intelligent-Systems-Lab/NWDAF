@@ -8,11 +8,13 @@ configuration:
     url: mongodb://127.0.0.1:27017
   nwdafName: NWDAF
   sbi:
-    scheme: http
+    scheme: http         # current runtime supports HTTP only
     registerIPv4: 127.0.0.1
     bindingIPv4: 127.0.0.1
     port: 8080
-  # nrfUri: http://127.0.0.10:8000  # Uncomment when NRF is available
+  supportedAnalytics:
+    - UE_COMMUNICATION
+  # nrfUri: http://127.0.0.10:8000  # Reserved config; NRF registration is not wired yet
 
   # SMF Data Collection
   smf:

@@ -38,10 +38,8 @@ func (s *Server) HandleCreateSubscription(c *gin.Context) {
 
 	// Set Location header
 	cfg := s.Config()
-	locationUri := fmt.Sprintf("%s://%s:%d%s/subscriptions/%s",
-		cfg.Configuration.Sbi.Scheme,
-		cfg.Configuration.Sbi.RegisterIPv4,
-		cfg.Configuration.Sbi.Port,
+	locationUri := fmt.Sprintf("%s%s/subscriptions/%s",
+		cfg.GetSbiUri(),
 		factory.NwdafEventsSubResUriPrefix,
 		subscriptionId)
 

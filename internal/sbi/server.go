@@ -109,9 +109,7 @@ func NewServer(nwdaf nwdafApp) (*Server, error) {
 	applyRoutes(daisyGroup, s.getDaisyCallbackRoutes())
 
 	cfg := nwdaf.Config()
-	bindAddr := fmt.Sprintf("%s:%d",
-		cfg.Configuration.Sbi.BindingIPv4,
-		cfg.Configuration.Sbi.Port)
+	bindAddr := cfg.GetSbiBindingAddr()
 
 	logger.SBILog.Infof("Binding addr: [%s]", bindAddr)
 

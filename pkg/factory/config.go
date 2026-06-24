@@ -1,7 +1,12 @@
 package factory
 
 import (
+	"errors"
+	"fmt"
+	"net"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -16,9 +21,14 @@ const (
 	NwdafSbiDefaultPort        = 8080
 	NwdafDefaultNwdafName      = "NWDAF"
 	NwdafEventsSubResUriPrefix = "/nnwdaf-eventssubscription/v1"
+	NwdafSupportedEventUEComm  = "UE_COMMUNICATION"
 )
 
 var NwdafConfig *Config
+
+var supportedAnalyticsAllowlist = map[string]struct{}{
+	NwdafSupportedEventUEComm: {},
+}
 
 type Config struct {
 	Info          *Info          `yaml:"info"`
@@ -487,6 +497,314 @@ type Logger struct {
 	ReportCaller bool   `yaml:"reportCaller"`
 }
 
+func (c *Config) applyDefaults() {
+	if c.Configuration == nil {
+		c.Configuration = &Configuration{}
+	}
+
+	if c.Configuration.NwdafName == "" {
+		c.Configuration.NwdafName = NwdafDefaultNwdafName
+	}
+
+	if c.Configuration.Sbi == nil {
+		c.Configuration.Sbi = &Sbi{}
+	}
+	if c.Configuration.Sbi.Scheme == "" {
+		c.Configuration.Sbi.Scheme = NwdafSbiDefaultScheme
+	}
+	if c.Configuration.Sbi.BindingIPv4 == "" {
+		c.Configuration.Sbi.BindingIPv4 = NwdafSbiDefaultIPv4
+	}
+	if c.Configuration.Sbi.Port == 0 {
+		c.Configuration.Sbi.Port = NwdafSbiDefaultPort
+	}
+
+	if len(c.Configuration.SupportedAnalytics) == 0 {
+		c.Configuration.SupportedAnalytics = []string{NwdafSupportedEventUEComm}
+	}
+}
+
+func (c *Config) Validate() (bool, error) {
+	if c == nil {
+		return false, errors.New("config is nil")
+	}
+
+	var errs []error
+	if c.Configuration == nil {
+		errs = append(errs, errors.New("configuration section is required"))
+	} else if err := c.Configuration.validate(); err != nil {
+		errs = append(errs, err)
+	}
+
+	if len(errs) > 0 {
+		return false, errors.Join(errs...)
+	}
+	return true, nil
+}
+
+func (c *Configuration) validate() error {
+	var errs []error
+
+	if c.Sbi == nil {
+		errs = append(errs, errors.New("sbi section is required"))
+	} else if err := c.Sbi.validate(); err != nil {
+		errs = append(errs, err)
+	}
+
+	normalizedAnalytics, analyticsErr := normalizeSupportedAnalytics(c.SupportedAnalytics)
+	if analyticsErr != nil {
+		errs = append(errs, analyticsErr)
+	} else {
+		c.SupportedAnalytics = normalizedAnalytics
+	}
+	if validateErr := validateAnalyticsConfig(c.Analytics); validateErr != nil {
+		errs = append(errs, validateErr)
+	}
+	if c.Smf != nil && c.Smf.Enabled {
+		if validateErr := c.Smf.validate(); validateErr != nil {
+			errs = append(errs, validateErr)
+		}
+	}
+	if c.MlService != nil && c.MlService.Enabled {
+		if validateErr := c.MlService.validate(); validateErr != nil {
+			errs = append(errs, validateErr)
+		}
+	}
+	if c.ExternalMtlf != nil && c.ExternalMtlf.Enabled {
+		if validateErr := c.ExternalMtlf.validate(); validateErr != nil {
+			errs = append(errs, validateErr)
+		}
+	}
+	if c.Adrf != nil && c.Adrf.AdrfEnabled() {
+		if validateErr := c.Adrf.validate(); validateErr != nil {
+			errs = append(errs, validateErr)
+		}
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+func (s *Sbi) validate() error {
+	var errs []error
+
+	s.Scheme = strings.ToLower(strings.TrimSpace(s.Scheme))
+	s.BindingIPv4 = strings.TrimSpace(s.BindingIPv4)
+	s.RegisterIPv4 = strings.TrimSpace(s.RegisterIPv4)
+
+	if s.Scheme != NwdafSbiDefaultScheme {
+		errs = append(
+			errs,
+			fmt.Errorf(
+				"sbi.scheme must be %q; HTTPS is not supported by the current runtime",
+				NwdafSbiDefaultScheme,
+			),
+		)
+	}
+	if !isValidHostValue(s.BindingIPv4) {
+		errs = append(errs, fmt.Errorf("sbi.bindingIPv4 must be a valid host or IP"))
+	}
+	if s.RegisterIPv4 != "" && !isValidHostValue(s.RegisterIPv4) {
+		errs = append(errs, fmt.Errorf("sbi.registerIPv4 must be a valid host or IP"))
+	}
+	if s.Port <= 0 || s.Port > 65535 {
+		errs = append(errs, fmt.Errorf("sbi.port must be between 1 and 65535"))
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+func (s *SmfConfig) validate() error {
+	var errs []error
+
+	if len(s.Endpoints) == 0 {
+		errs = append(errs, errors.New("smf.endpoints must contain at least one endpoint when smf.enabled is true"))
+	}
+	for i, endpoint := range s.Endpoints {
+		if err := validateHTTPURL(fmt.Sprintf("smf.endpoints[%d]", i), endpoint); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if s.NotifUris == nil {
+		errs = append(errs, errors.New("smf.notifUris is required when smf.enabled is true"))
+	} else {
+		if err := validateHTTPURL("smf.notifUris.smf", s.NotifUris.Smf); err != nil {
+			errs = append(errs, err)
+		}
+		if err := validateHTTPURL("smf.notifUris.upf", s.NotifUris.Upf); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+func (m *MlServiceConfig) validate() error {
+	return validateHTTPURL("mlService.endpoint", m.Endpoint)
+}
+
+func (m *ExternalMtlfConfig) validate() error {
+	var errs []error
+
+	if len(m.Endpoints) == 0 {
+		errs = append(
+			errs,
+			errors.New(
+				"externalMtlf.endpoints must contain at least one endpoint when externalMtlf.enabled is true",
+			),
+		)
+	}
+	for i, endpoint := range m.Endpoints {
+		if err := validateHTTPURL(fmt.Sprintf("externalMtlf.endpoints[%d]", i), endpoint); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if err := validateHTTPURL("externalMtlf.notifUri", m.NotifUri); err != nil {
+		errs = append(errs, err)
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+func (a *AdrfConfig) validate() error {
+	var errs []error
+
+	if err := validateHTTPURL("adrf.url", a.Url); err != nil {
+		errs = append(errs, err)
+	}
+	if a.StorageThreshold < 0 {
+		errs = append(errs, errors.New("adrf.storageThreshold must be zero or positive"))
+	}
+	if a.FetchBatchSize < 0 {
+		errs = append(errs, errors.New("adrf.fetchBatchSize must be zero or positive"))
+	}
+	if a.FetchBatchSize > 1 {
+		errs = append(errs, errors.New("adrf.fetchBatchSize must be 1 for the current ADRF retrieval flow"))
+	}
+	if a.RetrainWindow < 0 {
+		errs = append(errs, errors.New("adrf.retrainWindow must be zero or positive"))
+	}
+	if a.WatchdogTimeout < 0 {
+		errs = append(errs, errors.New("adrf.watchdogTimeout must be zero or positive"))
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+func normalizeSupportedAnalytics(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, errors.New("supportedAnalytics must contain at least one entry")
+	}
+
+	normalized := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	var errs []error
+
+	for i, value := range values {
+		normalizedValue := strings.ToUpper(strings.TrimSpace(value))
+		if normalizedValue == "" {
+			errs = append(errs, fmt.Errorf("supportedAnalytics[%d] must not be empty", i))
+			continue
+		}
+		if _, ok := supportedAnalyticsAllowlist[normalizedValue]; !ok {
+			errs = append(errs, fmt.Errorf("supportedAnalytics[%d] %q is not supported by the current runtime", i, value))
+			continue
+		}
+		if _, ok := seen[normalizedValue]; ok {
+			continue
+		}
+		seen[normalizedValue] = struct{}{}
+		normalized = append(normalized, normalizedValue)
+	}
+
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+
+	return normalized, nil
+}
+
+func validateAnalyticsConfig(cfg *AnalyticsConfig) error {
+	if cfg == nil || cfg.UeCommunication == nil {
+		return nil
+	}
+
+	inputWindow := cfg.UeCommunication.InputWindowOrDefault()
+	ringBufferSize := cfg.UeCommunication.RingBufferSizeOrDefault()
+	if inputWindow > ringBufferSize {
+		return fmt.Errorf(
+			"analytics.ueCommunication.inputWindow (%d) must be less than or equal to ringBufferSize (%d)",
+			inputWindow,
+			ringBufferSize,
+		)
+	}
+
+	return nil
+}
+
+func validateHTTPURL(fieldName string, raw string) error {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return fmt.Errorf("%s is required", fieldName)
+	}
+
+	parsed, err := url.ParseRequestURI(trimmed)
+	if err != nil {
+		return fmt.Errorf("%s must be a valid URL: %w", fieldName, err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("%s must use http or https", fieldName)
+	}
+	if parsed.Hostname() == "" {
+		return fmt.Errorf("%s must include a host", fieldName)
+	}
+
+	return nil
+}
+
+func isValidHostValue(value string) bool {
+	if value == "" {
+		return false
+	}
+	if net.ParseIP(value) != nil {
+		return true
+	}
+	if strings.EqualFold(value, "localhost") {
+		return true
+	}
+
+	labels := strings.Split(value, ".")
+	for _, label := range labels {
+		if label == "" || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+		for _, r := range label {
+			if (r < 'a' || r > 'z') &&
+				(r < 'A' || r > 'Z') &&
+				(r < '0' || r > '9') &&
+				r != '-' {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
 func ReadConfig(cfgPath string) (*Config, error) {
 	if cfgPath == "" {
 		cfgPath = NwdafDefaultConfigPath
@@ -504,37 +822,17 @@ func ReadConfig(cfgPath string) (*Config, error) {
 		return nil, err
 	}
 
-	// Set defaults
-	if cfg.Configuration == nil {
-		cfg.Configuration = &Configuration{}
+	hadConfiguration := cfg.Configuration != nil
+	cfg.applyDefaults()
+	if !hadConfiguration {
+		err = errors.New("configuration section is required")
+		logger.CfgLog.Errorf("Config validate error: %v", err)
+		return nil, err
 	}
-	if cfg.Configuration.NwdafName == "" {
-		cfg.Configuration.NwdafName = NwdafDefaultNwdafName
-	}
-	if cfg.Configuration.Sbi == nil {
-		cfg.Configuration.Sbi = &Sbi{
-			Scheme:      NwdafSbiDefaultScheme,
-			BindingIPv4: NwdafSbiDefaultIPv4,
-			Port:        NwdafSbiDefaultPort,
-		}
-	}
-	if len(cfg.Configuration.SupportedAnalytics) == 0 {
-		cfg.Configuration.SupportedAnalytics = []string{"ABNORMAL_BEHAVIOUR"}
-	}
-
-	// Validate ring buffer vs input window
-	if cfg.Configuration.Analytics != nil && cfg.Configuration.Analytics.UeCommunication != nil {
-		p := cfg.Configuration.Analytics.UeCommunication
-		iw := p.InputWindowOrDefault()
-		rb := p.RingBufferSizeOrDefault()
-		if iw > rb {
-			logger.CfgLog.Warnf(
-				"analytics.ueCommunication.inputWindow (%d) > ringBufferSize (%d): "+
-					"inference will always have fewer points than the model expects; "+
-					"increase ringBufferSize to at least %d",
-				iw, rb, iw,
-			)
-		}
+	if _, err = cfg.Validate(); err != nil {
+		logger.CfgLog.Errorf("Config validate error: %v", err)
+		logger.CfgLog.Errorf("[-- PLEASE REFER TO SAMPLE CONFIG FILE COMMENTS --]")
+		return nil, err
 	}
 
 	logger.CfgLog.Infof("Config loaded: %s", cfgPath)
@@ -542,18 +840,48 @@ func ReadConfig(cfgPath string) (*Config, error) {
 }
 
 func (c *Config) GetSbiBindingAddr() string {
-	if c.Configuration.Sbi == nil {
-		return "127.0.0.1:8080"
+	return c.GetSbiBindingIP() + ":" + strconv.Itoa(c.GetSbiPort())
+}
+
+func (c *Config) GetSbiBindingIP() string {
+	if c == nil || c.Configuration == nil || c.Configuration.Sbi == nil ||
+		strings.TrimSpace(c.Configuration.Sbi.BindingIPv4) == "" {
+		return NwdafSbiDefaultIPv4
 	}
-	return c.Configuration.Sbi.BindingIPv4 + ":" +
-		string(rune(c.Configuration.Sbi.Port+'0'))
+	return strings.TrimSpace(c.Configuration.Sbi.BindingIPv4)
+}
+
+func (c *Config) GetSbiRegisterIP() string {
+	if c == nil || c.Configuration == nil || c.Configuration.Sbi == nil {
+		return NwdafSbiDefaultIPv4
+	}
+	if registerIP := strings.TrimSpace(c.Configuration.Sbi.RegisterIPv4); registerIP != "" {
+		return registerIP
+	}
+	return c.GetSbiBindingIP()
+}
+
+func (c *Config) GetSbiRegisterAddr() string {
+	return c.GetSbiRegisterIP() + ":" + strconv.Itoa(c.GetSbiPort())
+}
+
+func (c *Config) GetSbiUri() string {
+	return c.GetSbiScheme() + "://" + c.GetSbiRegisterAddr()
+}
+
+func (c *Config) GetSbiPort() int {
+	if c == nil || c.Configuration == nil || c.Configuration.Sbi == nil || c.Configuration.Sbi.Port == 0 {
+		return NwdafSbiDefaultPort
+	}
+	return c.Configuration.Sbi.Port
 }
 
 func (c *Config) GetSbiScheme() string {
-	if c.Configuration.Sbi == nil {
-		return "http"
+	if c == nil || c.Configuration == nil || c.Configuration.Sbi == nil ||
+		strings.TrimSpace(c.Configuration.Sbi.Scheme) == "" {
+		return NwdafSbiDefaultScheme
 	}
-	return c.Configuration.Sbi.Scheme
+	return strings.ToLower(strings.TrimSpace(c.Configuration.Sbi.Scheme))
 }
 
 // GetSamplingInterval returns the configured UE communication sampling interval,
@@ -579,7 +907,7 @@ func (c *Config) GetRingBufferSize() int {
 }
 
 func (c *Config) GetNwdafName() string {
-	if c.Configuration == nil {
+	if c == nil || c.Configuration == nil {
 		return NwdafDefaultNwdafName
 	}
 	return c.Configuration.NwdafName
