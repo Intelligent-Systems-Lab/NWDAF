@@ -20,6 +20,7 @@ const (
 	adrfStorageTimeout                 = 10 * time.Second
 	adrfRetrievalTimeout               = 15 * time.Second
 	adrfFetchTimeout                   = 10 * time.Second
+	adrfUnsubscribeTimeout             = 10 * time.Second
 	adrfUnsubscribeMaxRetry            = 3
 	adrfUnsubscribeRetryBackoff        = 500 * time.Millisecond
 )
@@ -265,7 +266,7 @@ func (c *AdrfClient) RetrievalUnsubscribe(ctx context.Context, subscriptionId st
 			}
 		}
 
-		attemptCtx, cancel := requestTimeoutContext(ctx, adrfFetchTimeout)
+		attemptCtx, cancel := requestTimeoutContext(ctx, adrfUnsubscribeTimeout)
 		req, err := http.NewRequestWithContext(attemptCtx, http.MethodDelete, url, nil)
 		if err != nil {
 			cancel()

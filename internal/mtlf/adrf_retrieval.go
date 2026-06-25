@@ -12,6 +12,8 @@ import (
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
+const adrfCleanupUnsubscribeTimeout = 5 * time.Second
+
 // retrainJob tracks the state of one ADRF-assisted retrain operation.
 // One job per TID; created in runAdrfRetrainWorkflow, destroyed after convergence.
 type retrainJob struct {
@@ -39,8 +41,46 @@ type retrainJob struct {
 	watchdog *time.Timer
 }
 
+func (j *retrainJob) closeFetchQueue() {
+	if j == nil {
+		return
+	}
+	j.closeOnce.Do(func() {
+		j.mu.Lock()
+		defer j.mu.Unlock()
+		if j.closed {
+			return
+		}
+		j.closed = true
+		close(j.fetchCh)
+	})
+}
+
+func (j *retrainJob) enqueueFetchIDs(ctx context.Context, ids []string) bool {
+	if j == nil || len(ids) == 0 {
+		return false
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.closed {
+		return false
+	}
+
+	select {
+	case j.fetchCh <- ids:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // runAdrfRetrainWorkflow runs the full ADRF retrieval flow for a retrain job.
-// Called in a separate goroutine from TriggerRetraining (when ADRF enabled).
+// When launched from retrain dispatch, this workflow is expected to stay under
+// the owning MTLF lifecycle boundary rather than spawning detached follow-up work.
 func (m *MtlfService) runAdrfRetrainWorkflow(
 	mtlfCfg *factory.MtlfConfig,
 	adrfCfg *factory.AdrfConfig,
@@ -55,7 +95,7 @@ func (m *MtlfService) runAdrfRetrainWorkflow(
 	sharedModel := nwdafCtx.GetSharedModel(oldModelUrl)
 	if sharedModel == nil {
 		mtlfLog.Warnf("runAdrfRetrainWorkflow: no SharedModelInfo for model=%s, fallback to direct training", oldModelUrl)
-		go m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
+		m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
 		return
 	}
 
@@ -78,7 +118,7 @@ func (m *MtlfService) runAdrfRetrainWorkflow(
 
 	if len(infos) == 0 {
 		mtlfLog.Warnf("runAdrfRetrainWorkflow: no ADRF-tracked SUPIs for model=%s, fallback to direct training", oldModelUrl)
-		go m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
+		m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
 		return
 	}
 
@@ -124,12 +164,7 @@ func (m *MtlfService) runAdrfRetrainWorkflow(
 	job.watchdog = time.AfterFunc(watchdogDuration, func() {
 		mtlfLog.Warnf("ADRF watchdog fired for TID=%s: no terminationReq after %ds, proceeding with available data",
 			tid, int(watchdogDuration.Seconds()))
-		job.closeOnce.Do(func() {
-			job.mu.Lock()
-			job.closed = true
-			job.mu.Unlock()
-			close(job.fetchCh)
-		})
+		job.closeFetchQueue()
 	})
 
 	// Execute RetrievalSubscribes
@@ -138,7 +173,7 @@ func (m *MtlfService) runAdrfRetrainWorkflow(
 		mtlfLog.Warnf("runAdrfRetrainWorkflow: ADRF client not initialized for TID=%s, fallback to direct training", tid)
 		m.activeJobs.Delete(tid)
 		job.watchdog.Stop()
-		go m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
+		m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
 		return
 	}
 	for _, info := range infos {
@@ -150,12 +185,7 @@ func (m *MtlfService) runAdrfRetrainWorkflow(
 			shouldConverge := job.totalSubs > 0 && job.termCount >= job.totalSubs
 			job.mu.Unlock()
 			if shouldConverge {
-				job.closeOnce.Do(func() {
-					job.mu.Lock()
-					job.closed = true
-					job.mu.Unlock()
-					close(job.fetchCh)
-				})
+				job.closeFetchQueue()
 			}
 			continue
 		}
@@ -172,16 +202,15 @@ func (m *MtlfService) runAdrfRetrainWorkflow(
 		mtlfLog.Warnf("runAdrfRetrainWorkflow: all ADRF RetrievalSubscribes failed for TID=%s", tid)
 		m.activeJobs.Delete(tid)
 		job.watchdog.Stop()
-		go m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
+		m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
 		return
 	}
 
-	// Start processing goroutine
-	go m.runFetchLoop(job, adrfCfg, mtlfCfg, adrfClient)
+	m.runFetchLoop(job, adrfCfg, mtlfCfg, adrfClient)
 }
 
 // runFetchLoop drains fetchCh: for each batch of IDs, fetches records from ADRF
-// and uploads to Daisy. Exits when fetchCh is closed (convergence or watchdog).
+// and uploads to Daisy. Exits when fetchCh is closed or app shutdown begins.
 func (m *MtlfService) runFetchLoop(
 	job *retrainJob,
 	adrfCfg *factory.AdrfConfig,
@@ -199,13 +228,34 @@ func (m *MtlfService) runFetchLoop(
 	fetchBatchSize := adrfCfg.FetchBatchSizeOrDefault()
 	if m.daisyClient == nil {
 		mtlfLog.Errorf("runFetchLoop TID=%s: Daisy client not initialized", job.tid)
-		cleanupSubscriptions(m.nwdaf.CancelContext(), job, adrfClient)
+		cleanupSubscriptions(job, adrfClient)
 		return
 	}
 
 	var totalIDs, fetched, uploaded int
+	shutdown := false
+	cancelCtx := m.nwdaf.CancelContext()
+	if cancelCtx == nil {
+		cancelCtx = context.Background()
+	}
 
-	for ids := range job.fetchCh {
+loop:
+	for {
+		var ids []string
+		var ok bool
+
+		select {
+		case <-cancelCtx.Done():
+			shutdown = true
+			job.closeFetchQueue()
+			mtlfLog.Infof("runFetchLoop TID=%s stopping due to app shutdown", job.tid)
+			break loop
+		case ids, ok = <-job.fetchCh:
+			if !ok {
+				break loop
+			}
+		}
+
 		totalIDs += len(ids)
 		for i := 0; i < len(ids); i += fetchBatchSize {
 			end := i + fetchBatchSize
@@ -257,10 +307,14 @@ func (m *MtlfService) runFetchLoop(
 	mtlfLog.Infof("runFetchLoop TID=%s complete: ids=%d fetched=%d uploaded=%d",
 		job.tid, totalIDs, fetched, uploaded)
 
-	// fetchCh closed: cleanup subscriptions then trigger training
-	cleanupSubscriptions(m.nwdaf.CancelContext(), job, adrfClient)
+	// cleanup subscriptions before deciding whether training should continue
+	cleanupSubscriptions(job, adrfClient)
+	if shutdown {
+		mtlfLog.Infof("runFetchLoop TID=%s: skipping Daisy dispatch during shutdown", job.tid)
+		return
+	}
 	// activeJobs.Delete is handled by defer above
-	go m.submitDaisyTask(mtlfCfg, job.tid, job.oldModelUrl, job.store)
+	m.submitDaisyTask(mtlfCfg, job.tid, job.oldModelUrl, job.store)
 }
 
 // HandleAdrfRetrievalNotify routes an ADRF retrieval callback to the matching job.
@@ -287,29 +341,37 @@ func (m *MtlfService) HandleAdrfRetrievalNotify(notifCorrId string, fetchCorrIds
 	mtlfLog.Infof("RetrievalNotify TID=%s: ids=%d terminationReq=%t termCount=%d/%d",
 		notifCorrId, len(fetchCorrIds), terminationReq, termCount, totalSubs)
 
-	if len(fetchCorrIds) > 0 && !isClosed {
-		job.fetchCh <- fetchCorrIds
+	cancelCtx := m.nwdaf.CancelContext()
+	if cancelCtx == nil {
+		cancelCtx = context.Background()
+	}
+	if !isClosed && len(fetchCorrIds) > 0 && !job.enqueueFetchIDs(cancelCtx, fetchCorrIds) {
+		if cancelCtx.Err() != nil {
+			mtlfLog.Infof("RetrievalNotify TID=%s: dropping ids during shutdown", notifCorrId)
+		}
 	}
 
 	if allTermReceived {
-		job.closeOnce.Do(func() {
-			job.mu.Lock()
-			job.closed = true
-			job.mu.Unlock()
-			close(job.fetchCh)
-		})
+		job.closeFetchQueue()
 	}
 }
 
 // cleanupSubscriptions sends DELETE for all registered subscriptionIds.
-func cleanupSubscriptions(ctx context.Context, job *retrainJob, client consumer.AdrfServiceAPI) {
+func cleanupSubscriptions(job *retrainJob, client consumer.AdrfServiceAPI) {
+	if job == nil || client == nil {
+		return
+	}
+
 	job.mu.Lock()
 	subIds := make([]string, len(job.subscriptionIds))
 	copy(subIds, job.subscriptionIds)
 	job.mu.Unlock()
 
 	for _, subId := range subIds {
-		if err := client.RetrievalUnsubscribe(ctx, subId); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), adrfCleanupUnsubscribeTimeout)
+		err := client.RetrievalUnsubscribe(cleanupCtx, subId)
+		cancel()
+		if err != nil {
 			mtlfLog.Warnf("cleanupSubscriptions: failed to unsubscribe %s: %v", subId, err)
 		}
 	}

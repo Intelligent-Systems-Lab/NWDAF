@@ -17,6 +17,8 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	defer ctrl.Finish()
 
 	smfConsumer := NewMockConsumerAPI(ctrl)
+	smfConsumer.EXPECT().MlClient().Return(nil).AnyTimes()
+	smfConsumer.EXPECT().DaisyClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().AdrfClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().
 		SubscribeToSmf("http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
@@ -193,6 +195,8 @@ func TestTriggerTargetDataCollection_WithOriginalGroupId(t *testing.T) {
 
 	smfConsumer := NewMockConsumerAPI(ctrl)
 	var gotSupis []string
+	smfConsumer.EXPECT().MlClient().Return(nil).AnyTimes()
+	smfConsumer.EXPECT().DaisyClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().AdrfClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().
 		SubscribeToSmf("http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
@@ -267,6 +271,8 @@ func TestTriggerTargetDataCollection_MixedSupiAndGroup(t *testing.T) {
 
 	smfConsumer := NewMockConsumerAPI(ctrl)
 	var subscribeCalls int
+	smfConsumer.EXPECT().MlClient().Return(nil).AnyTimes()
+	smfConsumer.EXPECT().DaisyClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().AdrfClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().
 		SubscribeToSmf("http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).

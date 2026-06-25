@@ -148,7 +148,7 @@ func TestConsumerDelegatesToInjectedServices(t *testing.T) {
 		subscriptionID: "mtlf-sub-1",
 		httpClient:     &http.Client{},
 	}
-	c := newConsumerWithServices(nil, smfService, mtlfService, nil)
+	c := newConsumerWithServices(nil, smfService, mtlfService, nil, nil, nil)
 
 	if _, err := c.SubscribeToSmf("http://smf", SmfSubscriptionOptions{}); err != nil {
 		t.Fatalf("SubscribeToSmf returned error: %v", err)
@@ -186,6 +186,40 @@ func TestNewConsumerInitializesAdrfFromAppConfig(t *testing.T) {
 
 	if c.Adrf == nil {
 		t.Fatal("ADRF client should be initialized from app config")
+	}
+}
+
+func TestNewConsumerInitializesMlAndDaisyFromAppConfig(t *testing.T) {
+	c, err := NewConsumer(newTestConsumerApp(&factory.Config{
+		Configuration: &factory.Configuration{
+			MlService: &factory.MlServiceConfig{
+				Enabled:  true,
+				Endpoint: "http://ml.example",
+			},
+			Mtlf: &factory.MtlfConfig{
+				Enabled:  true,
+				Endpoint: "http://daisy.example",
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("NewConsumer failed: %v", err)
+	}
+
+	mlClient, ok := c.MlClient().(*MlServiceClient)
+	if !ok || mlClient == nil {
+		t.Fatal("ML client should be initialized from app config")
+	}
+	if mlClient.endpoint != "http://ml.example" {
+		t.Fatalf("ML endpoint = %q, want %q", mlClient.endpoint, "http://ml.example")
+	}
+
+	daisyClient, ok := c.DaisyClient().(*DaisyClient)
+	if !ok || daisyClient == nil {
+		t.Fatal("Daisy client should be initialized from app config")
+	}
+	if daisyClient.endpoint != "http://daisy.example" {
+		t.Fatalf("Daisy endpoint = %q, want %q", daisyClient.endpoint, "http://daisy.example")
 	}
 }
 

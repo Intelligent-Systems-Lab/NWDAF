@@ -19,6 +19,8 @@ type fakeDaisyClient struct {
 	lastCallbackURL string
 	lastModelTask   map[string]any
 	taskID          string
+	startedCh       chan struct{}
+	releaseCh       <-chan struct{}
 }
 
 func (f *fakeDaisyClient) TriggerTrainingAsync(
@@ -31,6 +33,16 @@ func (f *fakeDaisyClient) TriggerTrainingAsync(
 	f.lastCtx = ctx
 	f.lastCallbackURL = callbackURL
 	f.lastModelTask = task
+	if f.startedCh != nil {
+		select {
+		case <-f.startedCh:
+		default:
+			close(f.startedCh)
+		}
+	}
+	if f.releaseCh != nil {
+		<-f.releaseCh
+	}
 	if tidOverride != "" {
 		return tidOverride, nil
 	}
@@ -219,5 +231,92 @@ func TestSubmitDaisyTaskUsesInjectedClient(t *testing.T) {
 	}
 	if _, ok := service.inFlight.Load("task-123"); !ok {
 		t.Fatal("expected inFlight entry to be stored after successful Daisy submission")
+	}
+}
+
+func TestStartRetrainWorkflowRegistersOwnedDispatch(t *testing.T) {
+	cfg := &factory.Config{
+		Configuration: &factory.Configuration{
+			Mtlf: &factory.MtlfConfig{
+				Enabled: true,
+				Task:    map[string]any{},
+			},
+		},
+	}
+
+	startedCh := make(chan struct{})
+	releaseCh := make(chan struct{})
+	client := &fakeDaisyClient{
+		taskID:    "task-owned",
+		startedCh: startedCh,
+		releaseCh: releaseCh,
+	}
+	service := NewMtlfService(testNwdafApp{
+		ctx: context.Background(),
+		cfg: cfg,
+	}, client, nil)
+	var wg sync.WaitGroup
+	service.SetWaitGroup(&wg)
+
+	store := nwdaf_context.NewModelAccuracyStore("file:///old-model.onnx")
+	store.SetRetraining(true)
+
+	service.startRetrainWorkflow("file:///old-model.onnx", store)
+
+	select {
+	case <-startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("owned Daisy dispatch did not start")
+	}
+
+	waitDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+		t.Fatal("waitgroup finished before owned Daisy dispatch completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseCh)
+
+	select {
+	case <-waitDone:
+	case <-time.After(time.Second):
+		t.Fatal("waitgroup did not finish after owned Daisy dispatch completed")
+	}
+}
+
+func TestSubmitDaisyTaskSkipsDuringShutdown(t *testing.T) {
+	cfg := &factory.Config{
+		Configuration: &factory.Configuration{
+			Mtlf: &factory.MtlfConfig{
+				Enabled: true,
+				Task:    map[string]any{},
+			},
+		},
+	}
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	client := &fakeDaisyClient{taskID: "task-ignored"}
+	service := NewMtlfService(testNwdafApp{
+		ctx: cancelCtx,
+		cfg: cfg,
+	}, client, nil)
+	store := nwdaf_context.NewModelAccuracyStore("file:///old-model.onnx")
+	store.SetRetraining(true)
+
+	service.submitDaisyTask(cfg.Configuration.Mtlf, "", "file:///old-model.onnx", store)
+
+	if client.triggerCalls != 0 {
+		t.Fatalf("TriggerTrainingAsync called %d times, want 0 during shutdown", client.triggerCalls)
+	}
+	if store.IsRetraining() {
+		t.Fatal("retraining flag should be cleared when Daisy dispatch is skipped during shutdown")
 	}
 }

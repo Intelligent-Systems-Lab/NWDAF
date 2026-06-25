@@ -87,6 +87,31 @@ func (a *subscriptionTestApp) Consumer() consumer.ConsumerAPI {
 	return a.consumer
 }
 
+func TestNewProcessorUsesOwnedConsumerClients(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	consumerClient := NewMockConsumerAPI(ctrl)
+	mlClient := consumer.NewMlServiceClient("http://ml.example")
+	daisyClient := consumer.NewDaisyClient("http://daisy.example")
+
+	consumerClient.EXPECT().MlClient().Return(mlClient).AnyTimes()
+	consumerClient.EXPECT().DaisyClient().Return(daisyClient).AnyTimes()
+	consumerClient.EXPECT().AdrfClient().Return(nil).AnyTimes()
+
+	p := NewProcessor(&subscriptionTestApp{
+		ctx:      context.Background(),
+		consumer: consumerClient,
+	})
+
+	if p.mlClient != mlClient {
+		t.Fatal("processor should use the owned ML client from consumer")
+	}
+	if p.daisyClient != daisyClient {
+		t.Fatal("processor should use the owned Daisy client from consumer")
+	}
+}
+
 func TestValidateUeCommunication(t *testing.T) {
 	p := &Processor{}
 
@@ -819,6 +844,8 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 	var subscribedSupis []string
 	var unsubscribeCalls []string
 	subscribeCount := 0
+	consumerClient.EXPECT().MlClient().Return(nil).AnyTimes()
+	consumerClient.EXPECT().DaisyClient().Return(nil).AnyTimes()
 	consumerClient.EXPECT().AdrfClient().Return(nil).AnyTimes()
 	consumerClient.EXPECT().
 		SubscribeToSmf("http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).

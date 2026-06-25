@@ -41,15 +41,9 @@ func NewProcessor(nwdaf NwdafApp) *Processor {
 	var daisyClient consumer.DaisyServiceAPI
 	var adrfClient consumer.AdrfServiceAPI
 
-	if cfg := nwdaf.Config(); cfg != nil && cfg.Configuration != nil {
-		if mlCfg := cfg.Configuration.MlService; mlCfg != nil && mlCfg.Enabled && mlCfg.Endpoint != "" {
-			mlClient = consumer.NewMlServiceClient(mlCfg.Endpoint)
-		}
-		if mtlfCfg := cfg.Configuration.Mtlf; mtlfCfg != nil && mtlfCfg.Enabled && mtlfCfg.Endpoint != "" {
-			daisyClient = consumer.NewDaisyClient(mtlfCfg.Endpoint)
-		}
-	}
 	if c := nwdaf.Consumer(); c != nil {
+		mlClient = c.MlClient()
+		daisyClient = c.DaisyClient()
 		adrfClient = c.AdrfClient()
 	}
 

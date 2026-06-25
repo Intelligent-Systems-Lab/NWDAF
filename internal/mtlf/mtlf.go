@@ -93,3 +93,26 @@ func (m *MtlfService) SetOnModelSwapped(fn func(modelUrl string, wg *sync.WaitGr
 func (m *MtlfService) SetOnModelSwapReady(fn func(newModelUrl, oldModelId string) (string, error)) {
 	m.onModelSwapReady = fn
 }
+
+func (m *MtlfService) launchOwnedTask(fn func()) {
+	if fn == nil {
+		return
+	}
+	if m.wg != nil {
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			fn()
+		}()
+		return
+	}
+	go fn()
+}
+
+func (m *MtlfService) shutdownStarted() bool {
+	if m == nil || m.nwdaf == nil {
+		return false
+	}
+	ctx := m.nwdaf.CancelContext()
+	return ctx != nil && ctx.Err() != nil
+}

@@ -62,6 +62,8 @@ type ConsumerAPI interface {
 	UnsubscribeFromSmf(smfEndpoint string, subscriptionId string) error
 	SubscribeToMtlf(mtlfEndpoint string, opts MtlfSubscriptionOptions) (string, error)
 	UnsubscribeFromMtlf(mtlfEndpoint string, subscriptionId string) error
+	MlClient() MlServiceAPI
+	DaisyClient() DaisyServiceAPI
 	AdrfClient() AdrfServiceAPI
 }
 
@@ -69,22 +71,28 @@ type ConsumerAPI interface {
 type Consumer struct {
 	nwdaf
 
-	smfService  SmfServiceClient
-	mtlfService MtlfServiceClient
-	Adrf        AdrfServiceAPI // nil if ADRF not configured
+	smfService   SmfServiceClient
+	mtlfService  MtlfServiceClient
+	mlService    MlServiceAPI
+	daisyService DaisyServiceAPI
+	Adrf         AdrfServiceAPI // nil if ADRF not configured
 }
 
 func newConsumerWithServices(
 	nwdaf nwdaf,
 	smfService SmfServiceClient,
 	mtlfService MtlfServiceClient,
+	mlService MlServiceAPI,
+	daisyService DaisyServiceAPI,
 	adrf AdrfServiceAPI,
 ) *Consumer {
 	return &Consumer{
-		nwdaf:       nwdaf,
-		smfService:  smfService,
-		mtlfService: mtlfService,
-		Adrf:        adrf,
+		nwdaf:        nwdaf,
+		smfService:   smfService,
+		mtlfService:  mtlfService,
+		mlService:    mlService,
+		daisyService: daisyService,
+		Adrf:         adrf,
 	}
 }
 
@@ -95,13 +103,25 @@ func NewConsumer(nwdaf nwdaf) (*Consumer, error) {
 		NewNsmfService(),
 		NewNmtlfService(),
 		nil,
+		nil,
+		nil,
 	)
 
 	if nwdaf != nil {
 		cfg := nwdaf.Config()
-		if cfg != nil && cfg.Configuration != nil && cfg.Configuration.Adrf.AdrfEnabled() {
-			c.Adrf = NewAdrfClient(cfg.Configuration.Adrf.Url)
-			consumerLog.Infof("ADRF client initialized: url=%s", cfg.Configuration.Adrf.Url)
+		if cfg != nil && cfg.Configuration != nil {
+			if mlCfg := cfg.Configuration.MlService; mlCfg != nil && mlCfg.Enabled && mlCfg.Endpoint != "" {
+				c.mlService = NewMlServiceClient(mlCfg.Endpoint)
+				consumerLog.Infof("ML service client initialized: endpoint=%s", mlCfg.Endpoint)
+			}
+			if mtlfCfg := cfg.Configuration.Mtlf; mtlfCfg != nil && mtlfCfg.Enabled && mtlfCfg.Endpoint != "" {
+				c.daisyService = NewDaisyClient(mtlfCfg.Endpoint)
+				consumerLog.Infof("Daisy client initialized: endpoint=%s", mtlfCfg.Endpoint)
+			}
+			if cfg.Configuration.Adrf.AdrfEnabled() {
+				c.Adrf = NewAdrfClient(cfg.Configuration.Adrf.Url)
+				consumerLog.Infof("ADRF client initialized: url=%s", cfg.Configuration.Adrf.Url)
+			}
 		}
 	}
 
@@ -139,6 +159,14 @@ func (c *Consumer) SmfService() SmfServiceClient {
 
 func (c *Consumer) MtlfService() MtlfServiceClient {
 	return c.mtlfService
+}
+
+func (c *Consumer) MlClient() MlServiceAPI {
+	return c.mlService
+}
+
+func (c *Consumer) DaisyClient() DaisyServiceAPI {
+	return c.daisyService
 }
 
 func (c *Consumer) AdrfClient() AdrfServiceAPI {

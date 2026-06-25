@@ -79,11 +79,15 @@ func (m *MtlfService) startRetrainWorkflow(
 	// ADRF path: fetch historical data before submitting to Daisy
 	if cfg.Configuration.Adrf.AdrfEnabled() {
 		mtlfLog.Infof("ADRF enabled: starting data retrieval before retrain for model=%s", oldModelUrl)
-		go m.runAdrfRetrainWorkflow(mtlfCfg, cfg.Configuration.Adrf, oldModelUrl, store)
+		m.launchOwnedTask(func() {
+			m.runAdrfRetrainWorkflow(mtlfCfg, cfg.Configuration.Adrf, oldModelUrl, store)
+		})
 		return
 	}
 
-	go m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
+	m.launchOwnedTask(func() {
+		m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
+	})
 }
 
 // submitDaisyTask sends an async training request to Daisy and stores the
@@ -97,6 +101,14 @@ func (m *MtlfService) submitDaisyTask(
 	oldModelUrl string,
 	store *nwdaf_context.ModelAccuracyStore,
 ) {
+	if m.shutdownStarted() {
+		mtlfLog.Infof("Skipping Daisy training dispatch during shutdown: model=%s tid=%s", oldModelUrl, tid)
+		if store != nil {
+			store.SetRetraining(false)
+		}
+		return
+	}
+
 	mtlfLog.Infof("Submitting training task to Daisy: model=%s tid=%s", oldModelUrl, tid)
 	cbURL := m.buildCallbackURL()
 	if cbURL == "" {
