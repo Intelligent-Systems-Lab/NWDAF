@@ -1,6 +1,7 @@
 package consumer
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -16,12 +17,12 @@ type testSmfService struct {
 	httpClient        *http.Client
 }
 
-func (s *testSmfService) SubscribeToSmf(_ string, _ SmfSubscriptionOptions) (string, error) {
+func (s *testSmfService) SubscribeToSmf(_ context.Context, _ string, _ SmfSubscriptionOptions) (string, error) {
 	s.subscribeCalled = true
 	return s.subscriptionID, s.err
 }
 
-func (s *testSmfService) UnsubscribeFromSmf(_ string, _ string) error {
+func (s *testSmfService) UnsubscribeFromSmf(_ context.Context, _ string, _ string) error {
 	s.unsubscribeCalled = true
 	return s.err
 }
@@ -38,12 +39,12 @@ type testMtlfService struct {
 	httpClient        *http.Client
 }
 
-func (s *testMtlfService) SubscribeToMtlf(_ string, _ MtlfSubscriptionOptions) (string, error) {
+func (s *testMtlfService) SubscribeToMtlf(_ context.Context, _ string, _ MtlfSubscriptionOptions) (string, error) {
 	s.subscribeCalled = true
 	return s.subscriptionID, s.err
 }
 
-func (s *testMtlfService) UnsubscribeFromMtlf(_ string, _ string) error {
+func (s *testMtlfService) UnsubscribeFromMtlf(_ context.Context, _ string, _ string) error {
 	s.unsubscribeCalled = true
 	return s.err
 }
@@ -150,16 +151,16 @@ func TestConsumerDelegatesToInjectedServices(t *testing.T) {
 	}
 	c := newConsumerWithServices(nil, smfService, mtlfService, nil, nil, nil)
 
-	if _, err := c.SubscribeToSmf("http://smf", SmfSubscriptionOptions{}); err != nil {
+	if _, err := c.SubscribeToSmf(context.Background(), "http://smf", SmfSubscriptionOptions{}); err != nil {
 		t.Fatalf("SubscribeToSmf returned error: %v", err)
 	}
-	if _, err := c.SubscribeToMtlf("http://mtlf", MtlfSubscriptionOptions{}); err != nil {
+	if _, err := c.SubscribeToMtlf(context.Background(), "http://mtlf", MtlfSubscriptionOptions{}); err != nil {
 		t.Fatalf("SubscribeToMtlf returned error: %v", err)
 	}
-	if err := c.UnsubscribeFromSmf("http://smf", "smf-sub-1"); err != nil {
+	if err := c.UnsubscribeFromSmf(context.Background(), "http://smf", "smf-sub-1"); err != nil {
 		t.Fatalf("UnsubscribeFromSmf returned error: %v", err)
 	}
-	if err := c.UnsubscribeFromMtlf("http://mtlf", "mtlf-sub-1"); err != nil {
+	if err := c.UnsubscribeFromMtlf(context.Background(), "http://mtlf", "mtlf-sub-1"); err != nil {
 		t.Fatalf("UnsubscribeFromMtlf returned error: %v", err)
 	}
 

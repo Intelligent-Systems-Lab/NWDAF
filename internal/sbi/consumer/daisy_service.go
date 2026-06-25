@@ -92,7 +92,10 @@ func (c *DaisyClient) TriggerTrainingAsync(
 	url := c.endpoint + DaisyPublishTaskPath
 	consumerLog.Debugf("Daisy async training request: %s", string(jsonData))
 
-	ctx, cancel := requestTimeoutContext(ctx, DaisyAsyncTimeout)
+	ctx, cancel, err := timeoutContextFromParent(ctx, DaisyAsyncTimeout, "Daisy async training")
+	if err != nil {
+		return "", err
+	}
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
@@ -143,7 +146,10 @@ func (c *DaisyClient) UploadData(
 		return fmt.Errorf("marshal DaisyUploadDataRequest: %w", err)
 	}
 
-	ctx, cancel := requestTimeoutContext(ctx, DaisyUploadTimeout)
+	ctx, cancel, err := timeoutContextFromParent(ctx, DaisyUploadTimeout, "Daisy data upload")
+	if err != nil {
+		return err
+	}
 	defer cancel()
 
 	url := c.endpoint + DaisyUploadDataPath

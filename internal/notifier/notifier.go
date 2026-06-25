@@ -54,10 +54,6 @@ func NewNotificationScheduler(
 	monDur *time.Time,
 	onComplete func(subscriptionId string, reason string),
 ) *NotificationScheduler {
-	if baseCtx == nil {
-		baseCtx = context.Background()
-	}
-
 	return &NotificationScheduler{
 		baseCtx:  baseCtx,
 		cfg:      cfg,

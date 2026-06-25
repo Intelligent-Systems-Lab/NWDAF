@@ -52,6 +52,7 @@ type MtlfSubscriptionOptions struct {
 // SubscribeToMtlf creates an ML Model Provision subscription to MTLF
 // Per TS 29.520 §5.4.3.2.3.1: POST to /subscriptions
 func (s *NmtlfService) SubscribeToMtlf(
+	ctx context.Context,
 	mtlfEndpoint string,
 	opts MtlfSubscriptionOptions,
 ) (string, error) {
@@ -72,7 +73,10 @@ func (s *NmtlfService) SubscribeToMtlf(
 	request := &MLModelProvision.CreateNWDAFMLModelProvisionSubcriptionRequest{}
 	request.SetNwdafMlModelProvSubsc(requestModel)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "MTLF subscription")
+	if err != nil {
+		return "", err
+	}
 	defer cancel()
 
 	response, err := s.apiClient(mtlfEndpoint).SubscriptionsCollectionApi.
@@ -93,6 +97,7 @@ func (s *NmtlfService) SubscribeToMtlf(
 // UnsubscribeFromMtlf deletes an ML Model Provision subscription from MTLF
 // Per TS 29.520 §5.4.3.3.3.2: DELETE /subscriptions/{subscriptionId}
 func (s *NmtlfService) UnsubscribeFromMtlf(
+	ctx context.Context,
 	mtlfEndpoint string,
 	subscriptionId string,
 ) error {
@@ -101,12 +106,15 @@ func (s *NmtlfService) UnsubscribeFromMtlf(
 	request := &MLModelProvision.DeleteNWDAFMLModelProvisionSubcriptionRequest{}
 	request.SetSubscriptionId(subscriptionId)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "MTLF unsubscription")
+	if err != nil {
+		return err
+	}
 	defer cancel()
 
-	if _, err := s.apiClient(mtlfEndpoint).IndividualNWDAFMLModelProvisionSubscriptionDocumentApi.
-		DeleteNWDAFMLModelProvisionSubcription(ctx, request); err != nil {
-		return fmt.Errorf("failed to delete MTLF subscription: %w", err)
+	if _, deleteErr := s.apiClient(mtlfEndpoint).IndividualNWDAFMLModelProvisionSubscriptionDocumentApi.
+		DeleteNWDAFMLModelProvisionSubcription(ctx, request); deleteErr != nil {
+		return fmt.Errorf("failed to delete MTLF subscription: %w", deleteErr)
 	}
 
 	consumerLog.Infof("MTLF subscription deleted: id=%s", subscriptionId)

@@ -104,7 +104,7 @@ func (a *AnlfService) runModelAccuracyLoop(
 	for {
 		select {
 		case <-ticker.C:
-			a.checkModelAccuracy(modelUrl, store, accCfg)
+			a.checkModelAccuracy(ctx, modelUrl, store, accCfg)
 		case <-ctx.Done():
 			anlfLog.Infof("Accuracy monitor exiting: model=%s", modelUrl)
 			return
@@ -118,6 +118,7 @@ func (a *AnlfService) runModelAccuracyLoop(
 // Per TS 23.288 §6.2D: AnLF generates Analytics Accuracy Information from
 // prediction vs ground truth comparison.
 func (a *AnlfService) checkModelAccuracy(
+	ctx context.Context,
 	modelUrl string,
 	store *nwdaf_context.ModelAccuracyStore,
 	accCfg *factory.AccuracyMonitorConfig,
@@ -143,7 +144,7 @@ func (a *AnlfService) checkModelAccuracy(
 		"none":   0,
 	}
 	for _, pred := range pending {
-		actual := a.lookupGroundTruth(nwdafCtx, pred)
+		actual := a.lookupGroundTruth(ctx, nwdafCtx, pred)
 		if actual != nil {
 			matchedIDs[pred.ID] = struct{}{}
 			sourceCounts[actual.source]++
@@ -250,6 +251,7 @@ type groundTruth struct {
 // rounding actual timestamps relative to pred.TargetSlotTime; only exact slot-key
 // matches are accepted.
 func (a *AnlfService) lookupGroundTruth(
+	parentCtx context.Context,
 	ctx *nwdaf_context.NWDAFContext,
 	pred nwdaf_context.PredictionRecord,
 ) *groundTruth {
@@ -274,7 +276,7 @@ func (a *AnlfService) lookupGroundTruth(
 	if cfg != nil && cfg.Configuration != nil && cfg.Configuration.Mongodb != nil &&
 		nwdaf_context.IsMongoAvailable() {
 		dbName := cfg.Configuration.Mongodb.Name
-		records, err := nwdaf_context.QueryTrafficInTimeRange(dbName, corrIds, from, to)
+		records, err := nwdaf_context.QueryTrafficInTimeRange(parentCtx, dbName, corrIds, from, to)
 		if err == nil && len(records) > 0 {
 			gt := aggregateRecordsForTargetSlot(corrIds, records, slotTime, samplingInterval)
 			if gt != nil {

@@ -1,6 +1,7 @@
 package consumer
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -41,7 +42,7 @@ func TestNsmfService_SubscribeToSmf(t *testing.T) {
 		Reply(http.StatusCreated).
 		SetHeader("Location", SmfEventExposurePath+"/"+testSmfSubscriptionID)
 
-	subscriptionID, err := service.SubscribeToSmf(testSmfEndpoint, opts)
+	subscriptionID, err := service.SubscribeToSmf(context.Background(), testSmfEndpoint, opts)
 	if err != nil {
 		t.Fatalf("SubscribeToSmf returned error: %v", err)
 	}
@@ -64,7 +65,7 @@ func TestNsmfService_SubscribeToSmfReturnsErrorOnFailureStatus(t *testing.T) {
 		Reply(http.StatusInternalServerError).
 		BodyString("internal error")
 
-	_, err := service.SubscribeToSmf(testSmfEndpoint, SmfSubscriptionOptions{
+	_, err := service.SubscribeToSmf(context.Background(), testSmfEndpoint, SmfSubscriptionOptions{
 		Supi:      "imsi-208930000000003",
 		NotifUri:  "http://127.0.0.1:8080/collector/notify",
 		NotifId:   "corr-123",
@@ -85,7 +86,7 @@ func TestNsmfService_UnsubscribeFromSmf(t *testing.T) {
 		Delete(SmfEventExposurePath + "/" + testSmfSubscriptionID).
 		Reply(http.StatusNoContent)
 
-	if err := service.UnsubscribeFromSmf(testSmfEndpoint, testSmfSubscriptionID); err != nil {
+	if err := service.UnsubscribeFromSmf(context.Background(), testSmfEndpoint, testSmfSubscriptionID); err != nil {
 		t.Fatalf("UnsubscribeFromSmf returned error: %v", err)
 	}
 	if !gock.IsDone() {

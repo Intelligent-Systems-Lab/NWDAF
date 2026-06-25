@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"go.mongodb.org/mongo-driver/mongo"
+
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/openapi/models"
@@ -20,6 +22,7 @@ const (
 	UpfEventType_QOS_MONITORING           UpfEventType = "QOS_MONITORING"
 	UpfEventType_USER_DATA_USAGE_MEASURES UpfEventType = "USER_DATA_USAGE_MEASURES"
 	UpfEventType_USER_DATA_USAGE_TRENDS   UpfEventType = "USER_DATA_USAGE_TRENDS"
+	upfMongoWriteTimeout                               = 5 * time.Second
 )
 
 // UpfNotificationData wraps UPF notification items (TS 29.564)
@@ -301,7 +304,7 @@ func (p *Processor) processUpfNotificationItemUnified(
 			cfg.Configuration.Mongodb != nil {
 			dbName := cfg.Configuration.Mongodb.Name
 			coll := mongoapi.Client.Database(dbName).Collection(nwdaf_context.UpfTrafficDataColl)
-			if _, err := coll.InsertOne(context.Background(), record); err != nil {
+			if err := p.insertUpfTrafficRecord(coll, record); err != nil {
 				logger.ProcLog.Errorf("Failed to save UPF TimeSeries data: %v", err)
 			}
 		}
@@ -315,4 +318,24 @@ func (p *Processor) processUpfNotificationItemUnified(
 	}
 
 	data.LastUpdate = measurementTs
+}
+
+func (p *Processor) insertUpfTrafficRecord(
+	coll *mongo.Collection,
+	record nwdaf_context.UpfTrafficRecord,
+) error {
+	if coll == nil {
+		return nil
+	}
+
+	parentCtx := p.nwdaf.CancelContext()
+	if parentCtx == nil {
+		return context.Canceled
+	}
+
+	ctx, cancel := context.WithTimeout(parentCtx, upfMongoWriteTimeout)
+	defer cancel()
+
+	_, err := coll.InsertOne(ctx, record)
+	return err
 }

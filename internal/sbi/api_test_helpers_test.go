@@ -2,6 +2,7 @@ package sbi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
@@ -42,6 +43,7 @@ func newHandlerTestServer(t *testing.T, proc processorAPI) *Server {
 			},
 		},
 	}).AnyTimes()
+	mockApp.EXPECT().CancelContext().Return(context.Background()).AnyTimes()
 
 	return &Server{
 		nwdafApp:  handlerTestApp{MockApp: mockApp},

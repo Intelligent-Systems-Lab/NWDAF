@@ -21,8 +21,8 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	smfConsumer.EXPECT().DaisyClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().AdrfClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().
-		SubscribeToSmf("http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
-		DoAndReturn(func(_ string, opts consumer.SmfSubscriptionOptions) (string, error) {
+		SubscribeToSmf(gomock.Any(), "http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
+		DoAndReturn(func(_ any, _ string, opts consumer.SmfSubscriptionOptions) (string, error) {
 			if opts.Supi != "imsi-208930000000003" {
 				t.Fatalf("SubscribeToSmf SUPI = %q, want %q", opts.Supi, "imsi-208930000000003")
 			}
@@ -199,8 +199,8 @@ func TestTriggerTargetDataCollection_WithOriginalGroupId(t *testing.T) {
 	smfConsumer.EXPECT().DaisyClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().AdrfClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().
-		SubscribeToSmf("http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
-		DoAndReturn(func(_ string, opts consumer.SmfSubscriptionOptions) (string, error) {
+		SubscribeToSmf(gomock.Any(), "http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
+		DoAndReturn(func(_ any, _ string, opts consumer.SmfSubscriptionOptions) (string, error) {
 			gotSupis = append(gotSupis, opts.Supi)
 			return "smf-sub-" + opts.Supi, nil
 		}).
@@ -275,8 +275,8 @@ func TestTriggerTargetDataCollection_MixedSupiAndGroup(t *testing.T) {
 	smfConsumer.EXPECT().DaisyClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().AdrfClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().
-		SubscribeToSmf("http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
-		DoAndReturn(func(_ string, _ consumer.SmfSubscriptionOptions) (string, error) {
+		SubscribeToSmf(gomock.Any(), "http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
+		DoAndReturn(func(_ any, _ string, _ consumer.SmfSubscriptionOptions) (string, error) {
 			subscribeCalls++
 			return "smf-sub", nil
 		}).

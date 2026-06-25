@@ -19,14 +19,14 @@ type nwdaf interface {
 }
 
 type SmfServiceClient interface {
-	SubscribeToSmf(smfEndpoint string, opts SmfSubscriptionOptions) (string, error)
-	UnsubscribeFromSmf(smfEndpoint string, subscriptionId string) error
+	SubscribeToSmf(ctx context.Context, smfEndpoint string, opts SmfSubscriptionOptions) (string, error)
+	UnsubscribeFromSmf(ctx context.Context, smfEndpoint string, subscriptionId string) error
 	HTTPClient() *http.Client
 }
 
 type MtlfServiceClient interface {
-	SubscribeToMtlf(mtlfEndpoint string, opts MtlfSubscriptionOptions) (string, error)
-	UnsubscribeFromMtlf(mtlfEndpoint string, subscriptionId string) error
+	SubscribeToMtlf(ctx context.Context, mtlfEndpoint string, opts MtlfSubscriptionOptions) (string, error)
+	UnsubscribeFromMtlf(ctx context.Context, mtlfEndpoint string, subscriptionId string) error
 	HTTPClient() *http.Client
 }
 
@@ -58,10 +58,10 @@ type AdrfServiceAPI interface {
 }
 
 type ConsumerAPI interface {
-	SubscribeToSmf(smfEndpoint string, opts SmfSubscriptionOptions) (string, error)
-	UnsubscribeFromSmf(smfEndpoint string, subscriptionId string) error
-	SubscribeToMtlf(mtlfEndpoint string, opts MtlfSubscriptionOptions) (string, error)
-	UnsubscribeFromMtlf(mtlfEndpoint string, subscriptionId string) error
+	SubscribeToSmf(ctx context.Context, smfEndpoint string, opts SmfSubscriptionOptions) (string, error)
+	UnsubscribeFromSmf(ctx context.Context, smfEndpoint string, subscriptionId string) error
+	SubscribeToMtlf(ctx context.Context, mtlfEndpoint string, opts MtlfSubscriptionOptions) (string, error)
+	UnsubscribeFromMtlf(ctx context.Context, mtlfEndpoint string, subscriptionId string) error
 	MlClient() MlServiceAPI
 	DaisyClient() DaisyServiceAPI
 	AdrfClient() AdrfServiceAPI
@@ -137,20 +137,36 @@ func (c *Consumer) Context() *nwdaf_context.NWDAFContext {
 	return nwdaf_context.GetSelf()
 }
 
-func (c *Consumer) SubscribeToSmf(smfEndpoint string, opts SmfSubscriptionOptions) (string, error) {
-	return c.smfService.SubscribeToSmf(smfEndpoint, opts)
+func (c *Consumer) SubscribeToSmf(
+	ctx context.Context,
+	smfEndpoint string,
+	opts SmfSubscriptionOptions,
+) (string, error) {
+	return c.smfService.SubscribeToSmf(ctx, smfEndpoint, opts)
 }
 
-func (c *Consumer) UnsubscribeFromSmf(smfEndpoint string, subscriptionId string) error {
-	return c.smfService.UnsubscribeFromSmf(smfEndpoint, subscriptionId)
+func (c *Consumer) UnsubscribeFromSmf(
+	ctx context.Context,
+	smfEndpoint string,
+	subscriptionId string,
+) error {
+	return c.smfService.UnsubscribeFromSmf(ctx, smfEndpoint, subscriptionId)
 }
 
-func (c *Consumer) SubscribeToMtlf(mtlfEndpoint string, opts MtlfSubscriptionOptions) (string, error) {
-	return c.mtlfService.SubscribeToMtlf(mtlfEndpoint, opts)
+func (c *Consumer) SubscribeToMtlf(
+	ctx context.Context,
+	mtlfEndpoint string,
+	opts MtlfSubscriptionOptions,
+) (string, error) {
+	return c.mtlfService.SubscribeToMtlf(ctx, mtlfEndpoint, opts)
 }
 
-func (c *Consumer) UnsubscribeFromMtlf(mtlfEndpoint string, subscriptionId string) error {
-	return c.mtlfService.UnsubscribeFromMtlf(mtlfEndpoint, subscriptionId)
+func (c *Consumer) UnsubscribeFromMtlf(
+	ctx context.Context,
+	mtlfEndpoint string,
+	subscriptionId string,
+) error {
+	return c.mtlfService.UnsubscribeFromMtlf(ctx, mtlfEndpoint, subscriptionId)
 }
 
 func (c *Consumer) SmfService() SmfServiceClient {

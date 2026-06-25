@@ -17,13 +17,6 @@ type MlServiceClient struct {
 	httpClient *http.Client
 }
 
-func requestTimeoutContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if parent == nil {
-		parent = context.Background()
-	}
-	return context.WithTimeout(parent, timeout)
-}
-
 // NewMlServiceClient creates a new ML service client
 func NewMlServiceClient(endpoint string) *MlServiceClient {
 	return &MlServiceClient{
@@ -124,7 +117,10 @@ func (c *MlServiceClient) InitializeModel(ctx context.Context, modelUrl string) 
 
 	url := c.endpoint + "/model/load"
 
-	ctx, cancel := requestTimeoutContext(ctx, 120*time.Second)
+	ctx, cancel, err := timeoutContextFromParent(ctx, 120*time.Second, "ML model initialization")
+	if err != nil {
+		return "", err
+	}
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
@@ -176,7 +172,10 @@ func (c *MlServiceClient) UnloadModel(ctx context.Context, modelId string) error
 
 	url := c.endpoint + "/model/unload"
 
-	ctx, cancel := requestTimeoutContext(ctx, 10*time.Second)
+	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "ML model unload")
+	if err != nil {
+		return err
+	}
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
@@ -229,7 +228,10 @@ func (c *MlServiceClient) Predict(
 
 	url := c.endpoint + "/predict"
 
-	ctx, cancel := requestTimeoutContext(ctx, 10*time.Second)
+	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "ML prediction")
+	if err != nil {
+		return nil, err
+	}
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))

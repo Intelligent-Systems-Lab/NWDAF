@@ -1,6 +1,7 @@
 package context
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -93,6 +94,7 @@ func TestIsMongoAvailable_ReturnsFalseWithoutClient(t *testing.T) {
 
 func TestQueryTrafficByCorrelationId_NoMongo(t *testing.T) {
 	records, err := QueryTrafficByCorrelationId(
+		context.Background(),
 		"testdb", "corr-001", time.Now().Add(-5*time.Minute), 30,
 	)
 	if err != nil {
@@ -105,6 +107,7 @@ func TestQueryTrafficByCorrelationId_NoMongo(t *testing.T) {
 
 func TestQueryTrafficByMultipleCorrelationIds_NoMongo(t *testing.T) {
 	records, err := QueryTrafficByMultipleCorrelationIds(
+		context.Background(),
 		"testdb", []string{"corr-001", "corr-002"}, time.Now().Add(-5*time.Minute), 30,
 	)
 	if err != nil {
@@ -117,6 +120,7 @@ func TestQueryTrafficByMultipleCorrelationIds_NoMongo(t *testing.T) {
 
 func TestQueryTrafficByMultipleCorrelationIds_EmptyIds(t *testing.T) {
 	records, err := QueryTrafficByMultipleCorrelationIds(
+		context.Background(),
 		"testdb", []string{}, time.Now().Add(-5*time.Minute), 30,
 	)
 	if err != nil {
@@ -131,6 +135,7 @@ func TestQueryTrafficInTimeRange_NoMongo(t *testing.T) {
 	from := time.Now().Add(-10 * time.Second)
 	to := time.Now()
 	records, err := QueryTrafficInTimeRange(
+		context.Background(),
 		"testdb", []string{"corr-001"}, from, to,
 	)
 	if err != nil {
@@ -145,6 +150,7 @@ func TestQueryTrafficInTimeRange_EmptyIds(t *testing.T) {
 	from := time.Now().Add(-10 * time.Second)
 	to := time.Now()
 	records, err := QueryTrafficInTimeRange(
+		context.Background(),
 		"testdb", []string{}, from, to,
 	)
 	if err != nil {

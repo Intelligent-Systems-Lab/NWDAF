@@ -848,16 +848,16 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 	consumerClient.EXPECT().DaisyClient().Return(nil).AnyTimes()
 	consumerClient.EXPECT().AdrfClient().Return(nil).AnyTimes()
 	consumerClient.EXPECT().
-		SubscribeToSmf("http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
-		DoAndReturn(func(_ string, opts consumer.SmfSubscriptionOptions) (string, error) {
+		SubscribeToSmf(gomock.Any(), "http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
+		DoAndReturn(func(_ any, _ string, opts consumer.SmfSubscriptionOptions) (string, error) {
 			subscribeCount++
 			subscribedSupis = append(subscribedSupis, opts.Supi)
 			return "smf-sub-" + opts.Supi, nil
 		}).
 		Times(2)
 	consumerClient.EXPECT().
-		UnsubscribeFromSmf("http://smf.example", gomock.Any()).
-		DoAndReturn(func(_ string, subscriptionID string) error {
+		UnsubscribeFromSmf(gomock.Any(), "http://smf.example", gomock.Any()).
+		DoAndReturn(func(_ any, _ string, subscriptionID string) error {
 			unsubscribeCalls = append(unsubscribeCalls, subscriptionID)
 			return nil
 		}).

@@ -46,6 +46,7 @@ func applyRoutes(group *gin.RouterGroup, routes []Route) {
 
 type nwdafApp interface {
 	app.App
+	CancelContext() context.Context
 	Processor() *processor.Processor
 }
 

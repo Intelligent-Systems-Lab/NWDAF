@@ -2,6 +2,7 @@ package context
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -14,7 +15,8 @@ import (
 
 const (
 	// dbQueryTimeout is the maximum duration for a single MongoDB query
-	dbQueryTimeout = 10 * time.Second
+	dbQueryTimeout   = 10 * time.Second
+	dbCleanupTimeout = 2 * time.Second
 
 	// DefaultQueryWindow is the default time window for querying historical data
 	DefaultQueryWindow = 5 * time.Minute
@@ -44,6 +46,7 @@ func getCollection(dbName string) *mongo.Collection {
 // QueryTrafficByCorrelationId queries UPF traffic records for a given correlation ID.
 // Returns at most `limit` records, selecting the MOST RECENT within `since`, sorted ASC for ML input.
 func QueryTrafficByCorrelationId(
+	parentCtx context.Context,
 	dbName string,
 	correlationId string,
 	since time.Time,
@@ -56,7 +59,10 @@ func QueryTrafficByCorrelationId(
 		limit = DefaultMaxDataPoints
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
+	ctx, cancel, err := dbTimeoutContext(parentCtx)
+	if err != nil {
+		return nil, err
+	}
 	defer cancel()
 
 	filter := bson.M{
@@ -75,7 +81,7 @@ func QueryTrafficByCorrelationId(
 		return nil, err
 	}
 	defer func() {
-		if closeErr := cur.Close(context.Background()); closeErr != nil {
+		if closeErr := closeCursor(cur); closeErr != nil {
 			logger.CtxLog.Debugf("cursor close error: %v", closeErr)
 		}
 	}()
@@ -93,6 +99,7 @@ func QueryTrafficByCorrelationId(
 // QueryTrafficByMultipleCorrelationIds queries records for multiple correlation IDs.
 // Returns at most `limit` of the MOST RECENT records within window, sorted ASC for ML input.
 func QueryTrafficByMultipleCorrelationIds(
+	parentCtx context.Context,
 	dbName string,
 	correlationIds []string,
 	since time.Time,
@@ -105,7 +112,10 @@ func QueryTrafficByMultipleCorrelationIds(
 		limit = DefaultMaxDataPoints
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
+	ctx, cancel, err := dbTimeoutContext(parentCtx)
+	if err != nil {
+		return nil, err
+	}
 	defer cancel()
 
 	filter := bson.M{
@@ -124,7 +134,7 @@ func QueryTrafficByMultipleCorrelationIds(
 		return nil, err
 	}
 	defer func() {
-		if closeErr := cur.Close(context.Background()); closeErr != nil {
+		if closeErr := closeCursor(cur); closeErr != nil {
 			logger.CtxLog.Debugf("cursor close error: %v", closeErr)
 		}
 	}()
@@ -149,6 +159,7 @@ func reverseRecords(records []UpfTrafficRecord) {
 // QueryTrafficInTimeRange queries UPF traffic records for a correlation ID within
 // a precise time range [from, to). Used for accuracy monitor ground truth lookup.
 func QueryTrafficInTimeRange(
+	parentCtx context.Context,
 	dbName string,
 	correlationIds []string,
 	from, to time.Time,
@@ -157,7 +168,10 @@ func QueryTrafficInTimeRange(
 		return nil, nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), dbQueryTimeout)
+	ctx, cancel, err := dbTimeoutContext(parentCtx)
+	if err != nil {
+		return nil, err
+	}
 	defer cancel()
 
 	filter := bson.M{
@@ -177,7 +191,7 @@ func QueryTrafficInTimeRange(
 		return nil, err
 	}
 	defer func() {
-		if closeErr := cur.Close(context.Background()); closeErr != nil {
+		if closeErr := closeCursor(cur); closeErr != nil {
 			logger.CtxLog.Debugf("cursor close error: %v", closeErr)
 		}
 	}()
@@ -188,4 +202,23 @@ func QueryTrafficInTimeRange(
 		return nil, err
 	}
 	return records, nil
+}
+
+func dbTimeoutContext(parentCtx context.Context) (context.Context, context.CancelFunc, error) {
+	if parentCtx == nil {
+		return nil, nil, errors.New("mongo query requires parent context")
+	}
+
+	ctx, cancel := context.WithTimeout(parentCtx, dbQueryTimeout)
+	return ctx, cancel, nil
+}
+
+func closeCursor(cur *mongo.Cursor) error {
+	if cur == nil {
+		return nil
+	}
+
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), dbCleanupTimeout)
+	defer cancel()
+	return cur.Close(cleanupCtx)
 }

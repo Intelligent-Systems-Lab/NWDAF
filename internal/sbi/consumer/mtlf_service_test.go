@@ -1,6 +1,7 @@
 package consumer
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -44,7 +45,7 @@ func TestNmtlfService_SubscribeToMtlf(t *testing.T) {
 		SetHeader("Location", MtlfMLModelProvisionPath+"/sub-123").
 		JSON(models.NwdafMlModelProvSubsc{})
 
-	subscriptionID, err := service.SubscribeToMtlf(testMtlfEndpoint, opts)
+	subscriptionID, err := service.SubscribeToMtlf(context.Background(), testMtlfEndpoint, opts)
 	if err != nil {
 		t.Fatalf("SubscribeToMtlf returned error: %v", err)
 	}
@@ -67,7 +68,7 @@ func TestNmtlfService_SubscribeToMtlfReturnsErrorOnFailureStatus(t *testing.T) {
 		Reply(http.StatusInternalServerError).
 		BodyString("internal error")
 
-	_, err := service.SubscribeToMtlf(testMtlfEndpoint, MtlfSubscriptionOptions{
+	_, err := service.SubscribeToMtlf(context.Background(), testMtlfEndpoint, MtlfSubscriptionOptions{
 		NotifUri: "http://127.0.0.1:8080/mlmodel-notify",
 		NotifId:  "corr-123",
 		Event:    models.NwdafEvent_UE_COMMUNICATION,
@@ -87,7 +88,7 @@ func TestNmtlfService_UnsubscribeFromMtlf(t *testing.T) {
 		Delete(MtlfMLModelProvisionPath + "/sub-123").
 		Reply(http.StatusNoContent)
 
-	if err := service.UnsubscribeFromMtlf(testMtlfEndpoint, "sub-123"); err != nil {
+	if err := service.UnsubscribeFromMtlf(context.Background(), testMtlfEndpoint, "sub-123"); err != nil {
 		t.Fatalf("UnsubscribeFromMtlf returned error: %v", err)
 	}
 	if !gock.IsDone() {

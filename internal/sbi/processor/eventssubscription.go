@@ -831,7 +831,7 @@ func (p *Processor) cleanupDataCollection(subscriptionId string) {
 			// Unsubscribe from SMF
 			if consumer != nil {
 				_, smfSubId, _ := smfSub.GetInfo()
-				err := consumer.UnsubscribeFromSmf(res.SmfEndpoint, smfSubId)
+				err := consumer.UnsubscribeFromSmf(p.nwdaf.CancelContext(), res.SmfEndpoint, smfSubId)
 				if err != nil {
 					logger.ProcLog.Errorf("Failed to unsubscribe from SMF: %v", err)
 				} else {

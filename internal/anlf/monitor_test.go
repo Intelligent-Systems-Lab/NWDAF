@@ -410,7 +410,7 @@ func TestCheckModelAccuracy_LegacyDeviationUsesAllMatchedPairs(t *testing.T) {
 		gotReports = append([]AccuracyReport(nil), reports...)
 	})
 
-	service.checkModelAccuracy("file:///test/model.pth", store, accCfg)
+	service.checkModelAccuracy(context.Background(), "file:///test/model.pth", store, accCfg)
 
 	if gotDeviationCalls != 1 {
 		t.Fatalf("deviation callback calls = %d, want 1", gotDeviationCalls)
@@ -470,7 +470,7 @@ func TestCheckModelAccuracy_MinSamplesSkipsCallbacks(t *testing.T) {
 		reportCalls++
 	})
 
-	service.checkModelAccuracy("file:///test/model.pth", store, accCfg)
+	service.checkModelAccuracy(context.Background(), "file:///test/model.pth", store, accCfg)
 
 	if deviationCalls != 0 {
 		t.Fatalf("deviation callback calls = %d, want 0", deviationCalls)
@@ -536,7 +536,7 @@ func TestCheckModelAccuracy_MinSamplesAppliesPerScope(t *testing.T) {
 		deviationCalls++
 	})
 
-	service.checkModelAccuracy("file:///test/model.pth", store, accCfg)
+	service.checkModelAccuracy(context.Background(), "file:///test/model.pth", store, accCfg)
 
 	if len(gotReports) != 1 {
 		t.Fatalf("len(gotReports) = %d, want 1 eligible scope report", len(gotReports))
@@ -587,7 +587,7 @@ func TestCheckModelAccuracy_LegacyDeviationIndependentOfPersistence(t *testing.T
 		reportCalls++
 	})
 
-	service.checkModelAccuracy("file:///test/model.pth", store, accCfg)
+	service.checkModelAccuracy(context.Background(), "file:///test/model.pth", store, accCfg)
 
 	if deviationCalls != 1 {
 		t.Fatalf("deviation callback calls = %d, want 1", deviationCalls)
@@ -675,7 +675,7 @@ func TestLookupGroundTruth_RejectsAdjacentSlotWithinLegacyNearestWindow(t *testi
 	// to the next slot under the new slot-equality pairing.
 	addGroundTruthRecord(ctx, "sub-1", "corr-1", "10.0.0.1", target.Add(6*time.Second), 100, 200)
 
-	got := service.lookupGroundTruth(ctx, nwdaf_context.PredictionRecord{
+	got := service.lookupGroundTruth(context.Background(), ctx, nwdaf_context.PredictionRecord{
 		NwdafSubId:     "sub-1",
 		TargetTime:     target,
 		TargetSlotTime: target,
@@ -705,7 +705,7 @@ func TestCheckModelAccuracy_RetriesPendingPredictionBeforeDiscard(t *testing.T) 
 		ScopeKey:       groupAScopeKey,
 	})
 
-	service.checkModelAccuracy("file:///test/model.pth", store, accCfg)
+	service.checkModelAccuracy(context.Background(), "file:///test/model.pth", store, accCfg)
 	snapshot := store.SnapshotPredictions()
 	if len(snapshot) != 1 {
 		t.Fatalf("len(SnapshotPredictions()) after first miss = %d, want 1", len(snapshot))
@@ -714,7 +714,7 @@ func TestCheckModelAccuracy_RetriesPendingPredictionBeforeDiscard(t *testing.T) 
 		t.Fatalf("snapshot[0].MissCount after first miss = %d, want 1", snapshot[0].MissCount)
 	}
 
-	service.checkModelAccuracy("file:///test/model.pth", store, accCfg)
+	service.checkModelAccuracy(context.Background(), "file:///test/model.pth", store, accCfg)
 	if got := len(store.SnapshotPredictions()); got != 0 {
 		t.Fatalf("len(SnapshotPredictions()) after discard threshold = %d, want 0", got)
 	}
@@ -740,7 +740,7 @@ func TestCheckModelAccuracy_LateGroundTruthMatchesOnLaterRound(t *testing.T) {
 		ScopeKey:       groupAScopeKey,
 	})
 
-	service.checkModelAccuracy("file:///test/model.pth", store, accCfg)
+	service.checkModelAccuracy(context.Background(), "file:///test/model.pth", store, accCfg)
 	if got := len(store.SnapshotPredictions()); got != 1 {
 		t.Fatalf("len(SnapshotPredictions()) after first miss = %d, want 1", got)
 	}
@@ -752,7 +752,7 @@ func TestCheckModelAccuracy_LateGroundTruthMatchesOnLaterRound(t *testing.T) {
 		deviationCalls++
 	})
 
-	service.checkModelAccuracy("file:///test/model.pth", store, accCfg)
+	service.checkModelAccuracy(context.Background(), "file:///test/model.pth", store, accCfg)
 	if got := len(store.SnapshotPredictions()); got != 0 {
 		t.Fatalf("len(SnapshotPredictions()) after late ground truth match = %d, want 0", got)
 	}

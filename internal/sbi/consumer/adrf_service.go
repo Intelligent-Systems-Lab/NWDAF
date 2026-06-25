@@ -114,7 +114,10 @@ func (c *AdrfClient) StorageRequest(
 	}
 
 	url := c.endpoint + AdrfDataStoreRecordsPath
-	ctx, cancel := requestTimeoutContext(ctx, adrfStorageTimeout)
+	ctx, cancel, err := timeoutContextFromParent(ctx, adrfStorageTimeout, "ADRF storage request")
+	if err != nil {
+		return "", err
+	}
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
@@ -174,7 +177,10 @@ func (c *AdrfClient) RetrievalSubscribe(
 		return "", fmt.Errorf("marshal NadrfDataRetrievalSubscription: %w", err)
 	}
 
-	ctx, cancel := requestTimeoutContext(ctx, adrfRetrievalTimeout)
+	ctx, cancel, err := timeoutContextFromParent(ctx, adrfRetrievalTimeout, "ADRF retrieval subscribe")
+	if err != nil {
+		return "", err
+	}
 	defer cancel()
 
 	url := c.endpoint + AdrfDataRetrievalSubscriptionsPath
@@ -210,7 +216,10 @@ func (c *AdrfClient) RetrievalSubscribe(
 // RetrievalRequest fetches data store records by fetch-correlation-ids.
 // Returns nil record (no error) when ADRF responds 204 (no matching data).
 func (c *AdrfClient) RetrievalRequest(ctx context.Context, fetchCorrIds []string) (*NadrfDataStoreRecord, error) {
-	ctx, cancel := requestTimeoutContext(ctx, adrfFetchTimeout)
+	ctx, cancel, err := timeoutContextFromParent(ctx, adrfFetchTimeout, "ADRF retrieval request")
+	if err != nil {
+		return nil, err
+	}
 	defer cancel()
 
 	url := c.endpoint + AdrfDataStoreRecordsPath + "?fetch-correlation-ids=" + strings.Join(fetchCorrIds, ",")
@@ -251,9 +260,6 @@ func (c *AdrfClient) RetrievalRequest(ctx context.Context, fetchCorrIds []string
 // Treats 404 as success (subscription already cleaned up).
 // Retries up to adrfUnsubscribeMaxRetry times on 5xx/timeout.
 func (c *AdrfClient) RetrievalUnsubscribe(ctx context.Context, subscriptionId string) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	url := c.endpoint + AdrfDataRetrievalSubscriptionsPath + "/" + subscriptionId
 
 	var lastErr error
@@ -266,7 +272,14 @@ func (c *AdrfClient) RetrievalUnsubscribe(ctx context.Context, subscriptionId st
 			}
 		}
 
-		attemptCtx, cancel := requestTimeoutContext(ctx, adrfUnsubscribeTimeout)
+		attemptCtx, cancel, err := timeoutContextFromParent(
+			ctx,
+			adrfUnsubscribeTimeout,
+			"ADRF retrieval unsubscribe",
+		)
+		if err != nil {
+			return err
+		}
 		req, err := http.NewRequestWithContext(attemptCtx, http.MethodDelete, url, nil)
 		if err != nil {
 			cancel()

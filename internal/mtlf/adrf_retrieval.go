@@ -57,11 +57,8 @@ func (j *retrainJob) closeFetchQueue() {
 }
 
 func (j *retrainJob) enqueueFetchIDs(ctx context.Context, ids []string) bool {
-	if j == nil || len(ids) == 0 {
+	if j == nil || len(ids) == 0 || ctx == nil {
 		return false
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 
 	j.mu.Lock()
@@ -236,7 +233,9 @@ func (m *MtlfService) runFetchLoop(
 	shutdown := false
 	cancelCtx := m.nwdaf.CancelContext()
 	if cancelCtx == nil {
-		cancelCtx = context.Background()
+		mtlfLog.Warnf("runFetchLoop TID=%s: missing app cancel context", job.tid)
+		cleanupSubscriptions(job, adrfClient)
+		return
 	}
 
 loop:
@@ -343,7 +342,8 @@ func (m *MtlfService) HandleAdrfRetrievalNotify(notifCorrId string, fetchCorrIds
 
 	cancelCtx := m.nwdaf.CancelContext()
 	if cancelCtx == nil {
-		cancelCtx = context.Background()
+		mtlfLog.Warnf("RetrievalNotify TID=%s: missing app cancel context", notifCorrId)
+		return
 	}
 	if !isClosed && len(fetchCorrIds) > 0 && !job.enqueueFetchIDs(cancelCtx, fetchCorrIds) {
 		if cancelCtx.Err() != nil {

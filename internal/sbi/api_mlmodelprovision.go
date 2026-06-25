@@ -89,6 +89,11 @@ func (s *Server) processMlModelNotification(ctx *nwdaf_context.NWDAFContext, not
 		// Update model info with URL
 		mlInfo.SetModelUrl(modelUrl)
 
+		if cancelCtx := s.CancelContext(); cancelCtx != nil && cancelCtx.Err() != nil {
+			logger.SBILog.Infof("Skipping ML model initialization during shutdown: sub=%s", nwdafSubId)
+			continue
+		}
+
 		// Initialize the model with ML service
 		go s.Processor().InitializeMlModel(nwdafSubId, mlInfo, modelUrl)
 	}

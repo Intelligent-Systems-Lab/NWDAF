@@ -54,6 +54,7 @@ type SmfSubscriptionOptions struct {
 // Per TS 23.502 §4.15.4.5.2: Subscriptions are always SUPI-based
 // (Group IDs are resolved by NWDAF before calling this function)
 func (s *NsmfService) SubscribeToSmf(
+	ctx context.Context,
 	smfEndpoint string,
 	opts SmfSubscriptionOptions,
 ) (string, error) {
@@ -70,7 +71,7 @@ func (s *NsmfService) SubscribeToSmf(
 		RepPeriod:   opts.RepPeriod,
 	}
 
-	subscriptionId, err := s.sendRequest(smfEndpoint, &request)
+	subscriptionId, err := s.sendRequest(ctx, smfEndpoint, &request)
 	if err != nil {
 		return "", err
 	}
@@ -114,6 +115,7 @@ func BuildUpfEventSubs(upfNotifUri string, volume, throughput bool) []ExtendedEv
 
 // UnsubscribeFromSmf deletes an event exposure subscription from SMF
 func (s *NsmfService) UnsubscribeFromSmf(
+	ctx context.Context,
 	smfEndpoint string,
 	subscriptionId string,
 ) error {
@@ -121,7 +123,10 @@ func (s *NsmfService) UnsubscribeFromSmf(
 
 	url := smfEndpoint + SmfEventExposurePath + "/" + subscriptionId
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "SMF unsubscription")
+	if err != nil {
+		return err
+	}
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
@@ -156,7 +161,7 @@ func (s *NsmfService) UnsubscribeFromSmf(
 
 // sendRequest sends a POST subscription request to SMF
 // Uses interface{} to handle both standard and extended request types
-func (s *NsmfService) sendRequest(smfEndpoint string, request interface{}) (string, error) {
+func (s *NsmfService) sendRequest(ctx context.Context, smfEndpoint string, request interface{}) (string, error) {
 	url := smfEndpoint + SmfEventExposurePath
 
 	jsonData, err := json.Marshal(request)
@@ -166,7 +171,10 @@ func (s *NsmfService) sendRequest(smfEndpoint string, request interface{}) (stri
 
 	consumerLog.Debugf("SMF subscription request: %s", string(jsonData))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "SMF subscription")
+	if err != nil {
+		return "", err
+	}
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))

@@ -16,6 +16,11 @@ func (p *Processor) TriggerDataCollection(
 	eventSubs []models.NwdafEventsSubscriptionEventSubscription,
 	subscriptionId string,
 ) {
+	if cancelCtx := p.nwdaf.CancelContext(); cancelCtx != nil && cancelCtx.Err() != nil {
+		logger.ProcLog.Infof("Skipping data collection dispatch during shutdown: sub=%s", subscriptionId)
+		return
+	}
+
 	// Guard: subscription may have been deleted during async execution
 	ctx := nwdaf_context.GetSelf()
 	if ctx.GetSubscription(subscriptionId) == nil {
@@ -190,7 +195,7 @@ func (p *Processor) triggerTargetDataCollection(
 					Supi:        target.Supi, // Always SUPI after Group ID resolution
 				}
 
-				subId, err := smfConsumer.SubscribeToSmf(smfEndpoint, opts)
+				subId, err := smfConsumer.SubscribeToSmf(p.nwdaf.CancelContext(), smfEndpoint, opts)
 				if err != nil {
 					ctx.ReleaseSmfSubscription(correlationId, subscriptionId)
 					logger.ProcLog.Errorf("Failed to subscribe SMF for %s: %v",
@@ -243,6 +248,11 @@ func (p *Processor) triggerMlModelProvisioning(
 	eventSub *models.NwdafEventsSubscriptionEventSubscription,
 	subscriptionId string,
 ) {
+	if cancelCtx := p.nwdaf.CancelContext(); cancelCtx != nil && cancelCtx.Err() != nil {
+		logger.ProcLog.Infof("Skipping ML model provisioning dispatch during shutdown: sub=%s", subscriptionId)
+		return
+	}
+
 	cfg := p.config()
 	if cfg == nil || cfg.Configuration == nil {
 		logger.ProcLog.Debugf("Configuration missing, skipping ML model provisioning")
@@ -308,7 +318,7 @@ func (p *Processor) triggerMlModelProvisioning(
 		TgtUe:    eventSub.TgtUe,
 	}
 
-	subId, err := mtlfConsumer.SubscribeToMtlf(mtlfEndpoint, opts)
+	subId, err := mtlfConsumer.SubscribeToMtlf(p.nwdaf.CancelContext(), mtlfEndpoint, opts)
 	if err != nil {
 		logger.ProcLog.Errorf("Failed to subscribe to External MTLF for subscription %s: %v", subscriptionId, err)
 		mlInfo.SetModelFailed(err)
