@@ -1,6 +1,9 @@
 package mtlf
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -9,6 +12,36 @@ import (
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
+
+type fakeDaisyClient struct {
+	triggerCalls    int
+	lastCtx         context.Context
+	lastCallbackURL string
+	lastModelTask   map[string]any
+	taskID          string
+}
+
+func (f *fakeDaisyClient) TriggerTrainingAsync(
+	ctx context.Context,
+	task map[string]any,
+	callbackURL string,
+	tidOverride string,
+) (string, error) {
+	f.triggerCalls++
+	f.lastCtx = ctx
+	f.lastCallbackURL = callbackURL
+	f.lastModelTask = task
+	if tidOverride != "" {
+		return tidOverride, nil
+	}
+	return f.taskID, nil
+}
+
+func (f *fakeDaisyClient) UploadData(context.Context, string, string, []json.RawMessage) error {
+	return nil
+}
+
+func (f *fakeDaisyClient) HTTPClient() *http.Client { return &http.Client{} }
 
 // TestHandleTrainingComplete_UnknownTaskId verifies that an unknown taskId is a no-op.
 func TestHandleTrainingComplete_UnknownTaskId(t *testing.T) {
@@ -141,5 +174,50 @@ func TestSwapModelAfterRetrain_DeletesOldMonitorState(t *testing.T) {
 	}
 	if ctx.GetSharedModel(newModelURL) == nil {
 		t.Fatal("new shared model should be created after successful swap")
+	}
+}
+
+func TestSubmitDaisyTaskUsesInjectedClient(t *testing.T) {
+	cfg := &factory.Config{
+		Configuration: &factory.Configuration{
+			Sbi: &factory.Sbi{
+				Scheme:       "http",
+				RegisterIPv4: "127.0.0.1",
+				Port:         8000,
+			},
+			Mtlf: &factory.MtlfConfig{
+				Enabled:        true,
+				Endpoint:       "http://daisy.example",
+				StaticModelUrl: "file:///old-model.onnx",
+				Task: map[string]any{
+					"NUM_ROUNDS": 2,
+				},
+			},
+		},
+	}
+
+	client := &fakeDaisyClient{taskID: "task-123"}
+	service := NewMtlfService(testNwdafApp{
+		ctx: context.Background(),
+		cfg: cfg,
+	}, client, nil)
+
+	service.submitDaisyTask(cfg.Configuration.Mtlf, "", cfg.Configuration.Mtlf.StaticModelUrl, nil)
+
+	if client.triggerCalls != 1 {
+		t.Fatalf("TriggerTrainingAsync called %d times, want 1", client.triggerCalls)
+	}
+	if client.lastCtx == nil {
+		t.Fatal("TriggerTrainingAsync should receive a parent context")
+	}
+	if client.lastCallbackURL != "http://127.0.0.1:8000/mtlf/training-complete" {
+		t.Fatalf("callbackURL = %q, want %q",
+			client.lastCallbackURL, "http://127.0.0.1:8000/mtlf/training-complete")
+	}
+	if _, ok := client.lastModelTask["NUM_ROUNDS"]; !ok {
+		t.Fatal("expected task payload to be forwarded to Daisy client")
+	}
+	if _, ok := service.inFlight.Load("task-123"); !ok {
+		t.Fatal("expected inFlight entry to be stored after successful Daisy submission")
 	}
 }

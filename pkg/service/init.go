@@ -134,7 +134,7 @@ func (a *NwdafApp) Start() {
 			logger.InitLog.Errorf("Fail to connect to MongoDB: %+v", err)
 		} else {
 			// SetMongoDB does not verify the actual connection; Ping to confirm.
-			pingCtx, pingCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			pingCtx, pingCancel := context.WithTimeout(a.ctx, 5*time.Second)
 			defer pingCancel()
 			if pingErr := mongoapi.Client.Ping(pingCtx, nil); pingErr != nil {
 				logger.InitLog.Errorf("MongoDB not reachable (%s): %v", mongodb.Url, pingErr)
@@ -148,7 +148,7 @@ func (a *NwdafApp) Start() {
 						SetTimeField("timestamp").
 						SetMetaField("metadata"),
 				)
-				collCtx, collCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				collCtx, collCancel := context.WithTimeout(a.ctx, 5*time.Second)
 				defer collCancel()
 				collErr := mongoapi.Client.Database(mongodb.Name).CreateCollection(
 					collCtx,

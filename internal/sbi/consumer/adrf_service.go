@@ -85,6 +85,7 @@ func NewAdrfClient(endpoint string) *AdrfClient {
 // All upfNotifJSONs must belong to the same SMF subscription (same info).
 // Returns the storeTransId extracted from the Location header on success.
 func (c *AdrfClient) StorageRequest(
+	ctx context.Context,
 	info *nwdaf_context.AdrfSmfInfo,
 	upfNotifJSONs []json.RawMessage,
 ) (string, error) {
@@ -112,7 +113,10 @@ func (c *AdrfClient) StorageRequest(
 	}
 
 	url := c.endpoint + AdrfDataStoreRecordsPath
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(body))
+	ctx, cancel := requestTimeoutContext(ctx, adrfStorageTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("build request: %w", err)
 	}
@@ -141,6 +145,7 @@ func (c *AdrfClient) StorageRequest(
 // Returns subscriptionId from Location header on success (201).
 // notifCorrId should be the TID of the retrain job so callbacks can be routed.
 func (c *AdrfClient) RetrievalSubscribe(
+	ctx context.Context,
 	info *nwdaf_context.AdrfSmfInfo,
 	notifCorrId string,
 	notifURI string,
@@ -168,7 +173,7 @@ func (c *AdrfClient) RetrievalSubscribe(
 		return "", fmt.Errorf("marshal NadrfDataRetrievalSubscription: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), adrfRetrievalTimeout)
+	ctx, cancel := requestTimeoutContext(ctx, adrfRetrievalTimeout)
 	defer cancel()
 
 	url := c.endpoint + AdrfDataRetrievalSubscriptionsPath
@@ -203,8 +208,8 @@ func (c *AdrfClient) RetrievalSubscribe(
 
 // RetrievalRequest fetches data store records by fetch-correlation-ids.
 // Returns nil record (no error) when ADRF responds 204 (no matching data).
-func (c *AdrfClient) RetrievalRequest(fetchCorrIds []string) (*NadrfDataStoreRecord, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), adrfFetchTimeout)
+func (c *AdrfClient) RetrievalRequest(ctx context.Context, fetchCorrIds []string) (*NadrfDataStoreRecord, error) {
+	ctx, cancel := requestTimeoutContext(ctx, adrfFetchTimeout)
 	defer cancel()
 
 	url := c.endpoint + AdrfDataStoreRecordsPath + "?fetch-correlation-ids=" + strings.Join(fetchCorrIds, ",")
@@ -244,17 +249,24 @@ func (c *AdrfClient) RetrievalRequest(fetchCorrIds []string) (*NadrfDataStoreRec
 // RetrievalUnsubscribe deletes an ADRF retrieval subscription.
 // Treats 404 as success (subscription already cleaned up).
 // Retries up to adrfUnsubscribeMaxRetry times on 5xx/timeout.
-func (c *AdrfClient) RetrievalUnsubscribe(subscriptionId string) error {
+func (c *AdrfClient) RetrievalUnsubscribe(ctx context.Context, subscriptionId string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	url := c.endpoint + AdrfDataRetrievalSubscriptionsPath + "/" + subscriptionId
 
 	var lastErr error
 	for attempt := 0; attempt < adrfUnsubscribeMaxRetry; attempt++ {
 		if attempt > 0 {
-			time.Sleep(adrfUnsubscribeRetryBackoff)
+			select {
+			case <-time.After(adrfUnsubscribeRetryBackoff):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), adrfFetchTimeout)
-		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+		attemptCtx, cancel := requestTimeoutContext(ctx, adrfFetchTimeout)
+		req, err := http.NewRequestWithContext(attemptCtx, http.MethodDelete, url, nil)
 		if err != nil {
 			cancel()
 			return fmt.Errorf("build RetrievalUnsubscribe request: %w", err)
@@ -281,4 +293,8 @@ func (c *AdrfClient) RetrievalUnsubscribe(subscriptionId string) error {
 		}
 	}
 	return lastErr
+}
+
+func (c *AdrfClient) HTTPClient() *http.Client {
+	return c.httpClient
 }

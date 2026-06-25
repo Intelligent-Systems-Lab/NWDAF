@@ -205,7 +205,7 @@ func TestBuildNotification_NotifCorrId(t *testing.T) {
 				},
 			}
 
-			notification := scheduler.buildNotification()
+			notification := scheduler.buildNotification(context.Background())
 
 			if tt.expectNotifCorrId {
 				if notification.NotifCorrId != tt.notifCorrId {
@@ -229,7 +229,7 @@ func TestBuildNotification_SubscriptionId(t *testing.T) {
 		},
 	}
 
-	notification := scheduler.buildNotification()
+	notification := scheduler.buildNotification(context.Background())
 
 	if notification.SubscriptionId != "test-sub-id-123" {
 		t.Errorf("SubscriptionId = %v, expected test-sub-id-123", notification.SubscriptionId)
@@ -295,6 +295,7 @@ func TestNewNotificationScheduler(t *testing.T) {
 	scheduler := NewNotificationScheduler(
 		context.Background(),
 		nil,
+		nil,
 		"test-sub-id",
 		"http://localhost:9090/callback",
 		10,
@@ -326,6 +327,9 @@ func TestNewNotificationScheduler(t *testing.T) {
 	if scheduler.reportCount != 0 {
 		t.Errorf("reportCount should be initialized to 0, got %v", scheduler.reportCount)
 	}
+	if scheduler.httpClient == nil {
+		t.Fatal("httpClient should be initialized")
+	}
 }
 
 func TestNotificationScheduler_StopsWhenParentContextCancelled(t *testing.T) {
@@ -340,6 +344,7 @@ func TestNotificationScheduler_StopsWhenParentContextCancelled(t *testing.T) {
 	baseCtx, cancel := context.WithCancel(context.Background())
 	scheduler := NewNotificationScheduler(
 		baseCtx,
+		nil,
 		nil,
 		"test-sub-id",
 		server.URL,

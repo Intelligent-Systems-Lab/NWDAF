@@ -2,7 +2,10 @@
 package notifier
 
 import (
+	"context"
+
 	"github.com/free5gc/nwdaf/internal/anlf"
+	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
@@ -10,9 +13,11 @@ import (
 // AnalyticsHandler builds event notifications for a specific event type
 type AnalyticsHandler interface {
 	BuildEventNotification(
+		parentCtx context.Context,
 		nwdafSubId string,
 		eventSub *models.NwdafEventsSubscriptionEventSubscription,
 		cfg *factory.Config,
+		mlClient consumer.MlServiceAPI,
 	) models.NwdafEventsSubscriptionEventNotification
 }
 
@@ -32,13 +37,15 @@ func GetHandler(event models.NwdafEvent) (AnalyticsHandler, bool) {
 type UeCommunicationHandler struct{}
 
 func (h *UeCommunicationHandler) BuildEventNotification(
+	parentCtx context.Context,
 	nwdafSubId string,
 	eventSub *models.NwdafEventsSubscriptionEventSubscription,
 	cfg *factory.Config,
+	mlClient consumer.MlServiceAPI,
 ) models.NwdafEventsSubscriptionEventNotification {
 	return models.NwdafEventsSubscriptionEventNotification{
 		Event:   eventSub.Event,
-		UeComms: []models.UeCommunication{anlf.GenerateUeCommunicationAnalytics(nwdafSubId, cfg)},
+		UeComms: []models.UeCommunication{anlf.GenerateUeCommunicationAnalytics(parentCtx, nwdafSubId, cfg, mlClient)},
 	}
 }
 
@@ -46,9 +53,11 @@ func (h *UeCommunicationHandler) BuildEventNotification(
 type AbnormalBehaviourHandler struct{}
 
 func (h *AbnormalBehaviourHandler) BuildEventNotification(
+	_ context.Context,
 	nwdafSubId string,
 	eventSub *models.NwdafEventsSubscriptionEventSubscription,
 	cfg *factory.Config,
+	_ consumer.MlServiceAPI,
 ) models.NwdafEventsSubscriptionEventNotification {
 	return models.NwdafEventsSubscriptionEventNotification{
 		Event:        eventSub.Event,

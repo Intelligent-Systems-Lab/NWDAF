@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/free5gc/nwdaf/internal/logger"
+	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
@@ -18,6 +19,8 @@ import (
 type NotificationScheduler struct {
 	baseCtx         context.Context
 	cfg             *factory.Config
+	mlClient        consumer.MlServiceAPI
+	httpClient      *http.Client
 	subscriptionId  string
 	notificationURI string
 	repPeriod       int32 // seconds
@@ -41,6 +44,7 @@ type NotificationScheduler struct {
 func NewNotificationScheduler(
 	baseCtx context.Context,
 	cfg *factory.Config,
+	mlClient consumer.MlServiceAPI,
 	subscriptionId string,
 	notificationURI string,
 	repPeriod int32,
@@ -55,8 +59,17 @@ func NewNotificationScheduler(
 	}
 
 	return &NotificationScheduler{
-		baseCtx:         baseCtx,
-		cfg:             cfg,
+		baseCtx:  baseCtx,
+		cfg:      cfg,
+		mlClient: mlClient,
+		httpClient: &http.Client{
+			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        20,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		},
 		subscriptionId:  subscriptionId,
 		notificationURI: notificationURI,
 		repPeriod:       repPeriod,
@@ -184,7 +197,7 @@ func (s *NotificationScheduler) sendNotification(parentCtx context.Context) {
 	currentCount := s.reportCount
 	s.mu.Unlock()
 
-	notification := s.buildNotification()
+	notification := s.buildNotification(parentCtx)
 
 	// Convert to output format (without omitempty for 0 values)
 	output := s.convertToOutput(notification)
@@ -207,7 +220,7 @@ func (s *NotificationScheduler) sendNotification(parentCtx context.Context) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		logger.NotifierLog.Warnf("Failed to send notification to %s: %v", s.notificationURI, err)
 		return
@@ -265,13 +278,21 @@ func (s *NotificationScheduler) convertToOutput(n models.NnwdafEventsSubscriptio
 }
 
 // buildNotification builds the notification message
-func (s *NotificationScheduler) buildNotification() models.NnwdafEventsSubscriptionNotification {
+func (s *NotificationScheduler) buildNotification(
+	parentCtx context.Context,
+) models.NnwdafEventsSubscriptionNotification {
 	var eventNotifications []models.NwdafEventsSubscriptionEventNotification
 
 	for i := range s.eventSubs {
 		eventSub := &s.eventSubs[i]
 		if handler, ok := GetHandler(eventSub.Event); ok {
-			eventNotifications = append(eventNotifications, handler.BuildEventNotification(s.subscriptionId, eventSub, s.cfg))
+			eventNotifications = append(eventNotifications, handler.BuildEventNotification(
+				parentCtx,
+				s.subscriptionId,
+				eventSub,
+				s.cfg,
+				s.mlClient,
+			))
 		}
 	}
 

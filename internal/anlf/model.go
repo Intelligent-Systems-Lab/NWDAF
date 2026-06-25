@@ -5,7 +5,6 @@ import (
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
-	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 )
 
 // SwapModel loads a new model and unloads the old one via the ML Service.
@@ -18,16 +17,18 @@ func (a *AnlfService) SwapModel(newModelUrl, oldModelId string) (string, error) 
 		return "", fmt.Errorf("ML Service not configured")
 	}
 
-	mlClient := consumer.NewMlServiceClient(mlServiceEndpoint)
+	if a.mlClient == nil {
+		return "", fmt.Errorf("ML Service client not initialized")
+	}
 
-	newModelId, err := mlClient.InitializeModel(newModelUrl)
+	newModelId, err := a.mlClient.InitializeModel(a.nwdaf.CancelContext(), newModelUrl)
 	if err != nil {
 		return "", fmt.Errorf("failed to load new model %s: %w", newModelUrl, err)
 	}
 	logger.AnlfLog.Infof("SwapModel: loaded new model: url=%s modelId=%s", newModelUrl, newModelId)
 
 	if oldModelId != "" {
-		if unloadErr := mlClient.UnloadModel(oldModelId); unloadErr != nil {
+		if unloadErr := a.mlClient.UnloadModel(a.nwdaf.CancelContext(), oldModelId); unloadErr != nil {
 			logger.AnlfLog.Warnf("SwapModel: failed to unload old model ID %s: %v", oldModelId, unloadErr)
 		} else {
 			logger.AnlfLog.Infof("SwapModel: unloaded old model ID %s", oldModelId)
@@ -76,8 +77,15 @@ func (a *AnlfService) InitializeMlModel(
 	}
 
 	// isNew=true: this goroutine is responsible for loading
-	mlClient := consumer.NewMlServiceClient(mlServiceEndpoint)
-	modelId, err := mlClient.InitializeModel(modelUrl)
+	if a.mlClient == nil {
+		err := fmt.Errorf("ML Service client not initialized")
+		logger.AnlfLog.Errorf("Failed to initialize ML model: %v", err)
+		shared.LoadDone()
+		mlInfo.SetModelFailed(err)
+		return
+	}
+
+	modelId, err := a.mlClient.InitializeModel(a.nwdaf.CancelContext(), modelUrl)
 	if err != nil {
 		logger.AnlfLog.Errorf("Failed to initialize ML model: %v", err)
 		shared.LoadDone()

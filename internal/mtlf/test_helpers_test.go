@@ -41,5 +41,5 @@ func newTestMtlfService(cfg *factory.Config) *MtlfService {
 	return NewMtlfService(testNwdafApp{
 		ctx: context.Background(),
 		cfg: cfg,
-	})
+	}, nil, nil)
 }

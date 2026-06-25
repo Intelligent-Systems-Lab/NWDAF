@@ -1,6 +1,7 @@
 package mtlf
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -132,9 +133,16 @@ func (m *MtlfService) runAdrfRetrainWorkflow(
 	})
 
 	// Execute RetrievalSubscribes
-	adrfClient := consumer.NewAdrfClient(adrfCfg.Url)
+	adrfClient := m.adrfClient
+	if adrfClient == nil {
+		mtlfLog.Warnf("runAdrfRetrainWorkflow: ADRF client not initialized for TID=%s, fallback to direct training", tid)
+		m.activeJobs.Delete(tid)
+		job.watchdog.Stop()
+		go m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
+		return
+	}
 	for _, info := range infos {
-		subscriptionId, err := adrfClient.RetrievalSubscribe(info, tid, notifURI, timePeriod)
+		subscriptionId, err := adrfClient.RetrievalSubscribe(m.nwdaf.CancelContext(), info, tid, notifURI, timePeriod)
 		if err != nil {
 			mtlfLog.Warnf("runAdrfRetrainWorkflow: RetrievalSubscribe failed for supi=%s: %v", info.Supi, err)
 			job.mu.Lock()
@@ -178,7 +186,7 @@ func (m *MtlfService) runFetchLoop(
 	job *retrainJob,
 	adrfCfg *factory.AdrfConfig,
 	mtlfCfg *factory.MtlfConfig,
-	adrfClient *consumer.AdrfClient,
+	adrfClient consumer.AdrfServiceAPI,
 ) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -189,7 +197,11 @@ func (m *MtlfService) runFetchLoop(
 	}()
 
 	fetchBatchSize := adrfCfg.FetchBatchSizeOrDefault()
-	daisyClient := consumer.NewDaisyClient(mtlfCfg.Endpoint)
+	if m.daisyClient == nil {
+		mtlfLog.Errorf("runFetchLoop TID=%s: Daisy client not initialized", job.tid)
+		cleanupSubscriptions(m.nwdaf.CancelContext(), job, adrfClient)
+		return
+	}
 
 	var totalIDs, fetched, uploaded int
 
@@ -203,7 +215,7 @@ func (m *MtlfService) runFetchLoop(
 			chunk := ids[i:end]
 
 			mtlfLog.Debugf("runFetchLoop TID=%s: fetching id=%s", job.tid, chunk[0])
-			record, err := adrfClient.RetrievalRequest(chunk)
+			record, err := adrfClient.RetrievalRequest(m.nwdaf.CancelContext(), chunk)
 			if err != nil {
 				mtlfLog.Errorf("runFetchLoop TID=%s: RetrievalRequest failed: %v", job.tid, err)
 				continue
@@ -228,7 +240,12 @@ func (m *MtlfService) runFetchLoop(
 				mtlfLog.Warnf("runFetchLoop TID=%s: SUPI %s not in any group, uploading with empty groupId", job.tid, supi)
 			}
 
-			if uploadErr := daisyClient.UploadData(job.tid, groupId, record.DataNotif.UpfEventNotifs); uploadErr != nil {
+			if uploadErr := m.daisyClient.UploadData(
+				m.nwdaf.CancelContext(),
+				job.tid,
+				groupId,
+				record.DataNotif.UpfEventNotifs,
+			); uploadErr != nil {
 				mtlfLog.Errorf("runFetchLoop TID=%s: UploadData failed: %v", job.tid, uploadErr)
 			} else {
 				mtlfLog.Debugf("runFetchLoop TID=%s: uploaded id=%s supi=%s groupId=%s", job.tid, chunk[0], supi, groupId)
@@ -241,7 +258,7 @@ func (m *MtlfService) runFetchLoop(
 		job.tid, totalIDs, fetched, uploaded)
 
 	// fetchCh closed: cleanup subscriptions then trigger training
-	cleanupSubscriptions(job, adrfClient)
+	cleanupSubscriptions(m.nwdaf.CancelContext(), job, adrfClient)
 	// activeJobs.Delete is handled by defer above
 	go m.submitDaisyTask(mtlfCfg, job.tid, job.oldModelUrl, job.store)
 }
@@ -285,14 +302,14 @@ func (m *MtlfService) HandleAdrfRetrievalNotify(notifCorrId string, fetchCorrIds
 }
 
 // cleanupSubscriptions sends DELETE for all registered subscriptionIds.
-func cleanupSubscriptions(job *retrainJob, client *consumer.AdrfClient) {
+func cleanupSubscriptions(ctx context.Context, job *retrainJob, client consumer.AdrfServiceAPI) {
 	job.mu.Lock()
 	subIds := make([]string, len(job.subscriptionIds))
 	copy(subIds, job.subscriptionIds)
 	job.mu.Unlock()
 
 	for _, subId := range subIds {
-		if err := client.RetrievalUnsubscribe(subId); err != nil {
+		if err := client.RetrievalUnsubscribe(ctx, subId); err != nil {
 			mtlfLog.Warnf("cleanupSubscriptions: failed to unsubscribe %s: %v", subId, err)
 		}
 	}

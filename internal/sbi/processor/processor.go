@@ -20,11 +20,13 @@ type NwdafApp interface {
 }
 
 type Processor struct {
-	nwdaf      NwdafApp
-	wg         *sync.WaitGroup
-	anlf       *anlf.AnlfService
-	mtlf       *mtlf.MtlfService
-	adrfBuffer *adrfBuffer
+	nwdaf       NwdafApp
+	wg          *sync.WaitGroup
+	mlClient    consumer.MlServiceAPI
+	daisyClient consumer.DaisyServiceAPI
+	anlf        *anlf.AnlfService
+	mtlf        *mtlf.MtlfService
+	adrfBuffer  *adrfBuffer
 }
 
 func (p *Processor) config() *factory.Config {
@@ -35,10 +37,28 @@ func (p *Processor) config() *factory.Config {
 }
 
 func NewProcessor(nwdaf NwdafApp) *Processor {
+	var mlClient consumer.MlServiceAPI
+	var daisyClient consumer.DaisyServiceAPI
+	var adrfClient consumer.AdrfServiceAPI
+
+	if cfg := nwdaf.Config(); cfg != nil && cfg.Configuration != nil {
+		if mlCfg := cfg.Configuration.MlService; mlCfg != nil && mlCfg.Enabled && mlCfg.Endpoint != "" {
+			mlClient = consumer.NewMlServiceClient(mlCfg.Endpoint)
+		}
+		if mtlfCfg := cfg.Configuration.Mtlf; mtlfCfg != nil && mtlfCfg.Enabled && mtlfCfg.Endpoint != "" {
+			daisyClient = consumer.NewDaisyClient(mtlfCfg.Endpoint)
+		}
+	}
+	if c := nwdaf.Consumer(); c != nil {
+		adrfClient = c.AdrfClient()
+	}
+
 	p := &Processor{
-		nwdaf: nwdaf,
-		anlf:  anlf.NewAnlfService(nwdaf),
-		mtlf:  mtlf.NewMtlfService(nwdaf),
+		nwdaf:       nwdaf,
+		mlClient:    mlClient,
+		daisyClient: daisyClient,
+		anlf:        anlf.NewAnlfService(nwdaf, mlClient),
+		mtlf:        mtlf.NewMtlfService(nwdaf, daisyClient, adrfClient),
 	}
 
 	// Wire 1: AnLF reports deviation → MTLF decides whether to retrain.
@@ -65,12 +85,12 @@ func NewProcessor(nwdaf NwdafApp) *Processor {
 
 	// ADRF buffer: forward UPF notifications to ADRF for retrain dataset.
 	if c := p.nwdaf.Consumer(); c != nil {
-		if adrfClient := c.AdrfClient(); adrfClient != nil {
+		if adrf := c.AdrfClient(); adrf != nil {
 			threshold := 1
 			if cfg := p.nwdaf.Config(); cfg != nil && cfg.Configuration != nil {
 				threshold = cfg.Configuration.Adrf.StorageThresholdOrDefault()
 			}
-			p.adrfBuffer = newAdrfBuffer(threshold, adrfClient)
+			p.adrfBuffer = newAdrfBuffer(threshold, p.nwdaf.CancelContext(), adrf)
 			logger.ProcLog.Infof("ADRF buffer initialized: threshold=%d", threshold)
 		}
 	}

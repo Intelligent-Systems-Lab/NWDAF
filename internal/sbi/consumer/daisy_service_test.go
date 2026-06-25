@@ -1,6 +1,7 @@
 package consumer
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -56,7 +57,7 @@ func TestDaisyClient_TriggerTrainingAsync(t *testing.T) {
 		}).
 		Reply(http.StatusAccepted)
 
-	taskID, err := client.TriggerTrainingAsync(task, callbackURL, "task-123")
+	taskID, err := client.TriggerTrainingAsync(context.Background(), task, callbackURL, "task-123")
 	if err != nil {
 		t.Fatalf("TriggerTrainingAsync returned error: %v", err)
 	}
@@ -79,7 +80,7 @@ func TestDaisyClient_TriggerTrainingAsyncOmitsCallbackWhenEmpty(t *testing.T) {
 		}).
 		Reply(http.StatusAccepted)
 
-	taskID, err := client.TriggerTrainingAsync(map[string]any{}, "", "task-456")
+	taskID, err := client.TriggerTrainingAsync(context.Background(), map[string]any{}, "", "task-456")
 	if err != nil {
 		t.Fatalf("TriggerTrainingAsync returned error: %v", err)
 	}
@@ -99,7 +100,7 @@ func TestDaisyClient_TriggerTrainingAsyncRejectsFailureStatus(t *testing.T) {
 		Reply(http.StatusInternalServerError).
 		BodyString(`{"error":"busy"}`)
 
-	if _, err := client.TriggerTrainingAsync(map[string]any{}, "", "task-789"); err == nil {
+	if _, err := client.TriggerTrainingAsync(context.Background(), map[string]any{}, "", "task-789"); err == nil {
 		t.Fatal("expected TriggerTrainingAsync to fail on non-202 status")
 	}
 }
@@ -122,7 +123,7 @@ func TestDaisyClient_UploadData(t *testing.T) {
 		}).
 		Reply(http.StatusCreated)
 
-	if err := client.UploadData("task-123", "group-A", upfEventNotifs); err != nil {
+	if err := client.UploadData(context.Background(), "task-123", "group-A", upfEventNotifs); err != nil {
 		t.Fatalf("UploadData returned error: %v", err)
 	}
 	if !gock.IsDone() {
@@ -138,7 +139,7 @@ func TestDaisyClient_UploadDataReturnsErrorOnFailureStatus(t *testing.T) {
 		Reply(http.StatusBadGateway).
 		BodyString("backend unavailable")
 
-	if err := client.UploadData("task-123", "group-A", nil); err == nil {
+	if err := client.UploadData(context.Background(), "task-123", "group-A", nil); err == nil {
 		t.Fatal("expected UploadData to fail on non-success status")
 	}
 }

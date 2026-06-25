@@ -2,6 +2,7 @@
 package anlf
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"slices"
@@ -26,16 +27,6 @@ var errNoHistoricalData = fmt.Errorf("no historical data available yet")
 
 // TrafficObservation for ML prediction request
 type TrafficObservation = consumer.TrafficObservation
-
-// getMlServiceClient returns a new ML service client if configured
-func getMlServiceClient(cfg *factory.Config) *consumer.MlServiceClient {
-	endpoint := mlServiceEndpoint(cfg)
-	if endpoint == "" {
-		return nil
-	}
-
-	return consumer.NewMlServiceClient(endpoint)
-}
 
 // GenerateMockAbnormalBehaviours generates mock DDoS detection analytics data
 // TODO: Replace with real analytics from ML model and data collection
@@ -71,8 +62,10 @@ func GenerateMockAbnormalBehaviours() []models.AbnormalBehaviour {
 // Per TS 23.288 §6.7.3: Analytics based on collected UPF traffic data
 // Uses ML-based prediction if model is ready, returns 0 confidence when insufficient resources
 func GenerateUeCommunicationAnalytics(
+	parentCtx context.Context,
 	nwdafSubId string,
 	cfg *factory.Config,
+	mlClient consumer.MlServiceAPI,
 ) models.UeCommunication {
 	ctx := nwdaf_context.GetSelf()
 	now := time.Now()
@@ -80,7 +73,7 @@ func GenerateUeCommunicationAnalytics(
 	// Check if ML model is available for this subscription
 	mlInfo := ctx.GetMlModelInfo(nwdafSubId)
 	if mlInfo != nil && mlInfo.IsReady() {
-		result, err := generateMlBasedUeCommunication(nwdafSubId, mlInfo, ctx, cfg)
+		result, err := generateMlBasedUeCommunication(parentCtx, nwdafSubId, mlInfo, ctx, cfg, mlClient)
 		if err == nil {
 			return result
 		}
@@ -103,15 +96,15 @@ func GenerateUeCommunicationAnalytics(
 
 // generateMlBasedUeCommunication uses ML service for prediction
 func generateMlBasedUeCommunication(
+	parentCtx context.Context,
 	nwdafSubId string,
 	mlInfo *nwdaf_context.MlModelInfo,
 	ctx *nwdaf_context.NWDAFContext,
 	cfg *factory.Config,
+	mlClient consumer.MlServiceAPI,
 ) (models.UeCommunication, error) {
 	now := time.Now()
 
-	// Get ML service client
-	mlClient := getMlServiceClient(cfg)
 	if mlClient == nil {
 		return models.UeCommunication{}, fmt.Errorf("ML service client not available")
 	}
@@ -157,7 +150,7 @@ func generateMlBasedUeCommunication(
 
 	// Call ML service for prediction
 	modelId := mlInfo.GetModelId()
-	resp, err := mlClient.Predict(modelId, historicalData)
+	resp, err := mlClient.Predict(parentCtx, modelId, historicalData)
 	if err != nil {
 		return models.UeCommunication{}, err
 	}

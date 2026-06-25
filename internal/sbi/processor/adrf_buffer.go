@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 
@@ -18,13 +19,15 @@ type adrfBuffer struct {
 	mu        sync.Mutex
 	pending   map[string][]json.RawMessage // correlationId → accumulated notifJSONs
 	threshold int
-	client    *consumer.AdrfClient
+	baseCtx   context.Context
+	client    consumer.AdrfServiceAPI
 }
 
-func newAdrfBuffer(threshold int, client *consumer.AdrfClient) *adrfBuffer {
+func newAdrfBuffer(threshold int, baseCtx context.Context, client consumer.AdrfServiceAPI) *adrfBuffer {
 	return &adrfBuffer{
 		pending:   make(map[string][]json.RawMessage),
 		threshold: threshold,
+		baseCtx:   baseCtx,
 		client:    client,
 	}
 }
@@ -48,7 +51,7 @@ func (b *adrfBuffer) add(info *nwdaf_context.AdrfSmfInfo, notifJSON json.RawMess
 func (b *adrfBuffer) flushOne(correlationId string, info *nwdaf_context.AdrfSmfInfo) {
 	notifJSONs := b.pending[correlationId]
 
-	storeTransId, err := b.client.StorageRequest(info, notifJSONs)
+	storeTransId, err := b.client.StorageRequest(b.baseCtx, info, notifJSONs)
 	if err != nil {
 		logger.ProcLog.Warnf("ADRF StorageRequest failed for correlationId=%s: %v", correlationId, err)
 	} else {

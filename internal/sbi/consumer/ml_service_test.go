@@ -1,6 +1,7 @@
 package consumer
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -32,7 +33,7 @@ func TestMlServiceClient_InitializeModel(t *testing.T) {
 		Reply(http.StatusCreated).
 		JSON(LoadModelResponse{ModelId: "test-model-123"})
 
-	modelID, err := client.InitializeModel("http://example.com/model.h5")
+	modelID, err := client.InitializeModel(context.Background(), "http://example.com/model.h5")
 	if err != nil {
 		t.Fatalf("InitializeModel returned error: %v", err)
 	}
@@ -52,7 +53,7 @@ func TestMlServiceClient_InitializeModelReturnsErrorOnFailureStatus(t *testing.T
 		Reply(http.StatusInternalServerError).
 		BodyString("internal error")
 
-	if _, err := client.InitializeModel("http://example.com/model.h5"); err == nil {
+	if _, err := client.InitializeModel(context.Background(), "http://example.com/model.h5"); err == nil {
 		t.Fatal("expected InitializeModel to fail on non-success status")
 	}
 }
@@ -67,7 +68,7 @@ func TestMlServiceClient_UnloadModel(t *testing.T) {
 		Reply(http.StatusOK).
 		JSON(UnloadModelResponse{ModelId: "model-123", Status: "unloaded"})
 
-	if err := client.UnloadModel("model-123"); err != nil {
+	if err := client.UnloadModel(context.Background(), "model-123"); err != nil {
 		t.Fatalf("UnloadModel returned error: %v", err)
 	}
 	if !gock.IsDone() {
@@ -105,7 +106,7 @@ func TestMlServiceClient_Predict(t *testing.T) {
 			},
 		})
 
-	resp, err := client.Predict("model-123", trafficData)
+	resp, err := client.Predict(context.Background(), "model-123", trafficData)
 	if err != nil {
 		t.Fatalf("Predict returned error: %v", err)
 	}
@@ -125,7 +126,7 @@ func TestMlServiceClient_PredictReturnsDecodeError(t *testing.T) {
 		Reply(http.StatusOK).
 		BodyString("{invalid json")
 
-	if _, err := client.Predict("model-123", nil); err == nil {
+	if _, err := client.Predict(context.Background(), "model-123", nil); err == nil {
 		t.Fatal("expected Predict to fail on invalid JSON response")
 	}
 }

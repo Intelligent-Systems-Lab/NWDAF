@@ -3,6 +3,8 @@
 package consumer
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
@@ -28,12 +30,39 @@ type MtlfServiceClient interface {
 	HTTPClient() *http.Client
 }
 
+type MlServiceAPI interface {
+	InitializeModel(ctx context.Context, modelUrl string) (string, error)
+	UnloadModel(ctx context.Context, modelId string) error
+	Predict(ctx context.Context, modelId string, trafficData []TrafficObservation) (*PredictResponse, error)
+	HTTPClient() *http.Client
+}
+
+type DaisyServiceAPI interface {
+	TriggerTrainingAsync(ctx context.Context, task map[string]any, callbackURL string, tidOverride string) (string, error)
+	UploadData(ctx context.Context, tid string, groupId string, upfEventNotifs []json.RawMessage) error
+	HTTPClient() *http.Client
+}
+
+type AdrfServiceAPI interface {
+	StorageRequest(ctx context.Context, info *nwdaf_context.AdrfSmfInfo, upfNotifJSONs []json.RawMessage) (string, error)
+	RetrievalSubscribe(
+		ctx context.Context,
+		info *nwdaf_context.AdrfSmfInfo,
+		notifCorrId string,
+		notifURI string,
+		timePeriod AdrfTimePeriod,
+	) (string, error)
+	RetrievalRequest(ctx context.Context, fetchCorrIds []string) (*NadrfDataStoreRecord, error)
+	RetrievalUnsubscribe(ctx context.Context, subscriptionId string) error
+	HTTPClient() *http.Client
+}
+
 type ConsumerAPI interface {
 	SubscribeToSmf(smfEndpoint string, opts SmfSubscriptionOptions) (string, error)
 	UnsubscribeFromSmf(smfEndpoint string, subscriptionId string) error
 	SubscribeToMtlf(mtlfEndpoint string, opts MtlfSubscriptionOptions) (string, error)
 	UnsubscribeFromMtlf(mtlfEndpoint string, subscriptionId string) error
-	AdrfClient() *AdrfClient
+	AdrfClient() AdrfServiceAPI
 }
 
 // Consumer aggregates all external NF service clients.
@@ -42,14 +71,14 @@ type Consumer struct {
 
 	smfService  SmfServiceClient
 	mtlfService MtlfServiceClient
-	Adrf        *AdrfClient // nil if ADRF not configured
+	Adrf        AdrfServiceAPI // nil if ADRF not configured
 }
 
 func newConsumerWithServices(
 	nwdaf nwdaf,
 	smfService SmfServiceClient,
 	mtlfService MtlfServiceClient,
-	adrf *AdrfClient,
+	adrf AdrfServiceAPI,
 ) *Consumer {
 	return &Consumer{
 		nwdaf:       nwdaf,
@@ -112,6 +141,6 @@ func (c *Consumer) MtlfService() MtlfServiceClient {
 	return c.mtlfService
 }
 
-func (c *Consumer) AdrfClient() *AdrfClient {
+func (c *Consumer) AdrfClient() AdrfServiceAPI {
 	return c.Adrf
 }

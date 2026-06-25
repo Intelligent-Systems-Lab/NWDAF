@@ -33,10 +33,10 @@ func (m *MockConsumerAPI) EXPECT() *MockConsumerAPIMockRecorder {
 }
 
 // AdrfClient mocks base method.
-func (m *MockConsumerAPI) AdrfClient() *consumer.AdrfClient {
+func (m *MockConsumerAPI) AdrfClient() consumer.AdrfServiceAPI {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "AdrfClient")
-	ret0, _ := ret[0].(*consumer.AdrfClient)
+	ret0, _ := ret[0].(consumer.AdrfServiceAPI)
 	return ret0
 }
 

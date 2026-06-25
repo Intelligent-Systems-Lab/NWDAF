@@ -1,6 +1,7 @@
 package consumer
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -68,7 +69,7 @@ func TestAdrfClient_StorageRequest(t *testing.T) {
 		Reply(http.StatusCreated).
 		SetHeader("Location", AdrfDataStoreRecordsPath+"/store-123")
 
-	storeTransID, err := client.StorageRequest(info, upfEventNotifs)
+	storeTransID, err := client.StorageRequest(context.Background(), info, upfEventNotifs)
 	if err != nil {
 		t.Fatalf("StorageRequest returned error: %v", err)
 	}
@@ -113,6 +114,7 @@ func TestAdrfClient_RetrievalSubscribe(t *testing.T) {
 		SetHeader("Location", AdrfDataRetrievalSubscriptionsPath+"/sub-123")
 
 	subscriptionID, err := client.RetrievalSubscribe(
+		context.Background(),
 		info,
 		"task-123",
 		"http://127.0.0.1:8080/adrf/callback",
@@ -148,7 +150,7 @@ func TestAdrfClient_RetrievalRequest(t *testing.T) {
 		Reply(http.StatusOK).
 		JSON(expected)
 
-	record, err := client.RetrievalRequest([]string{"fetch-1", "fetch-2"})
+	record, err := client.RetrievalRequest(context.Background(), []string{"fetch-1", "fetch-2"})
 	if err != nil {
 		t.Fatalf("RetrievalRequest returned error: %v", err)
 	}
@@ -172,7 +174,7 @@ func TestAdrfClient_RetrievalRequestReturnsNilOnNoContent(t *testing.T) {
 		MatchParam("fetch-correlation-ids", "fetch-1").
 		Reply(http.StatusNoContent)
 
-	record, err := client.RetrievalRequest([]string{"fetch-1"})
+	record, err := client.RetrievalRequest(context.Background(), []string{"fetch-1"})
 	if err != nil {
 		t.Fatalf("RetrievalRequest returned error: %v", err)
 	}
@@ -188,7 +190,7 @@ func TestAdrfClient_RetrievalUnsubscribe(t *testing.T) {
 		Delete(AdrfDataRetrievalSubscriptionsPath + "/sub-123").
 		Reply(http.StatusNotFound)
 
-	if err := client.RetrievalUnsubscribe("sub-123"); err != nil {
+	if err := client.RetrievalUnsubscribe(context.Background(), "sub-123"); err != nil {
 		t.Fatalf("RetrievalUnsubscribe returned error: %v", err)
 	}
 	if !gock.IsDone() {
@@ -208,7 +210,7 @@ func TestAdrfClient_RetrievalUnsubscribeRetriesServerError(t *testing.T) {
 		Times(1).
 		Reply(http.StatusNoContent)
 
-	if err := client.RetrievalUnsubscribe("sub-123"); err != nil {
+	if err := client.RetrievalUnsubscribe(context.Background(), "sub-123"); err != nil {
 		t.Fatalf("RetrievalUnsubscribe returned error after retry: %v", err)
 	}
 	if !gock.IsDone() {

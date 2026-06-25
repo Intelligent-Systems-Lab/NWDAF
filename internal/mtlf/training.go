@@ -1,13 +1,13 @@
 package mtlf
 
 import (
+	"fmt"
 	"maps"
 	"sync"
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
-	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
@@ -111,8 +111,16 @@ func (m *MtlfService) submitDaisyTask(
 	taskCopy := make(map[string]any, len(task)+2)
 	maps.Copy(taskCopy, task)
 
-	client := consumer.NewDaisyClient(mtlfCfg.Endpoint)
-	taskId, err := client.TriggerTrainingAsync(taskCopy, cbURL, tid)
+	if m.daisyClient == nil {
+		err := fmt.Errorf("daisy client not initialized")
+		mtlfLog.Errorf("Failed to send async training request to Daisy: %v", err)
+		if store != nil {
+			store.SetRetraining(false)
+		}
+		return
+	}
+
+	taskId, err := m.daisyClient.TriggerTrainingAsync(m.nwdaf.CancelContext(), taskCopy, cbURL, tid)
 	if err != nil {
 		mtlfLog.Errorf("Failed to send async training request to Daisy: %v", err)
 		if store != nil {

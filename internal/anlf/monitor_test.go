@@ -371,7 +371,7 @@ func TestCheckModelAccuracy_LegacyDeviationUsesAllMatchedPairs(t *testing.T) {
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	service := NewAnlfService(testNwdafApp{ctx: cancelCtx, cfg: cfg})
+	service := NewAnlfService(testNwdafApp{ctx: cancelCtx, cfg: cfg}, nil)
 	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
 	now := time.Now()
 
@@ -446,7 +446,7 @@ func TestCheckModelAccuracy_MinSamplesSkipsCallbacks(t *testing.T) {
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	service := NewAnlfService(testNwdafApp{ctx: cancelCtx, cfg: cfg})
+	service := NewAnlfService(testNwdafApp{ctx: cancelCtx, cfg: cfg}, nil)
 	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
 	target := time.Now().Add(-30 * time.Second)
 	addGroundTruthRecord(ctx, "sub-1", "corr-1", "10.0.0.1", target, 100, 200)
@@ -488,7 +488,7 @@ func TestCheckModelAccuracy_MinSamplesAppliesPerScope(t *testing.T) {
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	service := NewAnlfService(testNwdafApp{ctx: cancelCtx, cfg: cfg})
+	service := NewAnlfService(testNwdafApp{ctx: cancelCtx, cfg: cfg}, nil)
 	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
 	now := time.Now()
 	targetA1 := now.Add(-50 * time.Second)
@@ -563,7 +563,7 @@ func TestCheckModelAccuracy_LegacyDeviationIndependentOfPersistence(t *testing.T
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	service := NewAnlfService(testNwdafApp{ctx: cancelCtx, cfg: cfg})
+	service := NewAnlfService(testNwdafApp{ctx: cancelCtx, cfg: cfg}, nil)
 	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
 	target := time.Now().Add(-30 * time.Second)
 	addGroundTruthRecord(ctx, "sub-1", "corr-1", "10.0.0.1", target, 100, 200)
@@ -598,7 +598,7 @@ func TestCheckModelAccuracy_LegacyDeviationIndependentOfPersistence(t *testing.T
 }
 
 func TestAcquireStartupWarmupDuration_OnlyOnce(t *testing.T) {
-	service := NewAnlfService(testNwdafApp{ctx: context.Background()})
+	service := NewAnlfService(testNwdafApp{ctx: context.Background()}, nil)
 	accCfg := &factory.AccuracyMonitorConfig{WarmupDuration: 7}
 
 	if got := service.acquireStartupWarmupDuration(accCfg); got != 7 {
@@ -610,7 +610,7 @@ func TestAcquireStartupWarmupDuration_OnlyOnce(t *testing.T) {
 }
 
 func TestAcquireStartupWarmupDuration_UsesDefaultOnce(t *testing.T) {
-	service := NewAnlfService(testNwdafApp{ctx: context.Background()})
+	service := NewAnlfService(testNwdafApp{ctx: context.Background()}, nil)
 	accCfg := &factory.AccuracyMonitorConfig{}
 
 	if got := service.acquireStartupWarmupDuration(accCfg); got != 120 {
@@ -622,7 +622,7 @@ func TestAcquireStartupWarmupDuration_UsesDefaultOnce(t *testing.T) {
 }
 
 func TestRunModelAccuracyLoop_ZeroWarmupKeepsPredictionsUntilTicker(t *testing.T) {
-	service := NewAnlfService(testNwdafApp{ctx: context.Background()})
+	service := NewAnlfService(testNwdafApp{ctx: context.Background()}, nil)
 	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
 	target := time.Now().Add(-30 * time.Second)
 	store.AddPrediction(nwdaf_context.PredictionRecord{
@@ -669,7 +669,7 @@ func TestLookupGroundTruth_RejectsAdjacentSlotWithinLegacyNearestWindow(t *testi
 	ctx := setupCtx(t)
 	cfg, _ := setTestMonitorConfig(t, 10)
 
-	service := NewAnlfService(testNwdafApp{ctx: context.Background(), cfg: cfg})
+	service := NewAnlfService(testNwdafApp{ctx: context.Background(), cfg: cfg}, nil)
 	target := snappedTs(100)
 	// 6 seconds late is still within the old ±10s nearest window, but should map
 	// to the next slot under the new slot-equality pairing.
@@ -691,7 +691,7 @@ func TestCheckModelAccuracy_RetriesPendingPredictionBeforeDiscard(t *testing.T) 
 	accCfg.CheckInterval = 20
 	accCfg.MinSamples = 1
 
-	service := NewAnlfService(testNwdafApp{ctx: context.Background(), cfg: cfg})
+	service := NewAnlfService(testNwdafApp{ctx: context.Background(), cfg: cfg}, nil)
 	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
 	target := time.Now().Add(-30 * time.Second)
 	store.AddPrediction(nwdaf_context.PredictionRecord{
@@ -726,7 +726,7 @@ func TestCheckModelAccuracy_LateGroundTruthMatchesOnLaterRound(t *testing.T) {
 	accCfg.CheckInterval = 20
 	accCfg.MinSamples = 1
 
-	service := NewAnlfService(testNwdafApp{ctx: context.Background(), cfg: cfg})
+	service := NewAnlfService(testNwdafApp{ctx: context.Background(), cfg: cfg}, nil)
 	store := nwdaf_context.NewModelAccuracyStore("file:///test/model.pth")
 	target := time.Now().Add(-30 * time.Second)
 	store.AddPrediction(nwdaf_context.PredictionRecord{

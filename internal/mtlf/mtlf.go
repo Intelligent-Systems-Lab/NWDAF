@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/app"
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
@@ -21,6 +22,8 @@ type NwdafApp interface {
 // MtlfService is the MTLF entry point.
 type MtlfService struct {
 	nwdaf          NwdafApp
+	daisyClient    consumer.DaisyServiceAPI
+	adrfClient     consumer.AdrfServiceAPI
 	wg             *sync.WaitGroup
 	stateStore     *MonitorStateStore
 	onModelSwapped func(modelUrl string, wg *sync.WaitGroup)
@@ -41,10 +44,16 @@ type MtlfService struct {
 }
 
 // NewMtlfService creates a new MtlfService instance.
-func NewMtlfService(nwdaf NwdafApp) *MtlfService {
+func NewMtlfService(
+	nwdaf NwdafApp,
+	daisyClient consumer.DaisyServiceAPI,
+	adrfClient consumer.AdrfServiceAPI,
+) *MtlfService {
 	return &MtlfService{
-		nwdaf:      nwdaf,
-		stateStore: NewMonitorStateStore(),
+		nwdaf:       nwdaf,
+		daisyClient: daisyClient,
+		adrfClient:  adrfClient,
+		stateStore:  NewMonitorStateStore(),
 	}
 }
 

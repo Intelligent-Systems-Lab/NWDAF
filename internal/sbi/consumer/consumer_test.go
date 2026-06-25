@@ -172,12 +172,6 @@ func TestConsumerDelegatesToInjectedServices(t *testing.T) {
 }
 
 func TestNewConsumerInitializesAdrfFromAppConfig(t *testing.T) {
-	oldCfg := factory.NwdafConfig
-	factory.NwdafConfig = nil
-	t.Cleanup(func() {
-		factory.NwdafConfig = oldCfg
-	})
-
 	c, err := NewConsumer(newTestConsumerApp(&factory.Config{
 		Configuration: &factory.Configuration{
 			Adrf: &factory.AdrfConfig{

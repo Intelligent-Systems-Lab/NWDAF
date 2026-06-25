@@ -69,6 +69,7 @@ func NewDaisyClient(endpoint string) *DaisyClient {
 //
 //	If empty, generates a fresh UUID.
 func (c *DaisyClient) TriggerTrainingAsync(
+	ctx context.Context,
 	task map[string]any, callbackURL string, tidOverride string,
 ) (string, error) {
 	var tidStr string
@@ -91,7 +92,7 @@ func (c *DaisyClient) TriggerTrainingAsync(
 	url := c.endpoint + DaisyPublishTaskPath
 	consumerLog.Debugf("Daisy async training request: %s", string(jsonData))
 
-	ctx, cancel := context.WithTimeout(context.Background(), DaisyAsyncTimeout)
+	ctx, cancel := requestTimeoutContext(ctx, DaisyAsyncTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
@@ -125,7 +126,12 @@ func (c *DaisyClient) TriggerTrainingAsync(
 
 // UploadData sends a batch of historical UPF records to Daisy for the retrain dataset.
 // Each call corresponds to one NadrfDataStoreRecord fetched from ADRF.
-func (c *DaisyClient) UploadData(tid, groupId string, upfEventNotifs []json.RawMessage) error {
+func (c *DaisyClient) UploadData(
+	ctx context.Context,
+	tid string,
+	groupId string,
+	upfEventNotifs []json.RawMessage,
+) error {
 	payload := DaisyUploadDataRequest{
 		TID:            tid,
 		GroupId:        groupId,
@@ -137,7 +143,7 @@ func (c *DaisyClient) UploadData(tid, groupId string, upfEventNotifs []json.RawM
 		return fmt.Errorf("marshal DaisyUploadDataRequest: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), DaisyUploadTimeout)
+	ctx, cancel := requestTimeoutContext(ctx, DaisyUploadTimeout)
 	defer cancel()
 
 	url := c.endpoint + DaisyUploadDataPath

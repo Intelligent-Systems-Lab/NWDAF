@@ -9,6 +9,7 @@ import (
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/app"
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
@@ -22,6 +23,7 @@ type NwdafApp interface {
 // AnlfService is the AnLF entry point.
 type AnlfService struct {
 	nwdaf             NwdafApp
+	mlClient          consumer.MlServiceAPI
 	onDeviationReport func(modelUrl string, deviation float64, store *nwdaf_context.ModelAccuracyStore)
 	onAccuracyReports func(modelUrl string, reports []AccuracyReport, store *nwdaf_context.ModelAccuracyStore)
 	warmupMu          sync.Mutex
@@ -45,8 +47,11 @@ type AccuracyReport struct {
 }
 
 // NewAnlfService creates a new AnlfService instance.
-func NewAnlfService(nwdaf NwdafApp) *AnlfService {
-	return &AnlfService{nwdaf: nwdaf}
+func NewAnlfService(nwdaf NwdafApp, mlClient consumer.MlServiceAPI) *AnlfService {
+	return &AnlfService{
+		nwdaf:    nwdaf,
+		mlClient: mlClient,
+	}
 }
 
 func (a *AnlfService) config() *factory.Config {

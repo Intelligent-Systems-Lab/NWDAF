@@ -269,6 +269,7 @@ func (p *Processor) startSubscriptionScheduler(subscription *nwdaf_context.Subsc
 	scheduler := notifier.NewNotificationScheduler(
 		p.nwdaf.CancelContext(),
 		p.config(),
+		p.mlClient,
 		subscription.ID,
 		subscription.NotificationURI,
 		subscription.RepPeriod,
