@@ -98,7 +98,7 @@ func (s *NotificationScheduler) Start() {
 		monDurStr = s.monDur.Format(time.RFC3339)
 	}
 	logger.NotifierLog.Infof(
-		"Notification scheduler started for subscription %s (period: %ds, maxReports: %d, monDur: %s)",
+		"NotificationScheduler: started sub=%s period=%ds maxReports=%d monDur=%s",
 		s.subscriptionId, s.repPeriod, s.maxReportNbr, monDurStr)
 }
 
@@ -113,7 +113,7 @@ func (s *NotificationScheduler) Stop() {
 	}
 
 	s.wg.Wait()
-	logger.NotifierLog.Infof("Notification scheduler stopped for subscription %s (sent %d reports)",
+	logger.NotifierLog.Infof("NotificationScheduler: stopped sub=%s sent=%d",
 		s.subscriptionId, s.reportCount)
 }
 
@@ -176,7 +176,7 @@ func (s *NotificationScheduler) shouldContinue() bool {
 
 // handleCompletion handles scheduler completion and invokes callback
 func (s *NotificationScheduler) handleCompletion(reason string) {
-	logger.NotifierLog.Infof("Subscription %s notification completed: %s (sent %d reports)",
+	logger.NotifierLog.Infof("NotificationScheduler: completed sub=%s reason=%s sent=%d",
 		s.subscriptionId, reason, s.reportCount)
 
 	if s.onComplete != nil {
@@ -228,11 +228,11 @@ func (s *NotificationScheduler) sendNotification(parentCtx context.Context) {
 	}()
 
 	if resp.StatusCode == http.StatusNoContent {
-		logger.NotifierLog.Infof("Notification #%d sent successfully to %s for subscription %s",
-			currentCount, s.notificationURI, s.subscriptionId)
+		logger.NotifierLog.Debugf("SendNotification: sent sub=%s report=%d",
+			s.subscriptionId, currentCount)
 	} else {
-		logger.NotifierLog.Warnf("Notification #%d response: %d from %s",
-			currentCount, resp.StatusCode, s.notificationURI)
+		logger.NotifierLog.Warnf("SendNotification: unexpected-status sub=%s report=%d status=%d",
+			s.subscriptionId, currentCount, resp.StatusCode)
 	}
 }
 

@@ -3,6 +3,7 @@ package context
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -77,19 +78,15 @@ func QueryTrafficByCorrelationId(
 	coll := getCollection(dbName)
 	cur, err := coll.Find(ctx, filter, opts)
 	if err != nil {
-		logger.CtxLog.Errorf("MongoDB query failed (correlationId=%s): %v", correlationId, err)
-		return nil, err
+		return nil, fmt.Errorf("query traffic by correlationId %s: %w", correlationId, err)
 	}
 	defer func() {
-		if closeErr := closeCursor(cur); closeErr != nil {
-			logger.CtxLog.Debugf("cursor close error: %v", closeErr)
-		}
+		closeCursorQuietly(cur)
 	}()
 
 	var records []UpfTrafficRecord
 	if err = cur.All(ctx, &records); err != nil {
-		logger.CtxLog.Errorf("MongoDB decode failed: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("decode traffic by correlationId %s: %w", correlationId, err)
 	}
 	// Reverse to restore chronological (ASC) order for ML input
 	reverseRecords(records)
@@ -130,19 +127,15 @@ func QueryTrafficByMultipleCorrelationIds(
 	coll := getCollection(dbName)
 	cur, err := coll.Find(ctx, filter, opts)
 	if err != nil {
-		logger.CtxLog.Errorf("MongoDB multi-correlation query failed: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("query traffic by multiple correlationIds: %w", err)
 	}
 	defer func() {
-		if closeErr := closeCursor(cur); closeErr != nil {
-			logger.CtxLog.Debugf("cursor close error: %v", closeErr)
-		}
+		closeCursorQuietly(cur)
 	}()
 
 	var records []UpfTrafficRecord
 	if err = cur.All(ctx, &records); err != nil {
-		logger.CtxLog.Errorf("MongoDB decode failed: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("decode traffic by multiple correlationIds: %w", err)
 	}
 	// Reverse to restore chronological (ASC) order for ML input
 	reverseRecords(records)
@@ -187,19 +180,15 @@ func QueryTrafficInTimeRange(
 	coll := getCollection(dbName)
 	cur, err := coll.Find(ctx, filter, opts)
 	if err != nil {
-		logger.CtxLog.Errorf("MongoDB time range query failed: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("query traffic in time range: %w", err)
 	}
 	defer func() {
-		if closeErr := closeCursor(cur); closeErr != nil {
-			logger.CtxLog.Debugf("cursor close error: %v", closeErr)
-		}
+		closeCursorQuietly(cur)
 	}()
 
 	var records []UpfTrafficRecord
 	if err = cur.All(ctx, &records); err != nil {
-		logger.CtxLog.Errorf("MongoDB decode failed: %v", err)
-		return nil, err
+		return nil, fmt.Errorf("decode traffic in time range: %w", err)
 	}
 	return records, nil
 }
@@ -221,4 +210,12 @@ func closeCursor(cur *mongo.Cursor) error {
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), dbCleanupTimeout)
 	defer cancel()
 	return cur.Close(cleanupCtx)
+}
+
+func closeCursorQuietly(cur *mongo.Cursor) {
+	if err := closeCursor(cur); err != nil {
+		// Cursor cleanup failure is diagnostic only and should not override the
+		// main query result.
+		logger.CtxLog.Debugf("cursor close error: %v", err)
+	}
 }

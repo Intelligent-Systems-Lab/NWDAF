@@ -50,7 +50,7 @@ func (s *Server) HandleCreateSubscription(c *gin.Context) {
 // HandleUpdateSubscription handles PUT /subscriptions/:subscriptionId
 func (s *Server) HandleUpdateSubscription(c *gin.Context) {
 	subscriptionId := c.Param("subscriptionId")
-	logger.SBILog.Infof("Handle UpdateSubscription: %s", subscriptionId)
+	logger.SBILog.Infof("Handle UpdateSubscription: sub=%s", subscriptionId)
 
 	var req models.NnwdafEventsSubscription
 	requestBody, err := c.GetRawData()
@@ -77,7 +77,7 @@ func (s *Server) HandleUpdateSubscription(c *gin.Context) {
 // HandleDeleteSubscription handles DELETE /subscriptions/:subscriptionId
 func (s *Server) HandleDeleteSubscription(c *gin.Context) {
 	subscriptionId := c.Param("subscriptionId")
-	logger.SBILog.Infof("Handle DeleteSubscription: %s", subscriptionId)
+	logger.SBILog.Infof("Handle DeleteSubscription: sub=%s", subscriptionId)
 
 	problemDetails := s.Processor().HandleDeleteSubscription(subscriptionId)
 	if problemDetails != nil {

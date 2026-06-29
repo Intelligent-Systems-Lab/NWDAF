@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -58,10 +57,6 @@ func (s *NsmfService) SubscribeToSmf(
 	smfEndpoint string,
 	opts SmfSubscriptionOptions,
 ) (string, error) {
-	// Log subscription info
-	consumerLog.Infof("Subscribing to SMF: endpoint=%s, supi=%s, notifId=%s",
-		smfEndpoint, opts.Supi, opts.NotifId)
-
 	request := ExtendedNsmfEventExposure{
 		Supi:        opts.Supi,
 		NotifUri:    opts.NotifUri,
@@ -80,7 +75,6 @@ func (s *NsmfService) SubscribeToSmf(
 		subscriptionId = opts.NotifId
 	}
 
-	consumerLog.Infof("SMF subscription created: id=%s", subscriptionId)
 	return subscriptionId, nil
 }
 
@@ -119,8 +113,6 @@ func (s *NsmfService) UnsubscribeFromSmf(
 	smfEndpoint string,
 	subscriptionId string,
 ) error {
-	consumerLog.Infof("Unsubscribing from SMF: endpoint=%s, subId=%s", smfEndpoint, subscriptionId)
-
 	url := smfEndpoint + SmfEventExposurePath + "/" + subscriptionId
 
 	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "SMF unsubscription")
@@ -145,17 +137,12 @@ func (s *NsmfService) UnsubscribeFromSmf(
 	}()
 
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			consumerLog.Debugf("failed to read error response body: %v", readErr)
-		}
-		return fmt.Errorf("SMF unsubscription failed: status=%d, body=%s", resp.StatusCode, string(body))
+		return fmt.Errorf("SMF unsubscription failed: status=%d", resp.StatusCode)
 	}
 
 	// NOTE: Resource cleanup handled by cleanupDataCollection()
 	// in eventssubscription.go via ReleaseSmfResource()
 
-	consumerLog.Infof("SMF subscription deleted: id=%s", subscriptionId)
 	return nil
 }
 
@@ -168,8 +155,6 @@ func (s *NsmfService) sendRequest(ctx context.Context, smfEndpoint string, reque
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
-
-	consumerLog.Debugf("SMF subscription request: %s", string(jsonData))
 
 	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "SMF subscription")
 	if err != nil {
@@ -194,11 +179,7 @@ func (s *NsmfService) sendRequest(ctx context.Context, smfEndpoint string, reque
 	}()
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			consumerLog.Debugf("failed to read error response body: %v", readErr)
-		}
-		return "", fmt.Errorf("SMF subscription failed: status=%d, body=%s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("SMF subscription failed: status=%d", resp.StatusCode)
 	}
 
 	return s.parseSubscriptionId(resp), nil

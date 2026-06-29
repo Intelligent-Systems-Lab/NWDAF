@@ -56,9 +56,6 @@ func (s *NmtlfService) SubscribeToMtlf(
 	mtlfEndpoint string,
 	opts MtlfSubscriptionOptions,
 ) (string, error) {
-	consumerLog.Infof("Subscribing to MTLF: endpoint=%s, event=%s, notifId=%s",
-		mtlfEndpoint, opts.Event, opts.NotifId)
-
 	requestModel := models.NwdafMlModelProvSubsc{
 		MLEventSubscs: []models.MlEventSubscription{
 			{
@@ -90,7 +87,6 @@ func (s *NmtlfService) SubscribeToMtlf(
 		subscriptionID = opts.NotifId
 	}
 
-	consumerLog.Infof("MTLF subscription created: id=%s", subscriptionID)
 	return subscriptionID, nil
 }
 
@@ -101,8 +97,6 @@ func (s *NmtlfService) UnsubscribeFromMtlf(
 	mtlfEndpoint string,
 	subscriptionId string,
 ) error {
-	consumerLog.Infof("Unsubscribing from MTLF: endpoint=%s, subId=%s", mtlfEndpoint, subscriptionId)
-
 	request := &MLModelProvision.DeleteNWDAFMLModelProvisionSubcriptionRequest{}
 	request.SetSubscriptionId(subscriptionId)
 
@@ -117,7 +111,6 @@ func (s *NmtlfService) UnsubscribeFromMtlf(
 		return fmt.Errorf("failed to delete MTLF subscription: %w", deleteErr)
 	}
 
-	consumerLog.Infof("MTLF subscription deleted: id=%s", subscriptionId)
 	return nil
 }
 

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 )
@@ -104,8 +103,6 @@ type PredictResponse struct {
 // InitializeModel loads a model from the given URL and returns the model ID
 // Calls POST /model/load on the ML service
 func (c *MlServiceClient) InitializeModel(ctx context.Context, modelUrl string) (string, error) {
-	consumerLog.Infof("Initializing ML model from URL: %s", modelUrl)
-
 	request := LoadModelRequest{
 		ModelUrl: modelUrl,
 	}
@@ -140,11 +137,7 @@ func (c *MlServiceClient) InitializeModel(ctx context.Context, modelUrl string) 
 	}()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return "", fmt.Errorf("ML model load failed: status=%d", resp.StatusCode)
-		}
-		return "", fmt.Errorf("ML model load failed: status=%d, body=%s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("ML model load failed: status=%d", resp.StatusCode)
 	}
 
 	var response LoadModelResponse
@@ -152,15 +145,12 @@ func (c *MlServiceClient) InitializeModel(ctx context.Context, modelUrl string) 
 		return "", fmt.Errorf("failed to decode response: %w", decodeErr)
 	}
 
-	consumerLog.Infof("ML model initialized: modelId=%s", response.ModelId)
 	return response.ModelId, nil
 }
 
 // UnloadModel unloads a model by ID
 // Calls POST /model/unload on the ML service
 func (c *MlServiceClient) UnloadModel(ctx context.Context, modelId string) error {
-	consumerLog.Infof("Unloading ML model: %s", modelId)
-
 	request := UnloadModelRequest{
 		ModelId: modelId,
 	}
@@ -195,14 +185,9 @@ func (c *MlServiceClient) UnloadModel(ctx context.Context, modelId string) error
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return fmt.Errorf("ML model unload failed: status=%d", resp.StatusCode)
-		}
-		return fmt.Errorf("ML model unload failed: status=%d, body=%s", resp.StatusCode, string(body))
+		return fmt.Errorf("ML model unload failed: status=%d", resp.StatusCode)
 	}
 
-	consumerLog.Debugf("ML model unloaded: %s", modelId)
 	return nil
 }
 
@@ -251,11 +236,7 @@ func (c *MlServiceClient) Predict(
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		body, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return nil, fmt.Errorf("ML prediction failed: status=%d", resp.StatusCode)
-		}
-		return nil, fmt.Errorf("ML prediction failed: status=%d, body=%s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("ML prediction failed: status=%d", resp.StatusCode)
 	}
 
 	var response PredictResponse

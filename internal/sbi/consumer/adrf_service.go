@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"path"
 	"strings"
@@ -132,7 +131,7 @@ func (c *AdrfClient) StorageRequest(
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			consumerLog.Warnf("Failed to close ADRF response body: %v", closeErr)
+			consumerLog.Debugf("failed to close ADRF response body: %v", closeErr)
 		}
 	}()
 
@@ -196,16 +195,12 @@ func (c *AdrfClient) RetrievalSubscribe(
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			consumerLog.Warnf("Failed to close ADRF RetrievalSubscribe response body: %v", closeErr)
+			consumerLog.Debugf("failed to close ADRF RetrievalSubscribe response body: %v", closeErr)
 		}
 	}()
 
 	if resp.StatusCode != http.StatusCreated {
-		bodyBytes, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return "", fmt.Errorf("ADRF RetrievalSubscribe returned %d", resp.StatusCode)
-		}
-		return "", fmt.Errorf("ADRF RetrievalSubscribe returned %d: %s", resp.StatusCode, string(bodyBytes))
+		return "", fmt.Errorf("ADRF RetrievalSubscribe returned %d", resp.StatusCode)
 	}
 
 	location := resp.Header.Get("Location")
@@ -234,7 +229,7 @@ func (c *AdrfClient) RetrievalRequest(ctx context.Context, fetchCorrIds []string
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			consumerLog.Warnf("Failed to close ADRF RetrievalRequest response body: %v", closeErr)
+			consumerLog.Debugf("failed to close ADRF RetrievalRequest response body: %v", closeErr)
 		}
 	}()
 
@@ -248,11 +243,7 @@ func (c *AdrfClient) RetrievalRequest(ctx context.Context, fetchCorrIds []string
 	case http.StatusNoContent:
 		return nil, nil
 	default:
-		bodyBytes, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return nil, fmt.Errorf("ADRF RetrievalRequest %d", resp.StatusCode)
-		}
-		return nil, fmt.Errorf("ADRF RetrievalRequest %d: %s", resp.StatusCode, string(bodyBytes))
+		return nil, fmt.Errorf("ADRF RetrievalRequest %d", resp.StatusCode)
 	}
 }
 
@@ -293,7 +284,7 @@ func (c *AdrfClient) RetrievalUnsubscribe(ctx context.Context, subscriptionId st
 			continue
 		}
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			consumerLog.Warnf("Failed to close ADRF RetrievalUnsubscribe response body: %v", closeErr)
+			consumerLog.Debugf("failed to close ADRF RetrievalUnsubscribe response body: %v", closeErr)
 		}
 
 		switch resp.StatusCode {

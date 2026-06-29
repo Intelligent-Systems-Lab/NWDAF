@@ -25,13 +25,13 @@ func (a *AnlfService) SwapModel(newModelUrl, oldModelId string) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("failed to load new model %s: %w", newModelUrl, err)
 	}
-	logger.AnlfLog.Infof("SwapModel: loaded new model: url=%s modelId=%s", newModelUrl, newModelId)
+	logger.AnlfLog.Infof("SwapModel: loaded modelId=%s", newModelId)
 
 	if oldModelId != "" {
 		if unloadErr := a.mlClient.UnloadModel(a.nwdaf.CancelContext(), oldModelId); unloadErr != nil {
-			logger.AnlfLog.Warnf("SwapModel: failed to unload old model ID %s: %v", oldModelId, unloadErr)
+			logger.AnlfLog.Warnf("SwapModel: unload failed modelId=%s err=%v", oldModelId, unloadErr)
 		} else {
-			logger.AnlfLog.Infof("SwapModel: unloaded old model ID %s", oldModelId)
+			logger.AnlfLog.Infof("SwapModel: unloaded modelId=%s", oldModelId)
 		}
 	}
 
@@ -44,7 +44,7 @@ func (a *AnlfService) SwapModel(newModelUrl, oldModelId string) (string, error) 
 func (a *AnlfService) InitializeMlModel(
 	nwdafSubId string, mlInfo *nwdaf_context.MlModelInfo, modelUrl string,
 ) {
-	logger.AnlfLog.Infof("Initializing ML model: sub=%s, url=%s", nwdafSubId, modelUrl)
+	logger.AnlfLog.Infof("LoadMlModel: start sub=%s", nwdafSubId)
 
 	// Get ML service configuration
 	cfg := a.config()
@@ -67,11 +67,11 @@ func (a *AnlfService) InitializeMlModel(
 		existingModelId := shared.GetModelId()
 		if existingModelId != "" {
 			mlInfo.SetModelReady(existingModelId)
-			logger.AnlfLog.Infof("Reusing ML model: sub=%s, modelId=%s (already loaded)",
+			logger.AnlfLog.Infof("LoadMlModel: reused sub=%s modelId=%s",
 				nwdafSubId, existingModelId)
 		} else {
 			mlInfo.SetModelFailed(fmt.Errorf("shared model load failed for url=%s", modelUrl))
-			logger.AnlfLog.Errorf("Shared model load failed: sub=%s url=%s", nwdafSubId, modelUrl)
+			logger.AnlfLog.Errorf("LoadMlModel: shared-load-failed sub=%s", nwdafSubId)
 		}
 		return
 	}
@@ -87,7 +87,7 @@ func (a *AnlfService) InitializeMlModel(
 
 	modelId, err := a.mlClient.InitializeModel(a.nwdaf.CancelContext(), modelUrl)
 	if err != nil {
-		logger.AnlfLog.Errorf("Failed to initialize ML model: %v", err)
+		logger.AnlfLog.Errorf("LoadMlModel failed: sub=%s err=%v", nwdafSubId, err)
 		shared.LoadDone()
 		mlInfo.SetModelFailed(err)
 		return
@@ -95,6 +95,6 @@ func (a *AnlfService) InitializeMlModel(
 
 	shared.SetModelId(modelId)
 	mlInfo.SetModelReady(modelId)
-	logger.AnlfLog.Infof("ML model initialized: sub=%s, modelId=%s", nwdafSubId, modelId)
+	logger.AnlfLog.Infof("LoadMlModel: ready sub=%s modelId=%s", nwdafSubId, modelId)
 	// Note: accuracy monitor is started by the caller (processor) after this returns
 }

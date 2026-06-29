@@ -15,8 +15,6 @@ import (
 func (p *Processor) HandleCreateSubscription(
 	req *models.NnwdafEventsSubscription,
 ) (*models.NnwdafEventsSubscription, string, *models.ProblemDetails) {
-	logger.ProcLog.Infof("Processing CreateSubscription request")
-
 	// Phase 1: Hard validation (structure, event type, target period, etc.)
 	if problemDetails := p.validateSubscriptionRequest(req); problemDetails != nil {
 		return nil, "", problemDetails
@@ -68,8 +66,6 @@ func (p *Processor) HandleCreateSubscription(
 	ctx := nwdaf_context.GetSelf()
 	ctx.AddSubscription(subscription)
 
-	logger.ProcLog.Infof("Subscription created: %s", subscriptionId)
-
 	// Start notification scheduler for PERIODIC notifications
 	p.startSubscriptionScheduler(subscription)
 
@@ -79,7 +75,7 @@ func (p *Processor) HandleCreateSubscription(
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.ProcLog.Errorf("Panic in TriggerDataCollection for subscription %s: %v", subscriptionId, r)
+				logger.ProcLog.Errorf("TriggerDataCollection panic: sub=%s err=%v", subscriptionId, r)
 			}
 		}()
 		p.TriggerDataCollection(req.EventSubscriptions, subscriptionId)
@@ -87,9 +83,8 @@ func (p *Processor) HandleCreateSubscription(
 
 	// Prepare response
 	response := buildSubscriptionResponse(req, failEventReports)
-	if len(failEventReports) > 0 {
-		logger.ProcLog.Infof("Subscription created with %d failed events", len(failEventReports))
-	}
+	logger.ProcLog.Infof("CreateSubscription: created sub=%s failedEvents=%d",
+		subscriptionId, len(failEventReports))
 
 	return response, subscriptionId, nil
 }
@@ -99,8 +94,6 @@ func (p *Processor) HandleUpdateSubscription(
 	subscriptionId string,
 	req *models.NnwdafEventsSubscription,
 ) (*models.NnwdafEventsSubscription, *models.ProblemDetails) {
-	logger.ProcLog.Infof("Processing UpdateSubscription: %s", subscriptionId)
-
 	ctx := nwdaf_context.GetSelf()
 
 	// Check if subscription exists
@@ -154,27 +147,22 @@ func (p *Processor) HandleUpdateSubscription(
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.ProcLog.Errorf("Panic in TriggerDataCollection for subscription %s: %v", subscriptionId, r)
+				logger.ProcLog.Errorf("TriggerDataCollection panic: sub=%s err=%v", subscriptionId, r)
 			}
 		}()
 		p.TriggerDataCollection(req.EventSubscriptions, subscriptionId)
 	}()
 
-	logger.ProcLog.Infof("Subscription updated: %s", subscriptionId)
-
 	// Prepare response
 	response := buildSubscriptionResponse(req, failEventReports)
-	if len(failEventReports) > 0 {
-		logger.ProcLog.Infof("Subscription updated with %d failed events", len(failEventReports))
-	}
+	logger.ProcLog.Infof("UpdateSubscription: updated sub=%s failedEvents=%d",
+		subscriptionId, len(failEventReports))
 
 	return response, nil
 }
 
 // HandleDeleteSubscription processes subscription deletion requests
 func (p *Processor) HandleDeleteSubscription(subscriptionId string) *models.ProblemDetails {
-	logger.ProcLog.Infof("Processing DeleteSubscription: %s", subscriptionId)
-
 	ctx := nwdaf_context.GetSelf()
 
 	// Get subscription to stop scheduler before deletion
@@ -196,7 +184,7 @@ func (p *Processor) HandleDeleteSubscription(subscriptionId string) *models.Prob
 	p.cleanupMlModelState(subscriptionId)
 
 	ctx.DeleteSubscription(subscriptionId)
-	logger.ProcLog.Infof("Subscription deleted: %s", subscriptionId)
+	logger.ProcLog.Infof("DeleteSubscription: deleted sub=%s", subscriptionId)
 	return nil
 }
 
@@ -260,7 +248,6 @@ func (p *Processor) startSubscriptionScheduler(subscription *nwdaf_context.Subsc
 	}
 
 	onComplete := func(subId string, reason string) {
-		logger.ProcLog.Infof("Subscription %s notification completed: %s", subId, reason)
 		if sub := nwdaf_context.GetSelf().GetSubscription(subId); sub != nil {
 			sub.IsActive = false
 		}
@@ -815,7 +802,7 @@ func (p *Processor) cleanupDataCollection(subscriptionId string) {
 	resources := ctx.GetNwdafSubResources(subscriptionId)
 
 	if len(resources) == 0 {
-		logger.ProcLog.Debugf("No resources to cleanup for subscription: %s", subscriptionId)
+		logger.ProcLog.Debugf("CleanupDataCollection: no resources sub=%s", subscriptionId)
 		return
 	}
 
@@ -833,10 +820,11 @@ func (p *Processor) cleanupDataCollection(subscriptionId string) {
 				_, smfSubId, _ := smfSub.GetInfo()
 				err := consumer.UnsubscribeFromSmf(p.nwdaf.CancelContext(), res.SmfEndpoint, smfSubId)
 				if err != nil {
-					logger.ProcLog.Errorf("Failed to unsubscribe from SMF: %v", err)
+					logger.ProcLog.Errorf("DeleteSmfSubscription failed: corr=%s sub=%s err=%v",
+						res.CorrelationId, smfSubId, err)
 				} else {
-					logger.ProcLog.Infof("Unsubscribed from SMF: endpoint=%s, subId=%s",
-						res.SmfEndpoint, smfSubId)
+					logger.ProcLog.Infof("DeleteSmfSubscription: deleted corr=%s sub=%s",
+						res.CorrelationId, smfSubId)
 				}
 			}
 		}
@@ -845,5 +833,6 @@ func (p *Processor) cleanupDataCollection(subscriptionId string) {
 	// Delete cleanup tracking for this subscription
 	ctx.DeleteNwdafSubResources(subscriptionId)
 
-	logger.ProcLog.Infof("Data collection cleanup completed for subscription: %s", subscriptionId)
+	logger.ProcLog.Infof("CleanupDataCollection: completed sub=%s resources=%d",
+		subscriptionId, len(resources))
 }

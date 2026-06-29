@@ -3,6 +3,7 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -74,68 +75,64 @@ type ThroughputMeasurement struct {
 // parsePacketRate parses a TS29571 PacketRate string into pps (base unit).
 // Pattern: '<number> (pps|kpps|Mpps|Gpps|Tpps)'
 // k = ×1000, M = ×1000², G = ×1000³, T = ×1000⁴
-// Returns 0 on empty input or parse error.
-func parsePacketRate(s string) float64 {
+// Returns 0 on empty input.
+func parsePacketRate(s string) (float64, error) {
 	if s == "" {
-		return 0
+		return 0, nil
 	}
 	parts := strings.SplitN(s, " ", 2)
 	v, err := strconv.ParseFloat(parts[0], 64)
 	if err != nil {
-		logger.ProcLog.Warnf("Failed to parse PacketRate value %q: %v", s, err)
-		return 0
+		return 0, fmt.Errorf("parse packet rate %q: %w", s, err)
 	}
 	if len(parts) < 2 {
-		return v
+		return v, nil
 	}
 	switch parts[1] {
 	case "pps":
-		return v
+		return v, nil
 	case "kpps":
-		return v * 1e3
+		return v * 1e3, nil
 	case "Mpps":
-		return v * 1e6
+		return v * 1e6, nil
 	case "Gpps":
-		return v * 1e9
+		return v * 1e9, nil
 	case "Tpps":
-		return v * 1e12
+		return v * 1e12, nil
 	default:
-		logger.ProcLog.Warnf("Unknown PacketRate unit in %q, treating as pps", s)
-		return v
+		return v, fmt.Errorf("unknown packet rate unit in %q", s)
 	}
 }
 
 // parseBitRate parses a TS29571 BitRate string into bps (base unit).
 // Pattern: '<number> (bps|Kbps|Mbps|Gbps|Tbps)'
 // K = ×1000 (note: spec uses uppercase K, unlike SI kilo)
-// Returns 0 on empty input or parse error.
-func parseBitRate(s string) float64 {
+// Returns 0 on empty input.
+func parseBitRate(s string) (float64, error) {
 	if s == "" {
-		return 0
+		return 0, nil
 	}
 	parts := strings.SplitN(s, " ", 2)
 	v, err := strconv.ParseFloat(parts[0], 64)
 	if err != nil {
-		logger.ProcLog.Warnf("Failed to parse BitRate value %q: %v", s, err)
-		return 0
+		return 0, fmt.Errorf("parse bit rate %q: %w", s, err)
 	}
 	if len(parts) < 2 {
-		return v
+		return v, nil
 	}
 	switch parts[1] {
 	case "bps":
-		return v
+		return v, nil
 	case "Kbps":
-		return v * 1e3
+		return v * 1e3, nil
 	case "Mbps":
-		return v * 1e6
+		return v * 1e6, nil
 	case "Gbps":
-		return v * 1e9
+		return v * 1e9, nil
 	case "Tbps":
-		return v * 1e12
+		return v * 1e12, nil
 	default:
-		logger.ProcLog.Warnf("Unknown BitRate unit in %q, treating as bps", s)
-		return v
+		return v, fmt.Errorf("unknown bit rate unit in %q", s)
 	}
 }
 
@@ -143,9 +140,6 @@ func parseBitRate(s string) float64 {
 // Unified handler for both SUPI-based and Group ID subscriptions
 // Uses two-layer bucket storage: correlationId → TrafficDataBucket → ipAddress → TrafficData
 func (p *Processor) HandleUpfNotification(notif *UpfNotificationData) error {
-	logger.ProcLog.Infof("Processing UPF notification, items: %d, correlationId: %s",
-		len(notif.NotificationItems), notif.CorrelationId)
-
 	if notif.CorrelationId == "" {
 		logger.ProcLog.Warnf("UPF notification without correlationId, cannot route")
 		return nil
@@ -162,10 +156,17 @@ func (p *Processor) HandleUpfNotification(notif *UpfNotificationData) error {
 		sub.UpdateLastSeen()
 	}
 
+	processed := 0
+	malformed := 0
+
 	// Process each notification item into unified storage
 	for i := range notif.NotificationItems {
 		item := &notif.NotificationItems[i]
-		p.processUpfNotificationItemUnified(ctx, bucket, item)
+		itemProcessed, itemMalformed := p.processUpfNotificationItemUnified(ctx, bucket, item)
+		if itemProcessed {
+			processed++
+		}
+		malformed += itemMalformed
 	}
 
 	// Forward to ADRF buffer if configured.
@@ -188,6 +189,8 @@ func (p *Processor) HandleUpfNotification(notif *UpfNotificationData) error {
 		}
 	}
 
+	logger.ProcLog.Infof("UpfNotification: processed corr=%s items=%d stored=%d malformed=%d",
+		correlationId, len(notif.NotificationItems), processed, malformed)
 	return nil
 }
 
@@ -197,7 +200,7 @@ func (p *Processor) processUpfNotificationItemUnified(
 	ctx *nwdaf_context.NWDAFContext,
 	bucket *nwdaf_context.TrafficDataBucket,
 	item *UpfNotificationItem,
-) {
+) (bool, int) {
 	cfg := p.config()
 
 	// Get IP address (required field per TS 29.564)
@@ -206,8 +209,8 @@ func (p *Processor) processUpfNotificationItemUnified(
 		ipAddr = item.UeIpv6Prefix
 	}
 	if ipAddr == "" {
-		logger.ProcLog.Warnf("UPF notification item without IP address, skipping")
-		return
+		logger.ProcLog.Warnf("UpfNotificationItem: missing ip corr=%s", bucket.CorrelationId)
+		return false, 0
 	}
 
 	// Get or create TrafficData for this IP
@@ -219,7 +222,7 @@ func (p *Processor) processUpfNotificationItemUnified(
 	// Enrich with SUPI if available
 	if item.Supi != "" && data.Supi == "" {
 		data.Supi = item.Supi
-		logger.ProcLog.Debugf("Enriched IP %s with SUPI %s", ipAddr, item.Supi)
+		logger.ProcLog.Debugf("UpfNotificationItem: enriched corr=%s", bucket.CorrelationId)
 	}
 
 	// Enrich session metadata
@@ -240,11 +243,12 @@ func (p *Processor) processUpfNotificationItemUnified(
 	// beginning of the measurement period). Fall back to timeStamp if startTime is absent.
 	measurementTs := item.StartTime
 	if measurementTs.IsZero() {
-		logger.ProcLog.Debugf("UPF notification missing startTime, falling back to timeStamp (ip=%s)", ipAddr)
+		logger.ProcLog.Debugf("UpfNotificationItem: missing startTime corr=%s", bucket.CorrelationId)
 		measurementTs = item.TimeStamp
 	}
 
 	// Process Measurements and save to MongoDB
+	malformed := 0
 	for _, usage := range item.UserDataUsageMeasurements {
 		dataPoint := nwdaf_context.UpfDataPoint{
 			Timestamp: measurementTs,
@@ -275,27 +279,46 @@ func (p *Processor) processUpfNotificationItemUnified(
 			record.TotalNbOfPackets = v.TotalNbOfPackets
 			record.UlNbOfPackets = v.UlNbOfPackets
 			record.DlNbOfPackets = v.DlNbOfPackets
-			logger.ProcLog.Infof("UPF VOLUME: ip=%s, startTime=%s, total=%d, ul=%d, dl=%d, totalPkts=%d, ulPkts=%d, dlPkts=%d",
-				ipAddr, measurementTs.UTC().Format(time.RFC3339),
-				v.TotalVolume, v.UlVolume, v.DlVolume,
-				v.TotalNbOfPackets, v.UlNbOfPackets, v.DlNbOfPackets)
+			logger.ProcLog.Debugf("UpfVolume: corr=%s start=%s total=%d ul=%d dl=%d",
+				bucket.CorrelationId, measurementTs.UTC().Format(time.RFC3339),
+				v.TotalVolume, v.UlVolume, v.DlVolume)
 		}
 
 		if usage.ThroughputMeasurement != nil {
 			t := usage.ThroughputMeasurement
-			dataPoint.UlThroughput = parseBitRate(t.UlThroughput)
-			dataPoint.DlThroughput = parseBitRate(t.DlThroughput)
-			dataPoint.UlPacketThroughput = parsePacketRate(t.UlPacketThroughput)
-			dataPoint.DlPacketThroughput = parsePacketRate(t.DlPacketThroughput)
-			record.UlThroughput = parseBitRate(t.UlThroughput)
-			record.DlThroughput = parseBitRate(t.DlThroughput)
-			record.UlPacketThroughput = parsePacketRate(t.UlPacketThroughput)
-			record.DlPacketThroughput = parsePacketRate(t.DlPacketThroughput)
-			logger.ProcLog.Infof("UPF THROUGHPUT: ip=%s, ul=%s(%.0fbps), dl=%s(%.0fbps)",
-				ipAddr, t.UlThroughput, dataPoint.UlThroughput, t.DlThroughput, dataPoint.DlThroughput)
-			logger.ProcLog.Infof("UPF THROUGHPUT: ip=%s, ulPktRate=%s(%.2fpps), dlPktRate=%s(%.2fpps)",
-				ipAddr, t.UlPacketThroughput, dataPoint.UlPacketThroughput,
-				t.DlPacketThroughput, dataPoint.DlPacketThroughput)
+			var parseErrs []error
+			ulThroughput, parseErr := parseBitRate(t.UlThroughput)
+			if parseErr != nil {
+				parseErrs = append(parseErrs, fmt.Errorf("ulThroughput: %w", parseErr))
+			}
+			dlThroughput, parseErr := parseBitRate(t.DlThroughput)
+			if parseErr != nil {
+				parseErrs = append(parseErrs, fmt.Errorf("dlThroughput: %w", parseErr))
+			}
+			ulPacketThroughput, parseErr := parsePacketRate(t.UlPacketThroughput)
+			if parseErr != nil {
+				parseErrs = append(parseErrs, fmt.Errorf("ulPacketThroughput: %w", parseErr))
+			}
+			dlPacketThroughput, parseErr := parsePacketRate(t.DlPacketThroughput)
+			if parseErr != nil {
+				parseErrs = append(parseErrs, fmt.Errorf("dlPacketThroughput: %w", parseErr))
+			}
+			dataPoint.UlThroughput = ulThroughput
+			dataPoint.DlThroughput = dlThroughput
+			dataPoint.UlPacketThroughput = ulPacketThroughput
+			dataPoint.DlPacketThroughput = dlPacketThroughput
+			record.UlThroughput = dataPoint.UlThroughput
+			record.DlThroughput = dataPoint.DlThroughput
+			record.UlPacketThroughput = dataPoint.UlPacketThroughput
+			record.DlPacketThroughput = dataPoint.DlPacketThroughput
+			if len(parseErrs) > 0 {
+				malformed += len(parseErrs)
+				logger.ProcLog.Warnf("UpfNotificationItem: malformed throughput corr=%s count=%d first=%v",
+					bucket.CorrelationId, len(parseErrs), parseErrs[0])
+			}
+			logger.ProcLog.Debugf("UpfThroughput: corr=%s ul=%.0f dl=%.0f ulPps=%.2f dlPps=%.2f",
+				bucket.CorrelationId, dataPoint.UlThroughput, dataPoint.DlThroughput,
+				dataPoint.UlPacketThroughput, dataPoint.DlPacketThroughput)
 		}
 
 		// Save to MongoDB for ground truth lookup by the accuracy monitor.
@@ -305,7 +328,8 @@ func (p *Processor) processUpfNotificationItemUnified(
 			dbName := cfg.Configuration.Mongodb.Name
 			coll := mongoapi.Client.Database(dbName).Collection(nwdaf_context.UpfTrafficDataColl)
 			if err := p.insertUpfTrafficRecord(coll, record); err != nil {
-				logger.ProcLog.Errorf("Failed to save UPF TimeSeries data: %v", err)
+				logger.ProcLog.Errorf("UpfNotification: persist failed corr=%s err=%v",
+					bucket.CorrelationId, err)
 			}
 		}
 
@@ -318,6 +342,7 @@ func (p *Processor) processUpfNotificationItemUnified(
 	}
 
 	data.LastUpdate = measurementTs
+	return true, malformed
 }
 
 func (p *Processor) insertUpfTrafficRecord(

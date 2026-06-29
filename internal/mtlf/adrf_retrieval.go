@@ -91,7 +91,7 @@ func (m *MtlfService) runAdrfRetrainWorkflow(
 	nwdafCtx := nwdaf_context.GetSelf()
 	sharedModel := nwdafCtx.GetSharedModel(oldModelUrl)
 	if sharedModel == nil {
-		mtlfLog.Warnf("runAdrfRetrainWorkflow: no SharedModelInfo for model=%s, fallback to direct training", oldModelUrl)
+		mtlfLog.Warn("AdrfRetrain: fallback reason=no-shared-model")
 		m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
 		return
 	}
@@ -114,7 +114,7 @@ func (m *MtlfService) runAdrfRetrainWorkflow(
 	}
 
 	if len(infos) == 0 {
-		mtlfLog.Warnf("runAdrfRetrainWorkflow: no ADRF-tracked SUPIs for model=%s, fallback to direct training", oldModelUrl)
+		mtlfLog.Warn("AdrfRetrain: fallback reason=no-adrf-targets")
 		m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
 		return
 	}
@@ -159,15 +159,14 @@ func (m *MtlfService) runAdrfRetrainWorkflow(
 
 	// Start watchdog immediately after registering
 	job.watchdog = time.AfterFunc(watchdogDuration, func() {
-		mtlfLog.Warnf("ADRF watchdog fired for TID=%s: no terminationReq after %ds, proceeding with available data",
-			tid, int(watchdogDuration.Seconds()))
+		mtlfLog.Warnf("AdrfRetrain: watchdog task=%s timeout=%ds", tid, int(watchdogDuration.Seconds()))
 		job.closeFetchQueue()
 	})
 
 	// Execute RetrievalSubscribes
 	adrfClient := m.adrfClient
 	if adrfClient == nil {
-		mtlfLog.Warnf("runAdrfRetrainWorkflow: ADRF client not initialized for TID=%s, fallback to direct training", tid)
+		mtlfLog.Warnf("AdrfRetrain: fallback task=%s reason=no-client", tid)
 		m.activeJobs.Delete(tid)
 		job.watchdog.Stop()
 		m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
@@ -176,7 +175,7 @@ func (m *MtlfService) runAdrfRetrainWorkflow(
 	for _, info := range infos {
 		subscriptionId, err := adrfClient.RetrievalSubscribe(m.nwdaf.CancelContext(), info, tid, notifURI, timePeriod)
 		if err != nil {
-			mtlfLog.Warnf("runAdrfRetrainWorkflow: RetrievalSubscribe failed for supi=%s: %v", info.Supi, err)
+			mtlfLog.Warnf("CreateAdrfRetrievalSubscription failed: task=%s err=%v", tid, err)
 			job.mu.Lock()
 			job.totalSubs--
 			shouldConverge := job.totalSubs > 0 && job.termCount >= job.totalSubs
@@ -196,12 +195,14 @@ func (m *MtlfService) runAdrfRetrainWorkflow(
 	totalSubs := job.totalSubs
 	job.mu.Unlock()
 	if totalSubs == 0 {
-		mtlfLog.Warnf("runAdrfRetrainWorkflow: all ADRF RetrievalSubscribes failed for TID=%s", tid)
+		mtlfLog.Warnf("AdrfRetrain: fallback task=%s reason=subscribe-failed", tid)
 		m.activeJobs.Delete(tid)
 		job.watchdog.Stop()
 		m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
 		return
 	}
+
+	mtlfLog.Infof("AdrfRetrain: subscribed task=%s targets=%d", tid, totalSubs)
 
 	m.runFetchLoop(job, adrfCfg, mtlfCfg, adrfClient)
 }
@@ -216,7 +217,7 @@ func (m *MtlfService) runFetchLoop(
 ) {
 	defer func() {
 		if r := recover(); r != nil {
-			mtlfLog.Errorf("runFetchLoop TID=%s panicked: %v", job.tid, r)
+			mtlfLog.Errorf("FetchRetrainData panic: task=%s err=%v", job.tid, r)
 		}
 		job.watchdog.Stop()
 		m.activeJobs.Delete(job.tid)
@@ -224,7 +225,7 @@ func (m *MtlfService) runFetchLoop(
 
 	fetchBatchSize := adrfCfg.FetchBatchSizeOrDefault()
 	if m.daisyClient == nil {
-		mtlfLog.Errorf("runFetchLoop TID=%s: Daisy client not initialized", job.tid)
+		mtlfLog.Errorf("FetchRetrainData failed: task=%s reason=no-daisy-client", job.tid)
 		cleanupSubscriptions(job, adrfClient)
 		return
 	}
@@ -233,7 +234,7 @@ func (m *MtlfService) runFetchLoop(
 	shutdown := false
 	cancelCtx := m.nwdaf.CancelContext()
 	if cancelCtx == nil {
-		mtlfLog.Warnf("runFetchLoop TID=%s: missing app cancel context", job.tid)
+		mtlfLog.Warnf("FetchRetrainData: skipped task=%s reason=no-app-context", job.tid)
 		cleanupSubscriptions(job, adrfClient)
 		return
 	}
@@ -247,7 +248,7 @@ loop:
 		case <-cancelCtx.Done():
 			shutdown = true
 			job.closeFetchQueue()
-			mtlfLog.Infof("runFetchLoop TID=%s stopping due to app shutdown", job.tid)
+			mtlfLog.Infof("FetchRetrainData: stopped task=%s reason=shutdown", job.tid)
 			break loop
 		case ids, ok = <-job.fetchCh:
 			if !ok {
@@ -263,19 +264,19 @@ loop:
 			}
 			chunk := ids[i:end]
 
-			mtlfLog.Debugf("runFetchLoop TID=%s: fetching id=%s", job.tid, chunk[0])
+			mtlfLog.Debugf("FetchRetrainData: request task=%s ids=%d", job.tid, len(chunk))
 			record, err := adrfClient.RetrievalRequest(m.nwdaf.CancelContext(), chunk)
 			if err != nil {
-				mtlfLog.Errorf("runFetchLoop TID=%s: RetrievalRequest failed: %v", job.tid, err)
+				mtlfLog.Errorf("FetchRetrainData failed: task=%s err=%v", job.tid, err)
 				continue
 			}
 			if record == nil {
-				mtlfLog.Debugf("runFetchLoop TID=%s: id=%s no data (204)", job.tid, chunk[0])
+				mtlfLog.Debugf("FetchRetrainData: empty task=%s", job.tid)
 				continue
 			}
 
 			if record.DataNotif == nil || len(record.DataNotif.UpfEventNotifs) == 0 {
-				mtlfLog.Debugf("runFetchLoop TID=%s: id=%s empty dataNotif", job.tid, chunk[0])
+				mtlfLog.Debugf("FetchRetrainData: empty-data task=%s", job.tid)
 				continue
 			}
 			fetched++
@@ -286,7 +287,7 @@ loop:
 			}
 			groupId := job.supiToGroup[supi]
 			if supi != "" && groupId == "" {
-				mtlfLog.Warnf("runFetchLoop TID=%s: SUPI %s not in any group, uploading with empty groupId", job.tid, supi)
+				mtlfLog.Debugf("UploadRetrainData: task=%s group=unresolved", job.tid)
 			}
 
 			if uploadErr := m.daisyClient.UploadData(
@@ -295,21 +296,21 @@ loop:
 				groupId,
 				record.DataNotif.UpfEventNotifs,
 			); uploadErr != nil {
-				mtlfLog.Errorf("runFetchLoop TID=%s: UploadData failed: %v", job.tid, uploadErr)
+				mtlfLog.Errorf("UploadRetrainData failed: task=%s err=%v", job.tid, uploadErr)
 			} else {
-				mtlfLog.Debugf("runFetchLoop TID=%s: uploaded id=%s supi=%s groupId=%s", job.tid, chunk[0], supi, groupId)
+				mtlfLog.Debugf("UploadRetrainData: uploaded task=%s records=%d", job.tid, len(record.DataNotif.UpfEventNotifs))
 				uploaded++
 			}
 		}
 	}
 
-	mtlfLog.Infof("runFetchLoop TID=%s complete: ids=%d fetched=%d uploaded=%d",
+	mtlfLog.Infof("FetchRetrainData: completed task=%s ids=%d fetched=%d uploaded=%d",
 		job.tid, totalIDs, fetched, uploaded)
 
 	// cleanup subscriptions before deciding whether training should continue
 	cleanupSubscriptions(job, adrfClient)
 	if shutdown {
-		mtlfLog.Infof("runFetchLoop TID=%s: skipping Daisy dispatch during shutdown", job.tid)
+		mtlfLog.Infof("SubmitTrainingTask: skipped task=%s reason=shutdown", job.tid)
 		return
 	}
 	// activeJobs.Delete is handled by defer above
@@ -320,7 +321,7 @@ loop:
 func (m *MtlfService) HandleAdrfRetrievalNotify(notifCorrId string, fetchCorrIds []string, terminationReq bool) {
 	val, ok := m.activeJobs.Load(notifCorrId)
 	if !ok {
-		mtlfLog.Warnf("HandleAdrfRetrievalNotify: unknown notifCorrId=%s", notifCorrId)
+		mtlfLog.Warnf("HandleAdrfRetrievalNotify: unknown task=%s", notifCorrId)
 		return
 	}
 	job := val.(*retrainJob)
@@ -337,17 +338,17 @@ func (m *MtlfService) HandleAdrfRetrievalNotify(notifCorrId string, fetchCorrIds
 	termCount, totalSubs := job.termCount, job.totalSubs
 	job.mu.Unlock()
 
-	mtlfLog.Infof("RetrievalNotify TID=%s: ids=%d terminationReq=%t termCount=%d/%d",
+	mtlfLog.Infof("HandleAdrfRetrievalNotify: task=%s ids=%d terminationReq=%t termCount=%d/%d",
 		notifCorrId, len(fetchCorrIds), terminationReq, termCount, totalSubs)
 
 	cancelCtx := m.nwdaf.CancelContext()
 	if cancelCtx == nil {
-		mtlfLog.Warnf("RetrievalNotify TID=%s: missing app cancel context", notifCorrId)
+		mtlfLog.Warnf("HandleAdrfRetrievalNotify: task=%s reason=no-app-context", notifCorrId)
 		return
 	}
 	if !isClosed && len(fetchCorrIds) > 0 && !job.enqueueFetchIDs(cancelCtx, fetchCorrIds) {
 		if cancelCtx.Err() != nil {
-			mtlfLog.Infof("RetrievalNotify TID=%s: dropping ids during shutdown", notifCorrId)
+			mtlfLog.Infof("HandleAdrfRetrievalNotify: task=%s drop=shutdown", notifCorrId)
 		}
 	}
 
@@ -372,7 +373,7 @@ func cleanupSubscriptions(job *retrainJob, client consumer.AdrfServiceAPI) {
 		err := client.RetrievalUnsubscribe(cleanupCtx, subId)
 		cancel()
 		if err != nil {
-			mtlfLog.Warnf("cleanupSubscriptions: failed to unsubscribe %s: %v", subId, err)
+			mtlfLog.Warnf("DeleteAdrfRetrievalSubscription failed: sub=%s err=%v", subId, err)
 		}
 	}
 }

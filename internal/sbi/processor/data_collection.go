@@ -1,7 +1,6 @@
 package processor
 
 import (
-	"fmt"
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
@@ -17,14 +16,14 @@ func (p *Processor) TriggerDataCollection(
 	subscriptionId string,
 ) {
 	if cancelCtx := p.nwdaf.CancelContext(); cancelCtx != nil && cancelCtx.Err() != nil {
-		logger.ProcLog.Infof("Skipping data collection dispatch during shutdown: sub=%s", subscriptionId)
+		logger.ProcLog.Infof("TriggerDataCollection: skipped sub=%s reason=shutdown", subscriptionId)
 		return
 	}
 
 	// Guard: subscription may have been deleted during async execution
 	ctx := nwdaf_context.GetSelf()
 	if ctx.GetSubscription(subscriptionId) == nil {
-		logger.ProcLog.Warnf("Subscription %s not found, skipping data collection", subscriptionId)
+		logger.ProcLog.Debugf("TriggerDataCollection: skipped sub=%s reason=deleted", subscriptionId)
 		return
 	}
 
@@ -123,7 +122,7 @@ func (p *Processor) triggerUeCommunicationCollection(
 				logger.ProcLog.Warnf("Failed to resolve groupId %s: %v", groupId, err)
 				continue
 			}
-			logger.ProcLog.Infof("Resolved groupId %s to %d SUPIs", groupId, len(supis))
+			logger.ProcLog.Debugf("ResolveGroupTargets: members=%d", len(supis))
 			for _, supi := range supis {
 				targets = append(targets, DataCollectionTarget{
 					Supi:            supi,
@@ -181,8 +180,8 @@ func (p *Processor) triggerTargetDataCollection(
 
 			if !isNew {
 				_, _, refCount := sub.GetInfo()
-				logger.ProcLog.Infof("Reusing SMF subscription for %s (refCount=%d)",
-					targetId, refCount)
+				logger.ProcLog.Infof("CreateSmfSubscription: reused corr=%s refCount=%d",
+					correlationId, refCount)
 			} else {
 				// Build SMF subscription options (always SUPI-based)
 				eventSubs := consumer.BuildUpfEventSubs(upfNotifUri, true, true)
@@ -198,8 +197,8 @@ func (p *Processor) triggerTargetDataCollection(
 				subId, err := smfConsumer.SubscribeToSmf(p.nwdaf.CancelContext(), smfEndpoint, opts)
 				if err != nil {
 					ctx.ReleaseSmfSubscription(correlationId, subscriptionId)
-					logger.ProcLog.Errorf("Failed to subscribe SMF for %s: %v",
-						target.Identifier(), err)
+					logger.ProcLog.Errorf("CreateSmfSubscription failed: corr=%s err=%v",
+						correlationId, err)
 					continue
 				}
 
@@ -211,12 +210,8 @@ func (p *Processor) triggerTargetDataCollection(
 				sub.SmfSubId = subId
 				sub.Unlock()
 
-				logMsg := fmt.Sprintf("SMF subscription created: %s, subId=%s, corrId=%s",
-					target.Identifier(), subId, correlationId)
-				if target.OriginalGroupId != "" {
-					logMsg += fmt.Sprintf(" (from group=%s)", target.OriginalGroupId)
-				}
-				logger.ProcLog.Info(logMsg)
+				logger.ProcLog.Infof("CreateSmfSubscription: created corr=%s sub=%s",
+					correlationId, subId)
 			}
 
 			// Record SMF subscription parameters for ADRF storage
@@ -249,7 +244,7 @@ func (p *Processor) triggerMlModelProvisioning(
 	subscriptionId string,
 ) {
 	if cancelCtx := p.nwdaf.CancelContext(); cancelCtx != nil && cancelCtx.Err() != nil {
-		logger.ProcLog.Infof("Skipping ML model provisioning dispatch during shutdown: sub=%s", subscriptionId)
+		logger.ProcLog.Infof("CreateMtlfSubscription: skipped sub=%s reason=shutdown", subscriptionId)
 		return
 	}
 
@@ -265,7 +260,7 @@ func (p *Processor) triggerMlModelProvisioning(
 	// StaticModelUrl is under mtlf (Daisy/1st-party MTLF) config
 	mtlfCfg := cfg.Configuration.Mtlf
 	if mtlfCfg != nil && mtlfCfg.StaticModelUrl != "" {
-		logger.ProcLog.Infof("Using static ML model URL: %s", mtlfCfg.StaticModelUrl)
+		logger.ProcLog.Infof("LoadMlModel: use static model sub=%s", subscriptionId)
 
 		mlInfo := nwdaf_context.NewMlModelInfo(eventSub.Event, "static-url")
 		mlInfo.SetModelUrl(mtlfCfg.StaticModelUrl)
@@ -320,11 +315,11 @@ func (p *Processor) triggerMlModelProvisioning(
 
 	subId, err := mtlfConsumer.SubscribeToMtlf(p.nwdaf.CancelContext(), mtlfEndpoint, opts)
 	if err != nil {
-		logger.ProcLog.Errorf("Failed to subscribe to External MTLF for subscription %s: %v", subscriptionId, err)
+		logger.ProcLog.Errorf("CreateMtlfSubscription failed: sub=%s err=%v", subscriptionId, err)
 		mlInfo.SetModelFailed(err)
 		return
 	}
 
 	mlInfo.SetMtlfSubscription(subId)
-	logger.ProcLog.Infof("External MTLF subscription created for %s: mtlfSubId=%s", subscriptionId, subId)
+	logger.ProcLog.Infof("CreateMtlfSubscription: created sub=%s mtlfSub=%s", subscriptionId, subId)
 }

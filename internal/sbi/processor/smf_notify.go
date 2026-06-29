@@ -12,20 +12,21 @@ import (
 // Note: SMF events provide session lifecycle info (establish/release)
 // Traffic volume data comes from UPF notifications
 func (p *Processor) HandleSmfNotification(notification *models.NsmfEventExposureNotification) error {
-	logger.ProcLog.Infof("Received SMF notification, notifId: %s, events: %d",
-		notification.NotifId, len(notification.EventNotifs))
-
 	ctx := nwdaf_context.GetSelf()
 	correlationId := notification.NotifId
+	failures := 0
 
 	for i := range notification.EventNotifs {
 		event := &notification.EventNotifs[i]
 		if err := p.processSmfEvent(ctx, correlationId, event); err != nil {
-			logger.ProcLog.Errorf("Failed to process event: %v", err)
+			failures++
+			logger.ProcLog.Errorf("SmfNotification: event failed notifId=%s err=%v", correlationId, err)
 			continue
 		}
 	}
 
+	logger.ProcLog.Infof("SmfNotification: processed notifId=%s events=%d failures=%d",
+		correlationId, len(notification.EventNotifs), failures)
 	return nil
 }
 
@@ -38,12 +39,12 @@ func (p *Processor) processSmfEvent(
 ) error {
 	supi := event.Supi
 	if supi == "" {
-		logger.ProcLog.Warnf("Event missing SUPI, skipping")
+		logger.ProcLog.Warnf("SmfNotification: missing supi notifId=%s pduSessId=%d", correlationId, event.PduSeId)
 		return nil
 	}
 
-	logger.ProcLog.Debugf("Processing SMF event: type=%s, supi=%s, pduSessId=%d",
-		event.Event, supi, event.PduSeId)
+	logger.ProcLog.Debugf("SmfNotificationEvent: notifId=%s event=%s pduSessId=%d",
+		correlationId, event.Event, event.PduSeId)
 
 	// Handle specific event types
 	switch event.Event {
@@ -54,7 +55,7 @@ func (p *Processor) processSmfEvent(
 	case models.SmfEvent_UP_STATUS_INFO:
 		p.handleUpStatusInfo(ctx, correlationId, event)
 	default:
-		logger.ProcLog.Debugf("Unhandled event type: %s", event.Event)
+		logger.ProcLog.Debugf("SmfNotificationEvent: notifId=%s unhandled=%s", correlationId, event.Event)
 	}
 
 	return nil
@@ -100,8 +101,8 @@ func (p *Processor) handlePduSessionEstablished(
 		startTime = time.Now()
 	}
 
-	logger.ProcLog.Infof("PDU Session Established: supi=%s, pduSessId=%d, dnn=%s, time=%v",
-		supi, event.PduSeId, event.Dnn, startTime)
+	logger.ProcLog.Debugf("SmfNotificationEvent: notifId=%s event=%s pduSessId=%d time=%s",
+		correlationId, event.Event, event.PduSeId, startTime.UTC().Format(time.RFC3339))
 }
 
 // handlePduSessionReleased handles PDU session release events
@@ -110,8 +111,6 @@ func (p *Processor) handlePduSessionReleased(
 	correlationId string,
 	event *models.SmfEventExposureEventNotification,
 ) {
-	supi := event.Supi
-
 	var endTime time.Time
 	if event.TimeStamp != nil {
 		endTime = *event.TimeStamp
@@ -119,8 +118,8 @@ func (p *Processor) handlePduSessionReleased(
 		endTime = time.Now()
 	}
 
-	logger.ProcLog.Infof("PDU Session Released: supi=%s, pduSessId=%d, time=%v",
-		supi, event.PduSeId, endTime)
+	logger.ProcLog.Debugf("SmfNotificationEvent: notifId=%s event=%s pduSessId=%d time=%s",
+		correlationId, event.Event, event.PduSeId, endTime.UTC().Format(time.RFC3339))
 }
 
 // handleUpStatusInfo handles User Plane status information events
@@ -129,8 +128,6 @@ func (p *Processor) handleUpStatusInfo(
 	correlationId string,
 	event *models.SmfEventExposureEventNotification,
 ) {
-	supi := event.Supi
-
 	var eventTime time.Time
 	if event.TimeStamp != nil {
 		eventTime = *event.TimeStamp
@@ -144,9 +141,11 @@ func (p *Processor) handleUpStatusInfo(
 			status := pduInfo.SessInfo.PduSessStatus
 			switch status {
 			case models.SmfEventExposurePduSessionStatus_ACTIVATED:
-				logger.ProcLog.Infof("UP Status ACTIVATED: supi=%s, time=%v", supi, eventTime)
+				logger.ProcLog.Debugf("SmfNotificationEvent: notifId=%s status=%s time=%s",
+					correlationId, status, eventTime.UTC().Format(time.RFC3339))
 			case models.SmfEventExposurePduSessionStatus_DEACTIVATED:
-				logger.ProcLog.Infof("UP Status DEACTIVATED: supi=%s, time=%v", supi, eventTime)
+				logger.ProcLog.Debugf("SmfNotificationEvent: notifId=%s status=%s time=%s",
+					correlationId, status, eventTime.UTC().Format(time.RFC3339))
 			}
 		}
 	}

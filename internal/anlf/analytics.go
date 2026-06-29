@@ -78,14 +78,14 @@ func GenerateUeCommunicationAnalytics(
 			return result
 		}
 		if err == errNoHistoricalData {
-			anlfLog.Debugf("ML prediction skipped for %s: %v", nwdafSubId, err)
+			anlfLog.Debugf("MlInference: skipped sub=%s reason=%v", nwdafSubId, err)
 		} else {
-			anlfLog.Warnf("ML prediction failed for %s: %v", nwdafSubId, err)
+			anlfLog.Warnf("MlInference failed: sub=%s err=%v", nwdafSubId, err)
 		}
 	}
 
 	// Per TS 23.288: Return 0 confidence when insufficient resources for analytics
-	anlfLog.Debugf("Insufficient resources for ML analytics, returning 0 confidence for %s", nwdafSubId)
+	anlfLog.Debugf("MlInference: fallback sub=%s confidence=0", nwdafSubId)
 	return models.UeCommunication{
 		CommDur:    0,
 		Ts:         &now,
@@ -129,15 +129,12 @@ func generateMlBasedUeCommunication(
 	baseTargetTime, err := baseTargetTimeFromHistorical(last.Ts, samplingInterval)
 	baseTargetTimeFallback := false
 	if err != nil {
-		anlfLog.Warnf(
-			"failed to derive base target time from last historical slot ts=%q; falling back to snappedNow: %v",
-			last.Ts, err,
-		)
+		anlfLog.Debugf("LatestAggregatedSlot: fallback sub=%s err=%v", nwdafSubId, err)
 		baseTargetTime = snappedNow
 		baseTargetTimeFallback = true
 	}
 	target := inferenceTargetLabel(nwdafSubId, ctx)
-	anlfLog.Infof("latest aggregated slot: %s %s ts=%s"+
+	anlfLog.Debugf("LatestAggregatedSlot: sub=%s %s ts=%s"+
 		" ulVol=%.0f dlVol=%.0f totalVol=%.0f"+
 		" ulPkts=%.0f dlPkts=%.0f totalPkts=%.0f"+
 		" ulThr=%.4f dlThr=%.4f ulPktThr=%.4f dlPktThr=%.4f"+
@@ -167,7 +164,7 @@ func generateMlBasedUeCommunication(
 		if resolvedScopeKey, ok := resolveMonitoringScope(nwdafSubId, ctx); ok {
 			scopeKey = resolvedScopeKey
 		} else {
-			anlfLog.Warnf("Accuracy monitoring scope unresolved, recording legacy prediction only: sub=%s",
+			anlfLog.Debugf("MlInference: scope unresolved sub=%s",
 				nwdafSubId)
 		}
 	}
@@ -200,8 +197,8 @@ func generateMlBasedUeCommunication(
 	commDur := int32(outputWindow * samplingInterval)
 	targetEndTime := predictionTargetTime(baseTargetTime, samplingInterval, len(resp.PredictedData)-1)
 
-	anlfLog.Infof(
-		"ML inference: sub=%s %s steps=%d ulVol=%d dlVol=%d confidence=%d commDur=%ds ueCommTs=%s targetRange=[%s..%s]",
+	anlfLog.Debugf(
+		"MlInference: sub=%s %s steps=%d ulVol=%d dlVol=%d confidence=%d commDur=%ds ueCommTs=%s targetRange=[%s..%s]",
 		nwdafSubId, inferenceTargetLabel(nwdafSubId, ctx), len(resp.PredictedData), totalUl, totalDl, avgConfidence, commDur,
 		baseTargetTime.Format(time.RFC3339), baseTargetTime.Format(time.RFC3339), targetEndTime.Format(time.RFC3339),
 	)
@@ -366,8 +363,7 @@ func alignAndZipInMemory(
 				n := int64(math.Round(float64(dp.Timestamp.Unix()-anchorUnix) / float64(si)))
 				centerUnix := anchorUnix + n*si
 				if _, exists := perIP[centerUnix]; exists {
-					anlfLog.Warnf("dedup collision ip=%s: t=%d and previous both snap to center=%d (anchor=%d si=%d), keeping later",
-						td.IpAddress, dp.Timestamp.Unix(), centerUnix, anchorUnix, si)
+					anlfLog.Debugf("DedupCollision: center=%d anchor=%d si=%d", centerUnix, anchorUnix, si)
 				}
 				perIP[centerUnix] = dp
 			}

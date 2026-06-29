@@ -112,7 +112,7 @@ func (s *SmfSubscription) RemoveReference(nwdafSubId string) bool {
 	defer s.mu.Unlock()
 
 	if !s.NwdafSubIds[nwdafSubId] {
-		logger.CtxLog.Warnf("Trying to remove non-existent reference: %s", nwdafSubId)
+		logger.CtxLog.Warnf("RemoveSmfReference: missing sub=%s", nwdafSubId)
 		return false
 	}
 
@@ -187,7 +187,7 @@ func (b *TrafficDataBucket) GetOrCreate(ipAddr string) *TrafficData {
 	b.dataMap[ipAddr] = data
 	b.LastUpdate = time.Now()
 
-	logger.CtxLog.Debugf("Created TrafficData: correlationId=%s, ip=%s", b.CorrelationId, ipAddr)
+	logger.CtxLog.Debugf("CreateTrafficData: corr=%s", b.CorrelationId)
 	return data
 }
 
@@ -362,7 +362,7 @@ func (c *NWDAFContext) GetOrCreateSmfSubscription(correlationId, nwdafSubId stri
 		return sub, false
 	}
 
-	logger.CtxLog.Infof("Created SmfSubscription: correlationId=%s", correlationId)
+	logger.CtxLog.Debugf("CreateSmfSubscription: corr=%s", correlationId)
 	return newSub, true
 }
 
@@ -386,7 +386,7 @@ func (c *NWDAFContext) ReleaseSmfSubscription(
 ) (shouldDelete bool, sub *SmfSubscription) {
 	val, ok := c.smfSubscriptions.Load(correlationId)
 	if !ok {
-		logger.CtxLog.Warnf("SmfSubscription not found for release: %s", correlationId)
+		logger.CtxLog.Warnf("ReleaseSmfSubscription: missing corr=%s", correlationId)
 		return false, nil
 	}
 
@@ -401,8 +401,7 @@ func (c *NWDAFContext) ReleaseSmfSubscription(
 		targetId := sub.Identifier()
 		c.RemoveSmfCorrelationId(targetId, sub.SmfEndpoint)
 
-		logger.CtxLog.Infof("Deleted SmfSubscription (refCount=0): %s, target=%s",
-			correlationId, targetId)
+		logger.CtxLog.Debugf("DeleteSmfSubscription: corr=%s target=%s", correlationId, targetId)
 		return true, sub
 	}
 
@@ -545,13 +544,7 @@ func (c *NWDAFContext) AddNwdafSubResource(nwdafSubId string, resource NwdafSubR
 	resources = append(resources, resource)
 	c.nwdafSubResourcesMap.Store(nwdafSubId, resources)
 
-	if resource.OriginalGroupId != "" {
-		logger.CtxLog.Debugf("Added resource for nwdafSubId=%s: endpoint=%s, supi=%s (from group=%s)",
-			nwdafSubId, resource.SmfEndpoint, resource.Supi, resource.OriginalGroupId)
-	} else {
-		logger.CtxLog.Debugf("Added resource for nwdafSubId=%s: endpoint=%s, supi=%s",
-			nwdafSubId, resource.SmfEndpoint, resource.Supi)
-	}
+	logger.CtxLog.Debugf("AddNwdafSubResource: sub=%s resources=%d", nwdafSubId, len(resources))
 }
 
 // GetNwdafSubResources retrieves all resources for an NWDAF subscription

@@ -123,7 +123,7 @@ func (c *NWDAFContext) AddSubscription(sub *Subscription) {
 	sub.UpdatedAt = sub.CreatedAt
 	c.subscriptions[sub.ID] = sub
 
-	logger.CtxLog.Infof("Added subscription: %s", sub.ID)
+	logger.CtxLog.Debugf("AddSubscription: sub=%s", sub.ID)
 }
 
 // GetSubscription retrieves a subscription by ID
@@ -146,7 +146,7 @@ func (c *NWDAFContext) UpdateSubscription(sub *Subscription) bool {
 	sub.UpdatedAt = time.Now()
 	c.subscriptions[sub.ID] = sub
 
-	logger.CtxLog.Infof("Updated subscription: %s", sub.ID)
+	logger.CtxLog.Debugf("UpdateSubscription: sub=%s", sub.ID)
 	return true
 }
 
@@ -160,7 +160,7 @@ func (c *NWDAFContext) DeleteSubscription(id string) bool {
 	}
 
 	delete(c.subscriptions, id)
-	logger.CtxLog.Infof("Deleted subscription: %s", id)
+	logger.CtxLog.Debugf("DeleteSubscription: sub=%s", id)
 	return true
 }
 

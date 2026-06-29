@@ -41,6 +41,9 @@ func (s *Server) HandleAdrfRetrievalNotify(c *gin.Context) {
 		fetchCorrIds = notif.FetchInstruct.FetchCorrIds
 	}
 
+	logger.SBILog.Infof("Handle AdrfRetrievalNotify: task=%s ids=%d terminationReq=%t",
+		notif.NotifCorrId, len(fetchCorrIds), notif.TerminationReq)
+
 	s.Processor().HandleAdrfRetrievalNotify(notif.NotifCorrId, fetchCorrIds, notif.TerminationReq)
 
 	c.Status(http.StatusNoContent)

@@ -21,18 +21,19 @@ func NewGroupResolver(cfg *factory.GroupMembershipConfig) *GroupResolver {
 	}
 
 	if cfg == nil || len(cfg.Groups) == 0 {
-		logger.CtxLog.Warnf("GroupResolver: no group membership configured")
+		logger.CtxLog.Debug("GroupResolver: no group membership configured")
 		return resolver
 	}
 
+	registered := 0
 	for _, group := range cfg.Groups {
 		if group.GroupId == "" {
 			continue
 		}
 		resolver.groups[group.GroupId] = group.Supis
-		logger.CtxLog.Infof("GroupResolver: registered group %s with %d SUPIs",
-			group.GroupId, len(group.Supis))
+		registered++
 	}
+	logger.CtxLog.Debugf("GroupResolver: registered groups=%d", registered)
 
 	return resolver
 }

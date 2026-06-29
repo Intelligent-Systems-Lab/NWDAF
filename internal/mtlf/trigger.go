@@ -205,7 +205,7 @@ func (m *MtlfService) HandleAccuracyReports(
 
 		hitReason := composeHitReason(degradationHit, chronicHit, lowTrafficHit)
 
-		mtlfLog.Infof(
+		mtlfLog.Debugf(
 			"Accuracy policy [%s]: scope=%s metric=%s current=%.4f mean=%.4f std=%.4f "+
 				"zscore=%.4f degradationEligible=%t degradationSignal=%s "+
 				"degradationBaselineReady=%t recentBaselineReady=%t actualTrafficScale=%.4f recentTrafficScaleMean=%.4f "+
@@ -246,9 +246,8 @@ func (m *MtlfService) HandleAccuracyReports(
 
 		if degradationHits >= requiredHits || chronicHits >= requiredHits || lowTrafficHits >= requiredHits {
 			mtlfLog.Warnf(
-				"Retrain trigger [%s]: scope=%s metric=%s current=%.4f "+
+				"RetrainTrigger: scope=%s metric=%s current=%.4f "+
 					"degradationHits=%d/%d chronicHits=%d/%d lowTrafficHits=%d/%d reason=%s",
-				modelUrl,
 				report.ScopeKey,
 				primaryMetric,
 				current,

@@ -112,15 +112,15 @@ func NewConsumer(nwdaf nwdaf) (*Consumer, error) {
 		if cfg != nil && cfg.Configuration != nil {
 			if mlCfg := cfg.Configuration.MlService; mlCfg != nil && mlCfg.Enabled && mlCfg.Endpoint != "" {
 				c.mlService = NewMlServiceClient(mlCfg.Endpoint)
-				consumerLog.Infof("ML service client initialized: endpoint=%s", mlCfg.Endpoint)
+				consumerLog.Info("ML service client initialized")
 			}
 			if mtlfCfg := cfg.Configuration.Mtlf; mtlfCfg != nil && mtlfCfg.Enabled && mtlfCfg.Endpoint != "" {
 				c.daisyService = NewDaisyClient(mtlfCfg.Endpoint)
-				consumerLog.Infof("Daisy client initialized: endpoint=%s", mtlfCfg.Endpoint)
+				consumerLog.Info("Daisy client initialized")
 			}
 			if cfg.Configuration.Adrf.AdrfEnabled() {
 				c.Adrf = NewAdrfClient(cfg.Configuration.Adrf.Url)
-				consumerLog.Infof("ADRF client initialized: url=%s", cfg.Configuration.Adrf.Url)
+				consumerLog.Info("ADRF client initialized")
 			}
 		}
 	}

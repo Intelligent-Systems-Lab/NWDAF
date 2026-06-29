@@ -40,7 +40,7 @@ func (s *Server) HandleDaisyTrainingComplete(c *gin.Context) {
 		return
 	}
 
-	logger.SBILog.Infof("Received Daisy training callback: taskId=%s status=%s",
+	logger.SBILog.Infof("Handle DaisyTrainingComplete: task=%s status=%s",
 		notif.TaskId, notif.Status)
 
 	s.Processor().HandleDaisyCallback(notif.TaskId, notif.ModelUrl, notif.Status, notif.Error)

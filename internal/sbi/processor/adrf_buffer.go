@@ -53,10 +53,10 @@ func (b *adrfBuffer) flushOne(correlationId string, info *nwdaf_context.AdrfSmfI
 
 	storeTransId, err := b.client.StorageRequest(b.baseCtx, info, notifJSONs)
 	if err != nil {
-		logger.ProcLog.Warnf("ADRF StorageRequest failed for correlationId=%s: %v", correlationId, err)
+		logger.ProcLog.Warnf("StoreAdrfRecord failed: corr=%s err=%v", correlationId, err)
 	} else {
-		logger.ProcLog.Infof("ADRF stored: storeTransId=%s supi=%s count=%d",
-			storeTransId, info.Supi, len(notifJSONs))
+		logger.ProcLog.Infof("StoreAdrfRecord: stored corr=%s store=%s count=%d",
+			correlationId, storeTransId, len(notifJSONs))
 	}
 
 	delete(b.pending, correlationId)

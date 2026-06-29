@@ -185,14 +185,14 @@ func (a *AnlfService) checkModelAccuracy(
 	reports := buildAccuracyReports(modelUrl, scopedPairs, inferenceNum)
 
 	pseudoAccuracy := int(math.Max(0, 100-deviation*50))
-	anlfLog.Infof("Accuracy [%s]: deviation=%.4f, accuracy=%d%%, samples=%d, inferences=%d",
+	anlfLog.Debugf("Accuracy: model=%s deviation=%.4f accuracy=%d%% samples=%d inferences=%d",
 		modelUrl, deviation, pseudoAccuracy, len(pairs), inferenceNum)
 	for _, report := range reports {
-		anlfLog.Infof("Accuracy scope [%s]: scope=%s samples=%d metrics=%s",
+		anlfLog.Debugf("AccuracyScope: model=%s scope=%s samples=%d metrics=%s",
 			modelUrl, report.ScopeKey, report.SampleCount, formatMetrics(report.Metrics))
 	}
 	if unscopedMatches > 0 {
-		anlfLog.Warnf("Accuracy scope skipped [%s]: %d matched predictions missing scopeKey",
+		anlfLog.Debugf("AccuracyScope: skipped model=%s missingScope=%d",
 			modelUrl, unscopedMatches)
 	}
 

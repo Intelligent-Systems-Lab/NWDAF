@@ -54,10 +54,13 @@ func (s *Server) HandleCollectorNotify(c *gin.Context) {
 		return
 	}
 
+	logger.SBILog.Infof("Handle SmfNotification: notifId=%s events=%d",
+		notification.NotifId, len(notification.EventNotifs))
+
 	// Process the notification using processor
 	proc := s.Processor()
 	if handleErr := proc.HandleSmfNotification(&notification); handleErr != nil {
-		logger.SBILog.Errorf("Failed to handle notification: %v", handleErr)
+		logger.SBILog.Errorf("Handle SmfNotification failed: %v", handleErr)
 		util.GinProblemJson(c, openapi.ProblemDetailsSystemFailure(handleErr.Error()))
 		return
 	}
@@ -77,12 +80,13 @@ func (s *Server) HandleUpfNotify(c *gin.Context) {
 		return
 	}
 
-	logger.SBILog.Infof("Received UPF notification, items: %d", len(notification.NotificationItems))
+	logger.SBILog.Infof("Handle UpfNotification: corr=%s items=%d",
+		notification.CorrelationId, len(notification.NotificationItems))
 
 	// Process the notification using processor
 	proc := s.Processor()
 	if err := proc.HandleUpfNotification(&notification); err != nil {
-		logger.SBILog.Errorf("Failed to handle UPF notification: %v", err)
+		logger.SBILog.Errorf("Handle UpfNotification failed: %v", err)
 		util.GinProblemJson(c, openapi.ProblemDetailsSystemFailure(err.Error()))
 		return
 	}

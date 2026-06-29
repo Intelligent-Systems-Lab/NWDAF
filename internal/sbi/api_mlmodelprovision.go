@@ -16,8 +16,6 @@ import (
 // Per TS 29.520 §5.4.5.2: Callback for ML Model Provision notifications
 // POST /mlmodel-notify
 func (s *Server) HandleMlModelProvisionNotify(c *gin.Context) {
-	logger.SBILog.Info("Received ML Model Provision notification")
-
 	// Per TS 29.520, notification body is an array of NwdafMlModelProvNotif
 	var notifications []models.NwdafMlModelProvNotif
 	requestBody, err := c.GetRawData()
@@ -39,6 +37,8 @@ func (s *Server) HandleMlModelProvisionNotify(c *gin.Context) {
 		return
 	}
 
+	logger.SBILog.Infof("Handle MlModelProvisionNotify: notifications=%d", len(notifications))
+
 	ctx := nwdaf_context.GetSelf()
 
 	// Process each notification
@@ -51,8 +51,6 @@ func (s *Server) HandleMlModelProvisionNotify(c *gin.Context) {
 
 // processMlModelNotification processes a single ML model notification
 func (s *Server) processMlModelNotification(ctx *nwdaf_context.NWDAFContext, notif *models.NwdafMlModelProvNotif) {
-	logger.SBILog.Infof("Processing ML Model notification for subscription: %s", notif.SubscriptionId)
-
 	// Find the corresponding NWDAF subscription by correlation ID (we used subscriptionId as notifId)
 	// The notifCorreId in eventNotif should match our NWDAF subscription ID
 	var nwdafSubId string
@@ -84,7 +82,8 @@ func (s *Server) processMlModelNotification(ctx *nwdaf_context.NWDAFContext, not
 		}
 
 		modelUrl := eventNotif.MLFileAddr.MLModelUrl
-		logger.SBILog.Infof("Received ML model URL: %s for event %s", modelUrl, eventNotif.Event)
+		logger.SBILog.Infof("MlModelProvisionNotify: model available sub=%s event=%s",
+			nwdafSubId, eventNotif.Event)
 
 		// Update model info with URL
 		mlInfo.SetModelUrl(modelUrl)

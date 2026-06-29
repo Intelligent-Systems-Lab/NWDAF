@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
@@ -90,7 +89,6 @@ func (c *DaisyClient) TriggerTrainingAsync(
 	}
 
 	url := c.endpoint + DaisyPublishTaskPath
-	consumerLog.Debugf("Daisy async training request: %s", string(jsonData))
 
 	ctx, cancel, err := timeoutContextFromParent(ctx, DaisyAsyncTimeout, "Daisy async training")
 	if err != nil {
@@ -115,15 +113,9 @@ func (c *DaisyClient) TriggerTrainingAsync(
 	}()
 
 	if resp.StatusCode != http.StatusAccepted {
-		body, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return "", fmt.Errorf("daisy rejected async request: status=%d", resp.StatusCode)
-		}
-		return "", fmt.Errorf("daisy rejected async request: status=%d body=%s",
-			resp.StatusCode, string(body))
+		return "", fmt.Errorf("daisy rejected async request: status=%d", resp.StatusCode)
 	}
 
-	consumerLog.Infof("Daisy async training accepted: TID=%s", tidStr)
 	return tidStr, nil
 }
 
@@ -173,11 +165,7 @@ func (c *DaisyClient) UploadData(
 		resp.StatusCode == http.StatusCreated ||
 		resp.StatusCode == http.StatusNoContent
 	if !statusOK {
-		bodyBytes, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			return fmt.Errorf("daisy UploadData returned %d", resp.StatusCode)
-		}
-		return fmt.Errorf("daisy UploadData returned %d: %s", resp.StatusCode, string(bodyBytes))
+		return fmt.Errorf("daisy UploadData returned %d", resp.StatusCode)
 	}
 
 	return nil
