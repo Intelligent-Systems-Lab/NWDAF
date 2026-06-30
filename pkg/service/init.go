@@ -11,8 +11,10 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
+	"github.com/free5gc/nwdaf/internal/anlf"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
+	"github.com/free5gc/nwdaf/internal/mtlf"
 	"github.com/free5gc/nwdaf/internal/sbi"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/internal/sbi/processor"
@@ -68,14 +70,35 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		return nil, err
 	}
 
+	var inferenceEngine anlf.InferenceEngineAPI
+	if cfg.Configuration != nil &&
+		cfg.Configuration.InferenceEngine != nil &&
+		cfg.Configuration.InferenceEngine.Enabled &&
+		cfg.Configuration.InferenceEngine.Endpoint != "" {
+		inferenceEngine = anlf.NewInferenceEngineClient(cfg.Configuration.InferenceEngine.Endpoint)
+	}
+
+	var daisyClient mtlf.DaisyAPI
+	if cfg.Configuration != nil &&
+		cfg.Configuration.Mtlf != nil &&
+		cfg.Configuration.Mtlf.Enabled &&
+		cfg.Configuration.Mtlf.Endpoint != "" {
+		daisyClient = mtlf.NewDaisyClient(cfg.Configuration.Mtlf.Endpoint)
+	}
+
+	anlfService := anlf.NewAnlfService(nwdaf, inferenceEngine)
+	mtlfService := mtlf.NewMtlfService(nwdaf, daisyClient, nwdaf.consumer.AdrfClient())
+
 	// Initialize processor
-	nwdaf.processor = processor.NewProcessor(nwdaf)
+	nwdaf.processor = processor.NewProcessor(nwdaf, anlfService, mtlfService)
 
 	// Initialize SBI server
 	nwdaf.sbiServer, err = sbi.NewServer(nwdaf)
 	if err != nil {
 		return nil, err
 	}
+	anlf.RegisterProvisionRoutes(nwdaf.sbiServer.Router().Group("/mlmodel-notify"), anlfService)
+	mtlf.RegisterCallbackRoutes(nwdaf.sbiServer.Router().Group("/mtlf"), mtlfService)
 
 	return nwdaf, nil
 }

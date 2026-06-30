@@ -89,13 +89,13 @@ configuration:
 			wantErr: "smf.endpoints",
 		},
 		{
-			name: "ml service enabled requires endpoint",
+			name: "inference engine enabled requires endpoint",
 			yaml: `
 configuration:
-  mlService:
+  inferenceEngine:
     enabled: true
 `,
-			wantErr: "mlService.endpoint",
+			wantErr: "inferenceEngine.endpoint",
 		},
 		{
 			name: "external mtlf enabled requires notif uri",

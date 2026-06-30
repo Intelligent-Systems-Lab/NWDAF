@@ -51,42 +51,6 @@ func (mr *MockConsumerAPIMockRecorder) AdrfClient() *gomock.Call {
 	)
 }
 
-// MlClient mocks base method.
-func (m *MockConsumerAPI) MlClient() consumer.MlServiceAPI {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "MlClient")
-	ret0, _ := ret[0].(consumer.MlServiceAPI)
-	return ret0
-}
-
-// MlClient indicates an expected call of MlClient.
-func (mr *MockConsumerAPIMockRecorder) MlClient() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(
-		mr.mock,
-		"MlClient",
-		reflect.TypeOf((*MockConsumerAPI)(nil).MlClient),
-	)
-}
-
-// DaisyClient mocks base method.
-func (m *MockConsumerAPI) DaisyClient() consumer.DaisyServiceAPI {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DaisyClient")
-	ret0, _ := ret[0].(consumer.DaisyServiceAPI)
-	return ret0
-}
-
-// DaisyClient indicates an expected call of DaisyClient.
-func (mr *MockConsumerAPIMockRecorder) DaisyClient() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(
-		mr.mock,
-		"DaisyClient",
-		reflect.TypeOf((*MockConsumerAPI)(nil).DaisyClient),
-	)
-}
-
 // SubscribeToSmf mocks base method.
 func (m *MockConsumerAPI) SubscribeToSmf(
 	ctx context.Context,

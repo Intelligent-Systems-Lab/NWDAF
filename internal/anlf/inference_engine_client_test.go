@@ -1,4 +1,4 @@
-package consumer
+package anlf
 
 import (
 	"context"
@@ -8,12 +8,12 @@ import (
 	"github.com/h2non/gock"
 )
 
-const testMlServiceEndpoint = "http://127.0.0.30:8000"
+const testInferenceEngineEndpoint = "http://127.0.0.30:8000"
 
-func newInterceptedMlServiceClient(t *testing.T) *MlServiceClient {
+func newInterceptedInferenceEngineClient(t *testing.T) *InferenceEngineClient {
 	t.Helper()
 
-	client := NewMlServiceClient(testMlServiceEndpoint)
+	client := NewInferenceEngineClient(testInferenceEngineEndpoint)
 	gock.InterceptClient(client.HTTPClient())
 	t.Cleanup(func() {
 		gock.Off()
@@ -23,10 +23,10 @@ func newInterceptedMlServiceClient(t *testing.T) *MlServiceClient {
 	return client
 }
 
-func TestMlServiceClient_InitializeModel(t *testing.T) {
-	client := newInterceptedMlServiceClient(t)
+func TestInferenceEngineClient_InitializeModel(t *testing.T) {
+	client := newInterceptedInferenceEngineClient(t)
 
-	gock.New(testMlServiceEndpoint).
+	gock.New(testInferenceEngineEndpoint).
 		Post("/model/load").
 		MatchHeader("Content-Type", "application/json").
 		JSON(LoadModelRequest{ModelUrl: "http://example.com/model.h5"}).
@@ -45,10 +45,10 @@ func TestMlServiceClient_InitializeModel(t *testing.T) {
 	}
 }
 
-func TestMlServiceClient_InitializeModelReturnsErrorOnFailureStatus(t *testing.T) {
-	client := newInterceptedMlServiceClient(t)
+func TestInferenceEngineClient_InitializeModelReturnsErrorOnFailureStatus(t *testing.T) {
+	client := newInterceptedInferenceEngineClient(t)
 
-	gock.New(testMlServiceEndpoint).
+	gock.New(testInferenceEngineEndpoint).
 		Post("/model/load").
 		Reply(http.StatusInternalServerError).
 		BodyString("internal error")
@@ -58,10 +58,10 @@ func TestMlServiceClient_InitializeModelReturnsErrorOnFailureStatus(t *testing.T
 	}
 }
 
-func TestMlServiceClient_UnloadModel(t *testing.T) {
-	client := newInterceptedMlServiceClient(t)
+func TestInferenceEngineClient_UnloadModel(t *testing.T) {
+	client := newInterceptedInferenceEngineClient(t)
 
-	gock.New(testMlServiceEndpoint).
+	gock.New(testInferenceEngineEndpoint).
 		Post("/model/unload").
 		MatchHeader("Content-Type", "application/json").
 		JSON(UnloadModelRequest{ModelId: "model-123"}).
@@ -76,8 +76,8 @@ func TestMlServiceClient_UnloadModel(t *testing.T) {
 	}
 }
 
-func TestMlServiceClient_Predict(t *testing.T) {
-	client := newInterceptedMlServiceClient(t)
+func TestInferenceEngineClient_Predict(t *testing.T) {
+	client := newInterceptedInferenceEngineClient(t)
 
 	trafficData := []TrafficObservation{
 		{
@@ -88,7 +88,7 @@ func TestMlServiceClient_Predict(t *testing.T) {
 		},
 	}
 
-	gock.New(testMlServiceEndpoint).
+	gock.New(testInferenceEngineEndpoint).
 		Post("/predict").
 		MatchHeader("Content-Type", "application/json").
 		JSON(PredictRequest{
@@ -118,10 +118,10 @@ func TestMlServiceClient_Predict(t *testing.T) {
 	}
 }
 
-func TestMlServiceClient_PredictReturnsDecodeError(t *testing.T) {
-	client := newInterceptedMlServiceClient(t)
+func TestInferenceEngineClient_PredictReturnsDecodeError(t *testing.T) {
+	client := newInterceptedInferenceEngineClient(t)
 
-	gock.New(testMlServiceEndpoint).
+	gock.New(testInferenceEngineEndpoint).
 		Post("/predict").
 		Reply(http.StatusOK).
 		BodyString("{invalid json")

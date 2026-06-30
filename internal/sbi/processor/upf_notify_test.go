@@ -7,7 +7,9 @@ import (
 
 	"go.uber.org/mock/gomock"
 
+	"github.com/free5gc/nwdaf/internal/anlf"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/nwdaf/internal/mtlf"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/nwdaf/pkg/mockapp"
 	"github.com/free5gc/openapi/models"
@@ -41,7 +43,9 @@ func newTestProcessorWithConfig(t *testing.T, cfg *factory.Config) *Processor {
 	mockApp.EXPECT().Consumer().Return(nil).AnyTimes()
 	mockApp.EXPECT().Config().Return(cfg).AnyTimes()
 
-	return NewProcessor(mockApp)
+	anlfService := anlf.NewAnlfService(mockApp, nil)
+	mtlfService := mtlf.NewMtlfService(mockApp, nil, nil)
+	return NewProcessor(mockApp, anlfService, mtlfService)
 }
 
 // =============================================================================

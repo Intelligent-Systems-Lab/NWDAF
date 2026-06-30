@@ -12,23 +12,23 @@ import (
 // Returns the new model ID assigned by the ML Service.
 func (a *AnlfService) SwapModel(newModelUrl, oldModelId string) (string, error) {
 	cfg := a.config()
-	mlServiceEndpoint := mlServiceEndpoint(cfg)
-	if mlServiceEndpoint == "" {
-		return "", fmt.Errorf("ML Service not configured")
+	endpoint := inferenceEngineEndpoint(cfg)
+	if endpoint == "" {
+		return "", fmt.Errorf("inference engine not configured")
 	}
 
-	if a.mlClient == nil {
-		return "", fmt.Errorf("ML Service client not initialized")
+	if a.inferenceEngine == nil {
+		return "", fmt.Errorf("inference engine client not initialized")
 	}
 
-	newModelId, err := a.mlClient.InitializeModel(a.nwdaf.CancelContext(), newModelUrl)
+	newModelId, err := a.inferenceEngine.InitializeModel(a.nwdaf.CancelContext(), newModelUrl)
 	if err != nil {
 		return "", fmt.Errorf("failed to load new model %s: %w", newModelUrl, err)
 	}
 	logger.AnlfLog.Infof("SwapModel: loaded modelId=%s", newModelId)
 
 	if oldModelId != "" {
-		if unloadErr := a.mlClient.UnloadModel(a.nwdaf.CancelContext(), oldModelId); unloadErr != nil {
+		if unloadErr := a.inferenceEngine.UnloadModel(a.nwdaf.CancelContext(), oldModelId); unloadErr != nil {
 			logger.AnlfLog.Warnf("SwapModel: unload failed modelId=%s err=%v", oldModelId, unloadErr)
 		} else {
 			logger.AnlfLog.Infof("SwapModel: unloaded modelId=%s", oldModelId)
@@ -46,11 +46,11 @@ func (a *AnlfService) InitializeMlModel(
 ) {
 	logger.AnlfLog.Infof("LoadMlModel: start sub=%s", nwdafSubId)
 
-	// Get ML service configuration
+	// Get inference-engine configuration
 	cfg := a.config()
-	mlServiceEndpoint := mlServiceEndpoint(cfg)
-	if mlServiceEndpoint == "" {
-		logger.AnlfLog.Warnf("ML Service not configured, cannot initialize model")
+	endpoint := inferenceEngineEndpoint(cfg)
+	if endpoint == "" {
+		logger.AnlfLog.Warnf("Inference engine not configured, cannot initialize model")
 		mlInfo.SetModelFailed(nil)
 		return
 	}
@@ -77,15 +77,15 @@ func (a *AnlfService) InitializeMlModel(
 	}
 
 	// isNew=true: this goroutine is responsible for loading
-	if a.mlClient == nil {
-		err := fmt.Errorf("ML Service client not initialized")
+	if a.inferenceEngine == nil {
+		err := fmt.Errorf("inference engine client not initialized")
 		logger.AnlfLog.Errorf("Failed to initialize ML model: %v", err)
 		shared.LoadDone()
 		mlInfo.SetModelFailed(err)
 		return
 	}
 
-	modelId, err := a.mlClient.InitializeModel(a.nwdaf.CancelContext(), modelUrl)
+	modelId, err := a.inferenceEngine.InitializeModel(a.nwdaf.CancelContext(), modelUrl)
 	if err != nil {
 		logger.AnlfLog.Errorf("LoadMlModel failed: sub=%s err=%v", nwdafSubId, err)
 		shared.LoadDone()

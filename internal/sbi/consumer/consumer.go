@@ -30,19 +30,6 @@ type MtlfServiceClient interface {
 	HTTPClient() *http.Client
 }
 
-type MlServiceAPI interface {
-	InitializeModel(ctx context.Context, modelUrl string) (string, error)
-	UnloadModel(ctx context.Context, modelId string) error
-	Predict(ctx context.Context, modelId string, trafficData []TrafficObservation) (*PredictResponse, error)
-	HTTPClient() *http.Client
-}
-
-type DaisyServiceAPI interface {
-	TriggerTrainingAsync(ctx context.Context, task map[string]any, callbackURL string, tidOverride string) (string, error)
-	UploadData(ctx context.Context, tid string, groupId string, upfEventNotifs []json.RawMessage) error
-	HTTPClient() *http.Client
-}
-
 type AdrfServiceAPI interface {
 	StorageRequest(ctx context.Context, info *nwdaf_context.AdrfSmfInfo, upfNotifJSONs []json.RawMessage) (string, error)
 	RetrievalSubscribe(
@@ -62,8 +49,6 @@ type ConsumerAPI interface {
 	UnsubscribeFromSmf(ctx context.Context, smfEndpoint string, subscriptionId string) error
 	SubscribeToMtlf(ctx context.Context, mtlfEndpoint string, opts MtlfSubscriptionOptions) (string, error)
 	UnsubscribeFromMtlf(ctx context.Context, mtlfEndpoint string, subscriptionId string) error
-	MlClient() MlServiceAPI
-	DaisyClient() DaisyServiceAPI
 	AdrfClient() AdrfServiceAPI
 }
 
@@ -71,28 +56,22 @@ type ConsumerAPI interface {
 type Consumer struct {
 	nwdaf
 
-	smfService   SmfServiceClient
-	mtlfService  MtlfServiceClient
-	mlService    MlServiceAPI
-	daisyService DaisyServiceAPI
-	Adrf         AdrfServiceAPI // nil if ADRF not configured
+	smfService  SmfServiceClient
+	mtlfService MtlfServiceClient
+	Adrf        AdrfServiceAPI // nil if ADRF not configured
 }
 
 func newConsumerWithServices(
 	nwdaf nwdaf,
 	smfService SmfServiceClient,
 	mtlfService MtlfServiceClient,
-	mlService MlServiceAPI,
-	daisyService DaisyServiceAPI,
 	adrf AdrfServiceAPI,
 ) *Consumer {
 	return &Consumer{
-		nwdaf:        nwdaf,
-		smfService:   smfService,
-		mtlfService:  mtlfService,
-		mlService:    mlService,
-		daisyService: daisyService,
-		Adrf:         adrf,
+		nwdaf:       nwdaf,
+		smfService:  smfService,
+		mtlfService: mtlfService,
+		Adrf:        adrf,
 	}
 }
 
@@ -103,21 +82,11 @@ func NewConsumer(nwdaf nwdaf) (*Consumer, error) {
 		NewNsmfService(),
 		NewNmtlfService(),
 		nil,
-		nil,
-		nil,
 	)
 
 	if nwdaf != nil {
 		cfg := nwdaf.Config()
 		if cfg != nil && cfg.Configuration != nil {
-			if mlCfg := cfg.Configuration.MlService; mlCfg != nil && mlCfg.Enabled && mlCfg.Endpoint != "" {
-				c.mlService = NewMlServiceClient(mlCfg.Endpoint)
-				consumerLog.Info("ML service client initialized")
-			}
-			if mtlfCfg := cfg.Configuration.Mtlf; mtlfCfg != nil && mtlfCfg.Enabled && mtlfCfg.Endpoint != "" {
-				c.daisyService = NewDaisyClient(mtlfCfg.Endpoint)
-				consumerLog.Info("Daisy client initialized")
-			}
 			if cfg.Configuration.Adrf.AdrfEnabled() {
 				c.Adrf = NewAdrfClient(cfg.Configuration.Adrf.Url)
 				consumerLog.Info("ADRF client initialized")
@@ -175,14 +144,6 @@ func (c *Consumer) SmfService() SmfServiceClient {
 
 func (c *Consumer) MtlfService() MtlfServiceClient {
 	return c.mtlfService
-}
-
-func (c *Consumer) MlClient() MlServiceAPI {
-	return c.mlService
-}
-
-func (c *Consumer) DaisyClient() DaisyServiceAPI {
-	return c.daisyService
 }
 
 func (c *Consumer) AdrfClient() AdrfServiceAPI {

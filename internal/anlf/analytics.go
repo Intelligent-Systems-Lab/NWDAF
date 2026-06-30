@@ -14,7 +14,6 @@ import (
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
-	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
@@ -24,9 +23,6 @@ var anlfLog = logger.AnlfLog
 // errNoHistoricalData is returned when no UPF traffic data is available yet.
 // This is expected during startup before SMF delivers the first measurements.
 var errNoHistoricalData = fmt.Errorf("no historical data available yet")
-
-// TrafficObservation for ML prediction request
-type TrafficObservation = consumer.TrafficObservation
 
 // GenerateMockAbnormalBehaviours generates mock DDoS detection analytics data
 // TODO: Replace with real analytics from ML model and data collection
@@ -65,7 +61,7 @@ func GenerateUeCommunicationAnalytics(
 	parentCtx context.Context,
 	nwdafSubId string,
 	cfg *factory.Config,
-	mlClient consumer.MlServiceAPI,
+	inferenceEngine InferenceEngineAPI,
 ) models.UeCommunication {
 	ctx := nwdaf_context.GetSelf()
 	now := time.Now()
@@ -73,7 +69,7 @@ func GenerateUeCommunicationAnalytics(
 	// Check if ML model is available for this subscription
 	mlInfo := ctx.GetMlModelInfo(nwdafSubId)
 	if mlInfo != nil && mlInfo.IsReady() {
-		result, err := generateMlBasedUeCommunication(parentCtx, nwdafSubId, mlInfo, ctx, cfg, mlClient)
+		result, err := generateMlBasedUeCommunication(parentCtx, nwdafSubId, mlInfo, ctx, cfg, inferenceEngine)
 		if err == nil {
 			return result
 		}
@@ -101,12 +97,12 @@ func generateMlBasedUeCommunication(
 	mlInfo *nwdaf_context.MlModelInfo,
 	ctx *nwdaf_context.NWDAFContext,
 	cfg *factory.Config,
-	mlClient consumer.MlServiceAPI,
+	inferenceEngine InferenceEngineAPI,
 ) (models.UeCommunication, error) {
 	now := time.Now()
 
-	if mlClient == nil {
-		return models.UeCommunication{}, fmt.Errorf("ML service client not available")
+	if inferenceEngine == nil {
+		return models.UeCommunication{}, fmt.Errorf("inference engine client not available")
 	}
 
 	// Resolve model params (with defaults)
@@ -147,7 +143,7 @@ func generateMlBasedUeCommunication(
 
 	// Call ML service for prediction
 	modelId := mlInfo.GetModelId()
-	resp, err := mlClient.Predict(parentCtx, modelId, historicalData)
+	resp, err := inferenceEngine.Predict(parentCtx, modelId, historicalData)
 	if err != nil {
 		return models.UeCommunication{}, err
 	}

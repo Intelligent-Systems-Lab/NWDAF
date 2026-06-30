@@ -43,10 +43,10 @@ configuration:
       - http://127.0.0.1:8082  # Fake MTLF server for testing
     notifUri: http://127.0.0.1:8080/mlmodel-notify
 
-  # ML Inference Service
-  mlService:
+  # Inference Engine
+  inferenceEngine:
     enabled: true
-    endpoint: http://127.0.0.1:9090  # ML inference service
+    endpoint: http://127.0.0.1:9090  # Local inference engine
 
   # Group ID to SUPI mapping (substitute for UDM per TS 23.502 §4.15.4.5.2)
   groupMembership:

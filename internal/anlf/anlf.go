@@ -9,7 +9,6 @@ import (
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
-	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/app"
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
@@ -23,11 +22,12 @@ type NwdafApp interface {
 // AnlfService is the AnLF entry point.
 type AnlfService struct {
 	nwdaf             NwdafApp
-	mlClient          consumer.MlServiceAPI
+	inferenceEngine   InferenceEngineAPI
 	onDeviationReport func(modelUrl string, deviation float64, store *nwdaf_context.ModelAccuracyStore)
 	onAccuracyReports func(modelUrl string, reports []AccuracyReport, store *nwdaf_context.ModelAccuracyStore)
 	warmupMu          sync.Mutex
 	startupWarmupDone bool
+	wg                *sync.WaitGroup
 }
 
 // AccuracyReport is the internal AnLF output for one monitor round and one scope.
@@ -47,10 +47,10 @@ type AccuracyReport struct {
 }
 
 // NewAnlfService creates a new AnlfService instance.
-func NewAnlfService(nwdaf NwdafApp, mlClient consumer.MlServiceAPI) *AnlfService {
+func NewAnlfService(nwdaf NwdafApp, inferenceEngine InferenceEngineAPI) *AnlfService {
 	return &AnlfService{
-		nwdaf:    nwdaf,
-		mlClient: mlClient,
+		nwdaf:           nwdaf,
+		inferenceEngine: inferenceEngine,
 	}
 }
 
@@ -61,12 +61,12 @@ func (a *AnlfService) config() *factory.Config {
 	return a.nwdaf.Config()
 }
 
-func mlServiceEndpoint(cfg *factory.Config) string {
+func inferenceEngineEndpoint(cfg *factory.Config) string {
 	if cfg == nil || cfg.Configuration == nil ||
-		cfg.Configuration.MlService == nil || !cfg.Configuration.MlService.Enabled {
+		cfg.Configuration.InferenceEngine == nil || !cfg.Configuration.InferenceEngine.Enabled {
 		return ""
 	}
-	return cfg.Configuration.MlService.Endpoint
+	return cfg.Configuration.InferenceEngine.Endpoint
 }
 
 func ueCommunicationModelParams(cfg *factory.Config) *factory.ModelParams {
@@ -106,6 +106,14 @@ func (a *AnlfService) SetOnAccuracyReports(
 	fn func(modelUrl string, reports []AccuracyReport, store *nwdaf_context.ModelAccuracyStore),
 ) {
 	a.onAccuracyReports = fn
+}
+
+func (a *AnlfService) SetWaitGroup(wg *sync.WaitGroup) {
+	a.wg = wg
+}
+
+func (a *AnlfService) InferenceEngine() InferenceEngineAPI {
+	return a.inferenceEngine
 }
 
 func (a *AnlfService) acquireStartupWarmupDuration(accCfg *factory.AccuracyMonitorConfig) int {

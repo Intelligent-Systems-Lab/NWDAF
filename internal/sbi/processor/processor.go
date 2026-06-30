@@ -20,13 +20,11 @@ type NwdafApp interface {
 }
 
 type Processor struct {
-	nwdaf       NwdafApp
-	wg          *sync.WaitGroup
-	mlClient    consumer.MlServiceAPI
-	daisyClient consumer.DaisyServiceAPI
-	anlf        *anlf.AnlfService
-	mtlf        *mtlf.MtlfService
-	adrfBuffer  *adrfBuffer
+	nwdaf      NwdafApp
+	wg         *sync.WaitGroup
+	anlf       *anlf.AnlfService
+	mtlf       *mtlf.MtlfService
+	adrfBuffer *adrfBuffer
 }
 
 func (p *Processor) config() *factory.Config {
@@ -36,23 +34,11 @@ func (p *Processor) config() *factory.Config {
 	return p.nwdaf.Config()
 }
 
-func NewProcessor(nwdaf NwdafApp) *Processor {
-	var mlClient consumer.MlServiceAPI
-	var daisyClient consumer.DaisyServiceAPI
-	var adrfClient consumer.AdrfServiceAPI
-
-	if c := nwdaf.Consumer(); c != nil {
-		mlClient = c.MlClient()
-		daisyClient = c.DaisyClient()
-		adrfClient = c.AdrfClient()
-	}
-
+func NewProcessor(nwdaf NwdafApp, anlfService *anlf.AnlfService, mtlfService *mtlf.MtlfService) *Processor {
 	p := &Processor{
-		nwdaf:       nwdaf,
-		mlClient:    mlClient,
-		daisyClient: daisyClient,
-		anlf:        anlf.NewAnlfService(nwdaf, mlClient),
-		mtlf:        mtlf.NewMtlfService(nwdaf, daisyClient, adrfClient),
+		nwdaf: nwdaf,
+		anlf:  anlfService,
+		mtlf:  mtlfService,
 	}
 
 	// Wire 1: AnLF reports deviation → MTLF decides whether to retrain.
@@ -96,6 +82,7 @@ func NewProcessor(nwdaf NwdafApp) *Processor {
 // SetWaitGroup stores the application WaitGroup for goroutine lifecycle management.
 func (p *Processor) SetWaitGroup(wg *sync.WaitGroup) {
 	p.wg = wg
+	p.anlf.SetWaitGroup(wg)
 	p.mtlf.SetWaitGroup(wg)
 }
 
@@ -104,22 +91,7 @@ func (p *Processor) StartMtlfTrainingScheduler(wg *sync.WaitGroup) {
 	p.mtlf.StartTrainingScheduler(wg)
 }
 
-// HandleDaisyCallback delegates an async Daisy training callback to MtlfService.
-func (p *Processor) HandleDaisyCallback(taskId, modelUrl, status, errMsg string) {
-	p.mtlf.HandleTrainingComplete(taskId, modelUrl, status, errMsg)
-}
-
 // HandleAdrfRetrievalNotify delegates an ADRF retrieval callback to MtlfService.
 func (p *Processor) HandleAdrfRetrievalNotify(notifCorrId string, fetchCorrIds []string, terminationReq bool) {
 	p.mtlf.HandleAdrfRetrievalNotify(notifCorrId, fetchCorrIds, terminationReq)
-}
-
-// InitializeMlModel delegates to AnlfService and then starts accuracy monitoring.
-func (p *Processor) InitializeMlModel(
-	nwdafSubId string, mlInfo *nwdaf_context.MlModelInfo, modelUrl string,
-) {
-	p.anlf.InitializeMlModel(nwdafSubId, mlInfo, modelUrl)
-	if p.wg != nil {
-		p.anlf.StartAccuracyMonitorForModel(modelUrl, p.wg)
-	}
 }

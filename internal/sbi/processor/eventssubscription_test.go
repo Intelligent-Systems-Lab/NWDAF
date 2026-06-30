@@ -9,7 +9,9 @@ import (
 
 	"go.uber.org/mock/gomock"
 
+	"github.com/free5gc/nwdaf/internal/anlf"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/nwdaf/internal/mtlf"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
@@ -87,28 +89,26 @@ func (a *subscriptionTestApp) Consumer() consumer.ConsumerAPI {
 	return a.consumer
 }
 
-func TestNewProcessorUsesOwnedConsumerClients(t *testing.T) {
+func TestNewProcessorUsesInjectedDomainServices(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
 	consumerClient := NewMockConsumerAPI(ctrl)
-	mlClient := consumer.NewMlServiceClient("http://ml.example")
-	daisyClient := consumer.NewDaisyClient("http://daisy.example")
-
-	consumerClient.EXPECT().MlClient().Return(mlClient).AnyTimes()
-	consumerClient.EXPECT().DaisyClient().Return(daisyClient).AnyTimes()
 	consumerClient.EXPECT().AdrfClient().Return(nil).AnyTimes()
 
-	p := NewProcessor(&subscriptionTestApp{
+	app := &subscriptionTestApp{
 		ctx:      context.Background(),
 		consumer: consumerClient,
-	})
-
-	if p.mlClient != mlClient {
-		t.Fatal("processor should use the owned ML client from consumer")
 	}
-	if p.daisyClient != daisyClient {
-		t.Fatal("processor should use the owned Daisy client from consumer")
+	anlfService := anlf.NewAnlfService(app, nil)
+	mtlfService := mtlf.NewMtlfService(app, nil, nil)
+	p := NewProcessor(app, anlfService, mtlfService)
+
+	if p.anlf != anlfService {
+		t.Fatal("processor should use the injected AnLF service")
+	}
+	if p.mtlf != mtlfService {
+		t.Fatal("processor should use the injected MTLF service")
 	}
 }
 
@@ -844,8 +844,6 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 	var subscribedSupis []string
 	var unsubscribeCalls []string
 	subscribeCount := 0
-	consumerClient.EXPECT().MlClient().Return(nil).AnyTimes()
-	consumerClient.EXPECT().DaisyClient().Return(nil).AnyTimes()
 	consumerClient.EXPECT().AdrfClient().Return(nil).AnyTimes()
 	consumerClient.EXPECT().
 		SubscribeToSmf(gomock.Any(), "http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
@@ -879,11 +877,12 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 	baseCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	p := NewProcessor(&subscriptionTestApp{
+	app := &subscriptionTestApp{
 		ctx:      baseCtx,
 		cfg:      cfg,
 		consumer: consumerClient,
-	})
+	}
+	p := NewProcessor(app, anlf.NewAnlfService(app, nil), mtlf.NewMtlfService(app, nil, nil))
 
 	subscriptionID := "sub-reconcile"
 	ctx.AddSubscription(&nwdaf_context.Subscription{

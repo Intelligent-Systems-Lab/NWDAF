@@ -22,7 +22,7 @@ type NwdafApp interface {
 // MtlfService is the MTLF entry point.
 type MtlfService struct {
 	nwdaf          NwdafApp
-	daisyClient    consumer.DaisyServiceAPI
+	daisyClient    DaisyAPI
 	adrfClient     consumer.AdrfServiceAPI
 	wg             *sync.WaitGroup
 	stateStore     *MonitorStateStore
@@ -46,7 +46,7 @@ type MtlfService struct {
 // NewMtlfService creates a new MtlfService instance.
 func NewMtlfService(
 	nwdaf NwdafApp,
-	daisyClient consumer.DaisyServiceAPI,
+	daisyClient DaisyAPI,
 	adrfClient consumer.AdrfServiceAPI,
 ) *MtlfService {
 	return &MtlfService{

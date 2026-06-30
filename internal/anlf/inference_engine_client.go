@@ -1,4 +1,4 @@
-package consumer
+package anlf
 
 import (
 	"bytes"
@@ -9,16 +9,23 @@ import (
 	"time"
 )
 
-// MlServiceClient handles ML inference service API interactions
-// Used to communicate with the external ML inference engine for model loading and prediction
-type MlServiceClient struct {
+// InferenceEngineAPI defines the local inference-engine integration seam owned by AnLF.
+type InferenceEngineAPI interface {
+	InitializeModel(ctx context.Context, modelURL string) (string, error)
+	UnloadModel(ctx context.Context, modelID string) error
+	Predict(ctx context.Context, modelID string, trafficData []TrafficObservation) (*PredictResponse, error)
+	HTTPClient() *http.Client
+}
+
+// InferenceEngineClient handles local inference-engine API interactions.
+type InferenceEngineClient struct {
 	endpoint   string
 	httpClient *http.Client
 }
 
-// NewMlServiceClient creates a new ML service client
-func NewMlServiceClient(endpoint string) *MlServiceClient {
-	return &MlServiceClient{
+// NewInferenceEngineClient creates a new inference-engine client.
+func NewInferenceEngineClient(endpoint string) *InferenceEngineClient {
+	return &InferenceEngineClient{
 		endpoint: endpoint,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
@@ -63,7 +70,7 @@ type TrafficCharacterization struct {
 }
 
 // TrafficObservation represents a single traffic observation point for ML prediction.
-// Fields match the ML service feature extraction order (10 features).
+// Fields match the inference-engine feature extraction order (10 features).
 type TrafficObservation struct {
 	Ts          string  `json:"ts"`
 	TotalVol    float64 `json:"total_vol"`
@@ -100,11 +107,10 @@ type PredictResponse struct {
 // API Methods
 // ============================================================================
 
-// InitializeModel loads a model from the given URL and returns the model ID
-// Calls POST /model/load on the ML service
-func (c *MlServiceClient) InitializeModel(ctx context.Context, modelUrl string) (string, error) {
+// InitializeModel loads a model from the given URL and returns the model ID.
+func (c *InferenceEngineClient) InitializeModel(ctx context.Context, modelURL string) (string, error) {
 	request := LoadModelRequest{
-		ModelUrl: modelUrl,
+		ModelUrl: modelURL,
 	}
 
 	jsonData, err := json.Marshal(request)
@@ -114,7 +120,7 @@ func (c *MlServiceClient) InitializeModel(ctx context.Context, modelUrl string) 
 
 	url := c.endpoint + "/model/load"
 
-	ctx, cancel, err := timeoutContextFromParent(ctx, 120*time.Second, "ML model initialization")
+	ctx, cancel, err := timeoutContextFromParent(ctx, 120*time.Second, "inference engine model initialization")
 	if err != nil {
 		return "", err
 	}
@@ -128,16 +134,16 @@ func (c *MlServiceClient) InitializeModel(ctx context.Context, modelUrl string) 
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to send request to ML service: %w", err)
+		return "", fmt.Errorf("failed to send request to inference engine: %w", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			consumerLog.Debugf("failed to close response body: %v", closeErr)
+			anlfLog.Debugf("failed to close response body: %v", closeErr)
 		}
 	}()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("ML model load failed: status=%d", resp.StatusCode)
+		return "", fmt.Errorf("inference engine model load failed: status=%d", resp.StatusCode)
 	}
 
 	var response LoadModelResponse
@@ -148,11 +154,10 @@ func (c *MlServiceClient) InitializeModel(ctx context.Context, modelUrl string) 
 	return response.ModelId, nil
 }
 
-// UnloadModel unloads a model by ID
-// Calls POST /model/unload on the ML service
-func (c *MlServiceClient) UnloadModel(ctx context.Context, modelId string) error {
+// UnloadModel unloads a model by ID.
+func (c *InferenceEngineClient) UnloadModel(ctx context.Context, modelID string) error {
 	request := UnloadModelRequest{
-		ModelId: modelId,
+		ModelId: modelID,
 	}
 
 	jsonData, err := json.Marshal(request)
@@ -162,7 +167,7 @@ func (c *MlServiceClient) UnloadModel(ctx context.Context, modelId string) error
 
 	url := c.endpoint + "/model/unload"
 
-	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "ML model unload")
+	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "inference engine model unload")
 	if err != nil {
 		return err
 	}
@@ -176,33 +181,32 @@ func (c *MlServiceClient) UnloadModel(ctx context.Context, modelId string) error
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send request to ML service: %w", err)
+		return fmt.Errorf("failed to send request to inference engine: %w", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			consumerLog.Debugf("failed to close response body: %v", closeErr)
+			anlfLog.Debugf("failed to close response body: %v", closeErr)
 		}
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("ML model unload failed: status=%d", resp.StatusCode)
+		return fmt.Errorf("inference engine model unload failed: status=%d", resp.StatusCode)
 	}
 
 	return nil
 }
 
-// Predict calls the ML service to get traffic predictions
-// Calls POST /predict on the ML service
-func (c *MlServiceClient) Predict(
+// Predict calls the inference engine to get traffic predictions.
+func (c *InferenceEngineClient) Predict(
 	ctx context.Context,
-	modelId string,
+	modelID string,
 	trafficData []TrafficObservation,
 ) (*PredictResponse, error) {
-	consumerLog.Debugf("Calling ML prediction: modelId=%s, dataPoints=%d",
-		modelId, len(trafficData))
+	anlfLog.Debugf("Calling inference engine: modelId=%s, dataPoints=%d",
+		modelID, len(trafficData))
 
 	request := PredictRequest{
-		ModelId:        modelId,
+		ModelId:        modelID,
 		HistoricalData: trafficData,
 	}
 
@@ -213,7 +217,7 @@ func (c *MlServiceClient) Predict(
 
 	url := c.endpoint + "/predict"
 
-	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "ML prediction")
+	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "inference engine prediction")
 	if err != nil {
 		return nil, err
 	}
@@ -227,16 +231,16 @@ func (c *MlServiceClient) Predict(
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request to ML service: %w", err)
+		return nil, fmt.Errorf("failed to send request to inference engine: %w", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			consumerLog.Debugf("failed to close response body: %v", closeErr)
+			anlfLog.Debugf("failed to close response body: %v", closeErr)
 		}
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ML prediction failed: status=%d", resp.StatusCode)
+		return nil, fmt.Errorf("inference engine prediction failed: status=%d", resp.StatusCode)
 	}
 
 	var response PredictResponse
@@ -244,16 +248,29 @@ func (c *MlServiceClient) Predict(
 		return nil, fmt.Errorf("failed to decode response: %w", decodeErr)
 	}
 
-	consumerLog.Debugf("ML prediction received: %d predictions", len(response.PredictedData))
+	anlfLog.Debugf("Inference engine returned %d predictions", len(response.PredictedData))
 	return &response, nil
 }
 
-// GetEndpoint returns the configured endpoint
-func (c *MlServiceClient) GetEndpoint() string {
+// GetEndpoint returns the configured endpoint.
+func (c *InferenceEngineClient) GetEndpoint() string {
 	return c.endpoint
 }
 
-// HTTPClient returns the underlying HTTP client for testing
-func (c *MlServiceClient) HTTPClient() *http.Client {
+// HTTPClient returns the underlying HTTP client for testing.
+func (c *InferenceEngineClient) HTTPClient() *http.Client {
 	return c.httpClient
+}
+
+func timeoutContextFromParent(
+	parent context.Context,
+	timeout time.Duration,
+	operation string,
+) (context.Context, context.CancelFunc, error) {
+	if parent == nil {
+		return nil, nil, fmt.Errorf("%s requires parent context", operation)
+	}
+
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	return ctx, cancel, nil
 }

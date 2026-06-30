@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/free5gc/nwdaf/internal/anlf"
 	"github.com/free5gc/nwdaf/internal/logger"
-	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
@@ -19,7 +19,7 @@ import (
 type NotificationScheduler struct {
 	baseCtx         context.Context
 	cfg             *factory.Config
-	mlClient        consumer.MlServiceAPI
+	inferenceEngine anlf.InferenceEngineAPI
 	httpClient      *http.Client
 	subscriptionId  string
 	notificationURI string
@@ -44,7 +44,7 @@ type NotificationScheduler struct {
 func NewNotificationScheduler(
 	baseCtx context.Context,
 	cfg *factory.Config,
-	mlClient consumer.MlServiceAPI,
+	inferenceEngine anlf.InferenceEngineAPI,
 	subscriptionId string,
 	notificationURI string,
 	repPeriod int32,
@@ -55,9 +55,9 @@ func NewNotificationScheduler(
 	onComplete func(subscriptionId string, reason string),
 ) *NotificationScheduler {
 	return &NotificationScheduler{
-		baseCtx:  baseCtx,
-		cfg:      cfg,
-		mlClient: mlClient,
+		baseCtx:         baseCtx,
+		cfg:             cfg,
+		inferenceEngine: inferenceEngine,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 			Transport: &http.Transport{
@@ -287,7 +287,7 @@ func (s *NotificationScheduler) buildNotification(
 				s.subscriptionId,
 				eventSub,
 				s.cfg,
-				s.mlClient,
+				s.inferenceEngine,
 			))
 		}
 	}

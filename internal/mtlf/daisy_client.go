@@ -1,4 +1,4 @@
-package consumer
+package mtlf
 
 import (
 	"bytes"
@@ -10,6 +10,13 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// DaisyAPI defines the local Daisy integration seam owned by MTLF.
+type DaisyAPI interface {
+	TriggerTrainingAsync(ctx context.Context, task map[string]any, callbackURL string, tidOverride string) (string, error)
+	UploadData(ctx context.Context, tid string, groupID string, upfEventNotifs []json.RawMessage) error
+	HTTPClient() *http.Client
+}
 
 const (
 	// DaisyPublishTaskPath is the REST API endpoint to trigger FL training on Daisy master
@@ -39,8 +46,7 @@ type DaisyUploadDataRequest struct {
 	UpfEventNotifs []json.RawMessage `json:"upfEventNotifs"`
 }
 
-// DaisyClient handles Daisy FL framework REST API interactions
-// Used to trigger federated learning training tasks on the Daisy master node
+// DaisyClient handles Daisy FL framework REST API interactions.
 type DaisyClient struct {
 	endpoint   string
 	httpClient *http.Client
@@ -108,7 +114,7 @@ func (c *DaisyClient) TriggerTrainingAsync(
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			consumerLog.Debugf("failed to close response body: %v", closeErr)
+			mtlfLog.Debugf("failed to close response body: %v", closeErr)
 		}
 	}()
 
@@ -124,12 +130,12 @@ func (c *DaisyClient) TriggerTrainingAsync(
 func (c *DaisyClient) UploadData(
 	ctx context.Context,
 	tid string,
-	groupId string,
+	groupID string,
 	upfEventNotifs []json.RawMessage,
 ) error {
 	payload := DaisyUploadDataRequest{
 		TID:            tid,
-		GroupId:        groupId,
+		GroupId:        groupID,
 		UpfEventNotifs: upfEventNotifs,
 	}
 
@@ -157,7 +163,7 @@ func (c *DaisyClient) UploadData(
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			consumerLog.Debugf("failed to close UploadData response body: %v", closeErr)
+			mtlfLog.Debugf("failed to close UploadData response body: %v", closeErr)
 		}
 	}()
 
@@ -179,4 +185,17 @@ func (c *DaisyClient) GetEndpoint() string {
 // HTTPClient returns the underlying HTTP client for testing
 func (c *DaisyClient) HTTPClient() *http.Client {
 	return c.httpClient
+}
+
+func timeoutContextFromParent(
+	parent context.Context,
+	timeout time.Duration,
+	operation string,
+) (context.Context, context.CancelFunc, error) {
+	if parent == nil {
+		return nil, nil, fmt.Errorf("%s requires parent context", operation)
+	}
+
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	return ctx, cancel, nil
 }

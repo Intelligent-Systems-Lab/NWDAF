@@ -6,49 +6,48 @@ import (
 	"testing"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
-	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
 
-type fakeMlServiceClient struct {
+type fakeInferenceEngineClient struct {
 	initializeCalls int
 	lastCtx         context.Context
 	lastModelURL    string
 	modelID         string
 }
 
-func (f *fakeMlServiceClient) InitializeModel(ctx context.Context, modelURL string) (string, error) {
+func (f *fakeInferenceEngineClient) InitializeModel(ctx context.Context, modelURL string) (string, error) {
 	f.initializeCalls++
 	f.lastCtx = ctx
 	f.lastModelURL = modelURL
 	return f.modelID, nil
 }
 
-func (f *fakeMlServiceClient) UnloadModel(context.Context, string) error { return nil }
+func (f *fakeInferenceEngineClient) UnloadModel(context.Context, string) error { return nil }
 
-func (f *fakeMlServiceClient) Predict(
+func (f *fakeInferenceEngineClient) Predict(
 	context.Context,
 	string,
-	[]consumer.TrafficObservation,
-) (*consumer.PredictResponse, error) {
+	[]TrafficObservation,
+) (*PredictResponse, error) {
 	return nil, nil
 }
 
-func (f *fakeMlServiceClient) HTTPClient() *http.Client { return &http.Client{} }
+func (f *fakeInferenceEngineClient) HTTPClient() *http.Client { return &http.Client{} }
 
 func TestInitializeMlModelUsesInjectedClient(t *testing.T) {
 	nwdaf_context.Init()
 
 	cfg := &factory.Config{
 		Configuration: &factory.Configuration{
-			MlService: &factory.MlServiceConfig{
+			InferenceEngine: &factory.InferenceEngineConfig{
 				Enabled:  true,
-				Endpoint: "http://ml-service.example",
+				Endpoint: "http://inference-engine.example",
 			},
 		},
 	}
-	client := &fakeMlServiceClient{modelID: "model-123"}
+	client := &fakeInferenceEngineClient{modelID: "model-123"}
 	service := NewAnlfService(testNwdafApp{
 		ctx: context.Background(),
 		cfg: cfg,

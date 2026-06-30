@@ -12,7 +12,6 @@ package sbi
 import (
 	reflect "reflect"
 
-	context0 "github.com/free5gc/nwdaf/internal/context"
 	processor "github.com/free5gc/nwdaf/internal/sbi/processor"
 	models "github.com/free5gc/openapi/models"
 	gomock "go.uber.org/mock/gomock"
@@ -67,18 +66,6 @@ func (m *MockprocessorAPI) HandleCreateSubscription(req *models.NnwdafEventsSubs
 func (mr *MockprocessorAPIMockRecorder) HandleCreateSubscription(req any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleCreateSubscription", reflect.TypeOf((*MockprocessorAPI)(nil).HandleCreateSubscription), req)
-}
-
-// HandleDaisyCallback mocks base method.
-func (m *MockprocessorAPI) HandleDaisyCallback(taskID, modelURL, status, errMsg string) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "HandleDaisyCallback", taskID, modelURL, status, errMsg)
-}
-
-// HandleDaisyCallback indicates an expected call of HandleDaisyCallback.
-func (mr *MockprocessorAPIMockRecorder) HandleDaisyCallback(taskID, modelURL, status, errMsg any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleDaisyCallback", reflect.TypeOf((*MockprocessorAPI)(nil).HandleDaisyCallback), taskID, modelURL, status, errMsg)
 }
 
 // HandleDeleteSubscription mocks base method.
@@ -136,16 +123,4 @@ func (m *MockprocessorAPI) HandleUpfNotification(notification *processor.UpfNoti
 func (mr *MockprocessorAPIMockRecorder) HandleUpfNotification(notification any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleUpfNotification", reflect.TypeOf((*MockprocessorAPI)(nil).HandleUpfNotification), notification)
-}
-
-// InitializeMlModel mocks base method.
-func (m *MockprocessorAPI) InitializeMlModel(nwdafSubID string, mlInfo *context0.MlModelInfo, modelURL string) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "InitializeMlModel", nwdafSubID, mlInfo, modelURL)
-}
-
-// InitializeMlModel indicates an expected call of InitializeMlModel.
-func (mr *MockprocessorAPIMockRecorder) InitializeMlModel(nwdafSubID, mlInfo, modelURL any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InitializeMlModel", reflect.TypeOf((*MockprocessorAPI)(nil).InitializeMlModel), nwdafSubID, mlInfo, modelURL)
 }

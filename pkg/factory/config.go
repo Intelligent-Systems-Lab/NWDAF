@@ -49,7 +49,7 @@ type Configuration struct {
 	SupportedAnalytics []string               `yaml:"supportedAnalytics,omitempty"`
 	Smf                *SmfConfig             `yaml:"smf,omitempty"`
 	ExternalMtlf       *ExternalMtlfConfig    `yaml:"externalMtlf,omitempty"`
-	MlService          *MlServiceConfig       `yaml:"mlService,omitempty"`
+	InferenceEngine    *InferenceEngineConfig `yaml:"inferenceEngine,omitempty"`
 	GroupMembership    *GroupMembershipConfig `yaml:"groupMembership,omitempty"`
 	Mtlf               *MtlfConfig            `yaml:"mtlf,omitempty"`
 	Analytics          *AnalyticsConfig       `yaml:"analytics,omitempty"`
@@ -158,8 +158,8 @@ func (m *ModelParams) RingBufferSizeOrDefault() int {
 	return 50
 }
 
-// MlServiceConfig configuration for external ML inference service
-type MlServiceConfig struct {
+// InferenceEngineConfig configuration for the local inference engine.
+type InferenceEngineConfig struct {
 	Enabled  bool   `yaml:"enabled"`
 	Endpoint string `yaml:"endpoint,omitempty"`
 }
@@ -565,8 +565,8 @@ func (c *Configuration) validate() error {
 			errs = append(errs, validateErr)
 		}
 	}
-	if c.MlService != nil && c.MlService.Enabled {
-		if validateErr := c.MlService.validate(); validateErr != nil {
+	if c.InferenceEngine != nil && c.InferenceEngine.Enabled {
+		if validateErr := c.InferenceEngine.validate(); validateErr != nil {
 			errs = append(errs, validateErr)
 		}
 	}
@@ -647,8 +647,8 @@ func (s *SmfConfig) validate() error {
 	return nil
 }
 
-func (m *MlServiceConfig) validate() error {
-	return validateHTTPURL("mlService.endpoint", m.Endpoint)
+func (m *InferenceEngineConfig) validate() error {
+	return validateHTTPURL("inferenceEngine.endpoint", m.Endpoint)
 }
 
 func (m *ExternalMtlfConfig) validate() error {

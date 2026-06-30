@@ -17,8 +17,6 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	defer ctrl.Finish()
 
 	smfConsumer := NewMockConsumerAPI(ctrl)
-	smfConsumer.EXPECT().MlClient().Return(nil).AnyTimes()
-	smfConsumer.EXPECT().DaisyClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().AdrfClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().
 		SubscribeToSmf(gomock.Any(), "http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
@@ -195,8 +193,6 @@ func TestTriggerTargetDataCollection_WithOriginalGroupId(t *testing.T) {
 
 	smfConsumer := NewMockConsumerAPI(ctrl)
 	var gotSupis []string
-	smfConsumer.EXPECT().MlClient().Return(nil).AnyTimes()
-	smfConsumer.EXPECT().DaisyClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().AdrfClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().
 		SubscribeToSmf(gomock.Any(), "http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
@@ -271,8 +267,6 @@ func TestTriggerTargetDataCollection_MixedSupiAndGroup(t *testing.T) {
 
 	smfConsumer := NewMockConsumerAPI(ctrl)
 	var subscribeCalls int
-	smfConsumer.EXPECT().MlClient().Return(nil).AnyTimes()
-	smfConsumer.EXPECT().DaisyClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().AdrfClient().Return(nil).AnyTimes()
 	smfConsumer.EXPECT().
 		SubscribeToSmf(gomock.Any(), "http://smf.example", gomock.AssignableToTypeOf(consumer.SmfSubscriptionOptions{})).
@@ -344,7 +338,7 @@ func TestTriggerMlModelProvisioning_StaticUrl(t *testing.T) {
 				Enabled:        false, // MTLF Disabled
 				StaticModelUrl: "file:///test/model.pth",
 			},
-			MlService: &factory.MlServiceConfig{
+			InferenceEngine: &factory.InferenceEngineConfig{
 				Enabled:  true,
 				Endpoint: "http://ml-service-mock",
 			},

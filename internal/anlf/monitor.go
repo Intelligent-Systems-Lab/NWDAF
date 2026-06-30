@@ -16,9 +16,7 @@ import (
 // StartAccuracyMonitorForModel starts a per-model accuracy monitoring goroutine.
 // Idempotent — skips if a monitor is already running for this modelUrl.
 // Per TS 23.288 §6.2D: monitoring activated when analytics model becomes active.
-func (a *AnlfService) StartAccuracyMonitorForModel(
-	modelUrl string, wg *sync.WaitGroup,
-) {
+func (a *AnlfService) StartAccuracyMonitorForModel(modelUrl string, wg *sync.WaitGroup) {
 	cfg := a.config()
 	if !isAccuracyMonitorEnabled(cfg) {
 		return
@@ -46,6 +44,13 @@ func (a *AnlfService) StartAccuracyMonitorForModel(
 	}()
 
 	anlfLog.Infof("Accuracy monitor started: model=%s, interval=%ds", modelUrl, interval)
+}
+
+func (a *AnlfService) StartOwnedAccuracyMonitorForModel(modelUrl string) {
+	if a == nil || a.wg == nil {
+		return
+	}
+	a.StartAccuracyMonitorForModel(modelUrl, a.wg)
 }
 
 // StopAccuracyMonitorForModel stops the monitor for a model if no subscribers remain.

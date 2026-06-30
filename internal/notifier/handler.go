@@ -5,7 +5,6 @@ import (
 	"context"
 
 	"github.com/free5gc/nwdaf/internal/anlf"
-	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
@@ -17,7 +16,7 @@ type AnalyticsHandler interface {
 		nwdafSubId string,
 		eventSub *models.NwdafEventsSubscriptionEventSubscription,
 		cfg *factory.Config,
-		mlClient consumer.MlServiceAPI,
+		inferenceEngine anlf.InferenceEngineAPI,
 	) models.NwdafEventsSubscriptionEventNotification
 }
 
@@ -41,11 +40,11 @@ func (h *UeCommunicationHandler) BuildEventNotification(
 	nwdafSubId string,
 	eventSub *models.NwdafEventsSubscriptionEventSubscription,
 	cfg *factory.Config,
-	mlClient consumer.MlServiceAPI,
+	inferenceEngine anlf.InferenceEngineAPI,
 ) models.NwdafEventsSubscriptionEventNotification {
 	return models.NwdafEventsSubscriptionEventNotification{
 		Event:   eventSub.Event,
-		UeComms: []models.UeCommunication{anlf.GenerateUeCommunicationAnalytics(parentCtx, nwdafSubId, cfg, mlClient)},
+		UeComms: []models.UeCommunication{anlf.GenerateUeCommunicationAnalytics(parentCtx, nwdafSubId, cfg, inferenceEngine)},
 	}
 }
 
@@ -57,7 +56,7 @@ func (h *AbnormalBehaviourHandler) BuildEventNotification(
 	nwdafSubId string,
 	eventSub *models.NwdafEventsSubscriptionEventSubscription,
 	cfg *factory.Config,
-	_ consumer.MlServiceAPI,
+	_ anlf.InferenceEngineAPI,
 ) models.NwdafEventsSubscriptionEventNotification {
 	return models.NwdafEventsSubscriptionEventNotification{
 		Event:        eventSub.Event,

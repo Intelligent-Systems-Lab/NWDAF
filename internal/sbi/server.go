@@ -12,7 +12,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 
-	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/sbi/processor"
 	"github.com/free5gc/nwdaf/pkg/app"
@@ -61,8 +60,6 @@ type processorAPI interface {
 	HandleDeleteSubscription(subscriptionID string) *models.ProblemDetails
 	HandleSmfNotification(notification *models.NsmfEventExposureNotification) error
 	HandleUpfNotification(notification *processor.UpfNotificationData) error
-	InitializeMlModel(nwdafSubID string, mlInfo *nwdaf_context.MlModelInfo, modelURL string)
-	HandleDaisyCallback(taskID, modelURL, status, errMsg string)
 	HandleAdrfRetrievalNotify(notifCorrID string, fetchCorrIDs []string, terminationReq bool)
 }
 
@@ -98,15 +95,6 @@ func NewServer(nwdaf nwdafApp) (*Server, error) {
 	collectorRoutes := s.getCollectorRoutes()
 	collectorGroup := s.router.Group("/collector")
 	applyRoutes(collectorGroup, collectorRoutes)
-
-	// ML Model Provision callback routes (for MTLF notifications)
-	mlModelRoutes := s.getMlModelRoutes()
-	mlModelGroup := s.router.Group("/mlmodel-notify")
-	applyRoutes(mlModelGroup, mlModelRoutes)
-
-	// Daisy async training callback routes
-	daisyGroup := s.router.Group("/mtlf")
-	applyRoutes(daisyGroup, s.getDaisyCallbackRoutes())
 
 	cfg := nwdaf.Config()
 	bindAddr := cfg.GetSbiBindingAddr()
@@ -147,6 +135,10 @@ func (s *Server) getEventsSubscriptionRoutes() []Route {
 
 func (s *Server) Processor() processorAPI {
 	return s.processor
+}
+
+func (s *Server) Router() *gin.Engine {
+	return s.router
 }
 
 func (s *Server) Run(wg *sync.WaitGroup) error {
