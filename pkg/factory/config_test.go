@@ -104,7 +104,7 @@ configuration:
 			wantErr: "inferenceEngine.endpoint",
 		},
 		{
-			name: "external mtlf enabled requires notif uri",
+			name: "external mtlf enabled accepts endpoint-only config",
 			yaml: `
 configuration:
   externalMtlf:
@@ -112,7 +112,6 @@ configuration:
     endpoints:
       - http://127.0.0.1:8082
 `,
-			wantErr: "externalMtlf.notifUri",
 		},
 		{
 			name: "anlf wildcard binding requires register ip",

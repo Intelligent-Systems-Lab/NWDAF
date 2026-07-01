@@ -103,11 +103,11 @@ func (m *MlModelInfo) GetStatus() MlModelStatus {
 
 // SharedModelInfo tracks a loaded ML model shared across subscriptions.
 // One SharedModelInfo per unique modelUrl. Multiple subscriptions can share
-// the same model, avoiding duplicate ML service initialization.
+// the same model, avoiding duplicate inference-engine initialization.
 type SharedModelInfo struct {
 	sync.RWMutex
 	ModelUrl    string
-	ModelId     string              // From ML service (set once on first init)
+	ModelId     string              // From inference engine (set once on first init)
 	Event       models.NwdafEvent   // Analytics event type
 	Subscribers map[string]struct{} // nwdafSubId set
 	loadOnce    sync.Once
@@ -165,7 +165,7 @@ func (s *SharedModelInfo) GetModelId() string {
 	return s.ModelId
 }
 
-// SetModelId stores the ML service model ID and signals load completion.
+// SetModelId stores the inference-engine model ID and signals load completion.
 func (s *SharedModelInfo) SetModelId(modelId string) {
 	s.Lock()
 	s.ModelId = modelId

@@ -76,7 +76,6 @@ type GroupDefinition struct {
 type ExternalMtlfConfig struct {
 	Enabled   bool     `yaml:"enabled"`
 	Endpoints []string `yaml:"endpoints,omitempty"`
-	NotifUri  string   `yaml:"notifUri,omitempty"` // Callback URI for ML model notifications
 }
 
 type AnlfConfig struct {
@@ -756,9 +755,6 @@ func (m *ExternalMtlfConfig) validate() error {
 		if err := validateHTTPURL(fmt.Sprintf("externalMtlf.endpoints[%d]", i), endpoint); err != nil {
 			errs = append(errs, err)
 		}
-	}
-	if err := validateHTTPURL("externalMtlf.notifUri", m.NotifUri); err != nil {
-		errs = append(errs, err)
 	}
 
 	if len(errs) > 0 {

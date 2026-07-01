@@ -37,7 +37,7 @@ configuration:
     ueCommunication:
       samplingInterval: 30  # UPF report period (seconds); governs smf repPeriod
       inputWindow: 30       # data points fed to ML model (30 × 30s = 15 min history)
-      outputWindow: 1       # ML service predicts 1 step ahead
+      outputWindow: 1       # Inference engine predicts 1 step ahead
       lookbackBuffer: 15    # extra seconds added to query window to absorb jitter (default: 2×samplingInterval)
       # queryLookback = samplingInterval × inputWindow + lookbackBuffer (auto-computed)
       ringBufferSize: 50    # in-memory ring buffer size per UE session; must be >= inputWindow
@@ -47,7 +47,6 @@ configuration:
     enabled: false  # Disable MTLF to use static model URL
     endpoints:
       - http://127.0.0.1:8082  # Fake MTLF server for testing
-    notifUri: http://127.0.0.1:8090/mlmodel-notify
 
   # Inference Engine
   inferenceEngine:

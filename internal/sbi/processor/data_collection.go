@@ -299,9 +299,6 @@ func (p *Processor) triggerMlModelProvisioning(
 	ctx.SetMlModelInfo(subscriptionId, mlInfo)
 
 	notifUri := p.anlf.BuildProvisionNotificationURI()
-	if externalMtlf.NotifUri != "" {
-		notifUri = externalMtlf.NotifUri
-	}
 	if notifUri == "" {
 		logger.ProcLog.Warnf("External MTLF subscription skipped: AnLF provision notification URI is empty")
 		return

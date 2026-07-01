@@ -90,7 +90,7 @@ func GenerateUeCommunicationAnalytics(
 	}
 }
 
-// generateMlBasedUeCommunication uses ML service for prediction
+// generateMlBasedUeCommunication uses the inference engine for prediction
 func generateMlBasedUeCommunication(
 	parentCtx context.Context,
 	nwdafSubId string,
@@ -141,7 +141,7 @@ func generateMlBasedUeCommunication(
 		last.UlThr, last.DlThr, last.UlPktThr, last.DlPktThr,
 		baseTargetTime.Format(time.RFC3339), baseTargetTimeFallback)
 
-	// Call ML service for prediction
+	// Call the inference engine for prediction
 	modelId := mlInfo.GetModelId()
 	resp, err := inferenceEngine.Predict(parentCtx, modelId, historicalData)
 	if err != nil {

@@ -1,12 +1,16 @@
 package processor
 
 import (
+	"context"
 	"testing"
 
 	"go.uber.org/mock/gomock"
 
+	"github.com/free5gc/nwdaf/internal/anlf"
+	"github.com/free5gc/nwdaf/internal/mtlf"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/factory"
+	"github.com/free5gc/nwdaf/pkg/mockapp"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -340,7 +344,7 @@ func TestTriggerMlModelProvisioning_StaticUrl(t *testing.T) {
 			},
 			InferenceEngine: &factory.InferenceEngineConfig{
 				Enabled:  true,
-				Endpoint: "http://ml-service-mock",
+				Endpoint: "http://inference-engine-mock",
 			},
 		},
 	}
@@ -395,4 +399,59 @@ func TestTriggerMlModelProvisioning_MtlfDisabledNoStaticUrl(t *testing.T) {
 	if mlInfo != nil {
 		t.Error("Expected no MlModelInfo to be created")
 	}
+}
+
+func TestTriggerMlModelProvisioning_UsesAnlfServerNotificationURI(t *testing.T) {
+	setupTestContext()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	cfg := &factory.Config{
+		Configuration: &factory.Configuration{
+			Anlf: &factory.AnlfConfig{
+				Server: &factory.AuxiliaryServerConfig{
+					BindingIPv4:  "127.0.0.1",
+					RegisterIPv4: "10.1.2.3",
+					Port:         8090,
+				},
+			},
+			ExternalMtlf: &factory.ExternalMtlfConfig{
+				Enabled:   true,
+				Endpoints: []string{"http://mtlf.example"},
+			},
+		},
+	}
+
+	mockConsumer := NewMockConsumerAPI(ctrl)
+	mockConsumer.EXPECT().AdrfClient().Return(nil).AnyTimes()
+	mockConsumer.EXPECT().
+		SubscribeToMtlf(gomock.Any(), "http://mtlf.example", gomock.AssignableToTypeOf(consumer.MtlfSubscriptionOptions{})).
+		DoAndReturn(func(_ context.Context, _ string, opts consumer.MtlfSubscriptionOptions) (string, error) {
+			if opts.NotifUri != "http://10.1.2.3:8090/mlmodel-notify" {
+				t.Fatalf("NotifUri = %q, want %q",
+					opts.NotifUri, "http://10.1.2.3:8090/mlmodel-notify")
+			}
+			return "mtlf-sub-123", nil
+		}).
+		Times(1)
+
+	mockApp := mockapp.NewMockApp(ctrl)
+	mockApp.EXPECT().CancelContext().Return(context.Background()).AnyTimes()
+	mockApp.EXPECT().Consumer().Return(mockConsumer).AnyTimes()
+	mockApp.EXPECT().Config().Return(cfg).AnyTimes()
+
+	anlfService := anlf.NewAnlfService(mockApp, nil)
+	mtlfService := mtlf.NewMtlfService(mockApp, nil, nil)
+	p := NewProcessor(mockApp, anlfService, mtlfService)
+
+	subId := "test-sub-dynamic"
+	eventSub := models.NwdafEventsSubscriptionEventSubscription{
+		Event: models.NwdafEvent_UE_COMMUNICATION,
+		TgtUe: &models.TargetUeInformation{
+			Supis: []string{"imsi-208930000000003"},
+		},
+	}
+
+	p.triggerMlModelProvisioning(&eventSub, subId)
 }

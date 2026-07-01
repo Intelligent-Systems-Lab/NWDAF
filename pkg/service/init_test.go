@@ -34,11 +34,12 @@ func TestStartOwnedServersStartsAndStopsAllListeners(t *testing.T) {
 func TestStartOwnedServersCleansUpOnAuxiliaryBindFailure(t *testing.T) {
 	t.Parallel()
 
-	sbiPort := takeFreePort(t)
-	anlfBlocker, anlfPort := takeOccupiedPort(t)
-	defer closeListener(t, anlfBlocker)
+	sbiBlocker, sbiPort := takeOccupiedPort(t)
+	defer closeListener(t, sbiBlocker)
 
-	cfg := newLifecycleTestConfig(t, sbiPort, anlfPort, takeFreePort(t))
+	anlfPort := takeFreePort(t)
+	mtlfPort := takeFreePort(t)
+	cfg := newLifecycleTestConfig(t, sbiPort, anlfPort, mtlfPort)
 	app, err := NewApp(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
@@ -50,7 +51,8 @@ func TestStartOwnedServersCleansUpOnAuxiliaryBindFailure(t *testing.T) {
 		t.Fatal("startOwnedServers() error = nil, want bind failure")
 	}
 
-	assertPortClosedEventually(t, cfg.GetSbiBindingAddr())
+	assertPortClosedEventually(t, cfg.GetAnlfServerBindingAddr())
+	assertPortClosedEventually(t, cfg.GetMtlfServerBindingAddr())
 	waitForWaitGroup(t, &app.wg)
 }
 
