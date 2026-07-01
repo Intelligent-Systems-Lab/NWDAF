@@ -28,6 +28,12 @@ configuration: {}
 				if got := cfg.GetSbiBindingAddr(); got != "127.0.0.1:8080" {
 					t.Fatalf("GetSbiBindingAddr() = %q, want %q", got, "127.0.0.1:8080")
 				}
+				if got := cfg.GetAnlfServerURI(); got != "http://127.0.0.1:8090" {
+					t.Fatalf("GetAnlfServerURI() = %q, want %q", got, "http://127.0.0.1:8090")
+				}
+				if got := cfg.GetMtlfServerURI(); got != "http://127.0.0.1:8091" {
+					t.Fatalf("GetMtlfServerURI() = %q, want %q", got, "http://127.0.0.1:8091")
+				}
 				if got := cfg.Configuration.SupportedAnalytics; len(got) != 1 || got[0] != "UE_COMMUNICATION" {
 					t.Fatalf("SupportedAnalytics = %v, want [UE_COMMUNICATION]", got)
 				}
@@ -109,6 +115,26 @@ configuration:
 			wantErr: "externalMtlf.notifUri",
 		},
 		{
+			name: "anlf wildcard binding requires register ip",
+			yaml: `
+configuration:
+  anlf:
+    server:
+      bindingIPv4: 0.0.0.0
+`,
+			wantErr: "anlf.server.registerIPv4",
+		},
+		{
+			name: "mtlf wildcard binding requires register ip",
+			yaml: `
+configuration:
+  mtlf:
+    server:
+      bindingIPv4: 0.0.0.0
+`,
+			wantErr: "mtlf.server.registerIPv4",
+		},
+		{
 			name: "adrf fetch batch larger than supported",
 			yaml: `
 configuration:
@@ -169,6 +195,42 @@ func TestConfigSbiGetters(t *testing.T) {
 	}
 	if got := cfg.GetSbiUri(); got != "http://192.168.1.10:8080" {
 		t.Fatalf("GetSbiUri() = %q, want %q", got, "http://192.168.1.10:8080")
+	}
+}
+
+func TestConfigAuxiliaryServerGetters(t *testing.T) {
+	t.Parallel()
+
+	cfg := &factory.Config{
+		Configuration: &factory.Configuration{
+			Anlf: &factory.AnlfConfig{
+				Server: &factory.AuxiliaryServerConfig{
+					BindingIPv4:  "0.0.0.0",
+					RegisterIPv4: "192.168.1.20",
+					Port:         8090,
+				},
+			},
+			Mtlf: &factory.MtlfConfig{
+				Server: &factory.AuxiliaryServerConfig{
+					BindingIPv4:  "127.0.0.9",
+					RegisterIPv4: "192.168.1.21",
+					Port:         8091,
+				},
+			},
+		},
+	}
+
+	if got := cfg.GetAnlfServerBindingAddr(); got != "0.0.0.0:8090" {
+		t.Fatalf("GetAnlfServerBindingAddr() = %q, want %q", got, "0.0.0.0:8090")
+	}
+	if got := cfg.GetAnlfServerURI(); got != "http://192.168.1.20:8090" {
+		t.Fatalf("GetAnlfServerURI() = %q, want %q", got, "http://192.168.1.20:8090")
+	}
+	if got := cfg.GetMtlfServerBindingAddr(); got != "127.0.0.9:8091" {
+		t.Fatalf("GetMtlfServerBindingAddr() = %q, want %q", got, "127.0.0.9:8091")
+	}
+	if got := cfg.GetMtlfServerURI(); got != "http://192.168.1.21:8091" {
+		t.Fatalf("GetMtlfServerURI() = %q, want %q", got, "http://192.168.1.21:8091")
 	}
 }
 

@@ -16,6 +16,12 @@ configuration:
     - UE_COMMUNICATION
   # nrfUri: http://127.0.0.10:8000  # Reserved config; NRF registration is not wired yet
 
+  anlf:
+    server:
+      bindingIPv4: 127.0.0.1
+      registerIPv4: 127.0.0.1
+      port: 8090
+
   # SMF Data Collection
   smf:
     enabled: true
@@ -41,7 +47,7 @@ configuration:
     enabled: false  # Disable MTLF to use static model URL
     endpoints:
       - http://127.0.0.1:8082  # Fake MTLF server for testing
-    notifUri: http://127.0.0.1:8080/mlmodel-notify
+    notifUri: http://127.0.0.1:8090/mlmodel-notify
 
   # Inference Engine
   inferenceEngine:
@@ -65,10 +71,14 @@ configuration:
   # MTLF (Daisy FL Framework)
   mtlf:
     enabled: true               # Master switch for all Daisy FL features
+    server:
+      bindingIPv4: 127.0.0.1
+      registerIPv4: 127.0.0.1
+      port: 8091
     endpoint: http://127.0.0.1:9887
     triggerOnStartup: false      # Trigger training once after NWDAF startup
     triggerDelay: 10            # seconds to wait before startup trigger
-    staticModelUrl: http://placeholder/download/initial  # Initial model bundle (pre-cached in ML Service artifacts/initial/)
+    staticModelUrl: http://placeholder/download/initial  # Initial model bundle (pre-cached in inference-engine artifacts/initial/)
     accuracyMonitor:
       enabled: true            # Trigger retraining on accuracy degradation
       checkInterval: 90         # seconds between accuracy checks

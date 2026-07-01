@@ -119,3 +119,24 @@ func TestHandleMlModelProvisionNotify_InitializesModel(t *testing.T) {
 		t.Fatal("expected InitializeMlModel to be invoked")
 	}
 }
+
+func TestBuildProvisionNotificationURIUsesAnlfServerConfig(t *testing.T) {
+	service := NewAnlfService(testNwdafApp{
+		cfg: &factory.Config{
+			Configuration: &factory.Configuration{
+				Anlf: &factory.AnlfConfig{
+					Server: &factory.AuxiliaryServerConfig{
+						BindingIPv4:  "127.0.0.1",
+						RegisterIPv4: "10.0.0.8",
+						Port:         9010,
+					},
+				},
+			},
+		},
+	}, nil)
+
+	if got := service.BuildProvisionNotificationURI(); got != "http://10.0.0.8:9010/mlmodel-notify" {
+		t.Fatalf("BuildProvisionNotificationURI() = %q, want %q",
+			got, "http://10.0.0.8:9010/mlmodel-notify")
+	}
+}

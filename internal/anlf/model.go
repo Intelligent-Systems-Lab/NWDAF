@@ -7,9 +7,9 @@ import (
 	"github.com/free5gc/nwdaf/internal/logger"
 )
 
-// SwapModel loads a new model and unloads the old one via the ML Service.
+// SwapModel loads a new model and unloads the old one via the inference engine.
 // Called by MTLF (via processor callback) during model hot-swap after retraining.
-// Returns the new model ID assigned by the ML Service.
+// Returns the new model ID assigned by the inference engine.
 func (a *AnlfService) SwapModel(newModelUrl, oldModelId string) (string, error) {
 	cfg := a.config()
 	endpoint := inferenceEngineEndpoint(cfg)
@@ -38,7 +38,7 @@ func (a *AnlfService) SwapModel(newModelUrl, oldModelId string) (string, error) 
 	return newModelId, nil
 }
 
-// InitializeMlModel initializes the ML model directly using the ML Service.
+// InitializeMlModel initializes the model directly using the inference engine.
 // Deduplicates model loading: if modelUrl is already loaded by another
 // subscription, reuses the existing modelId from SharedModelRegistry.
 func (a *AnlfService) InitializeMlModel(

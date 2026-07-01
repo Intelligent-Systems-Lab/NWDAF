@@ -298,10 +298,13 @@ func (p *Processor) triggerMlModelProvisioning(
 	mlInfo := nwdaf_context.NewMlModelInfo(eventSub.Event, externalMtlf.Endpoints[0])
 	ctx.SetMlModelInfo(subscriptionId, mlInfo)
 
-	// Get notification URI from config
-	notifUri := externalMtlf.NotifUri
+	notifUri := p.anlf.BuildProvisionNotificationURI()
+	if externalMtlf.NotifUri != "" {
+		notifUri = externalMtlf.NotifUri
+	}
 	if notifUri == "" {
-		notifUri = "http://127.0.0.1:8080/mlmodel-notify"
+		logger.ProcLog.Warnf("External MTLF subscription skipped: AnLF provision notification URI is empty")
+		return
 	}
 
 	// Subscribe to first External MTLF endpoint

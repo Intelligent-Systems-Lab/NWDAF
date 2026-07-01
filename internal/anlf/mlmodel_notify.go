@@ -11,14 +11,6 @@ import (
 	"github.com/free5gc/openapi/models"
 )
 
-// RegisterProvisionRoutes registers ML model provision callback routes outside the SBI package.
-func RegisterProvisionRoutes(router gin.IRouter, service *AnlfService) {
-	if router == nil || service == nil {
-		return
-	}
-	router.POST("", service.HandleMlModelProvisionNotify)
-}
-
 // HandleMlModelProvisionNotify handles ML model provision notifications from MTLF.
 // Per TS 29.520 §5.4.5.2: callback body is []NwdafMlModelProvNotif.
 func (a *AnlfService) HandleMlModelProvisionNotify(c *gin.Context) {

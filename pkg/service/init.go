@@ -26,14 +26,16 @@ import (
 var _ app.App = &NwdafApp{}
 
 type NwdafApp struct {
-	cfg       *factory.Config
-	nwdafCtx  *nwdaf_context.NWDAFContext
-	ctx       context.Context
-	cancel    context.CancelFunc
-	consumer  *consumer.Consumer
-	processor *processor.Processor
-	sbiServer *sbi.Server
-	wg        sync.WaitGroup
+	cfg        *factory.Config
+	nwdafCtx   *nwdaf_context.NWDAFContext
+	ctx        context.Context
+	cancel     context.CancelFunc
+	consumer   *consumer.Consumer
+	processor  *processor.Processor
+	sbiServer  *sbi.Server
+	anlfServer *anlf.Server
+	mtlfServer *mtlf.Server
+	wg         sync.WaitGroup
 }
 
 func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
@@ -97,8 +99,14 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 	if err != nil {
 		return nil, err
 	}
-	anlf.RegisterProvisionRoutes(nwdaf.sbiServer.Router().Group("/mlmodel-notify"), anlfService)
-	mtlf.RegisterCallbackRoutes(nwdaf.sbiServer.Router().Group("/mtlf"), mtlfService)
+	nwdaf.anlfServer, err = anlf.NewServer(cfg, anlfService)
+	if err != nil {
+		return nil, err
+	}
+	nwdaf.mtlfServer, err = mtlf.NewServer(cfg, mtlfService)
+	if err != nil {
+		return nil, err
+	}
 
 	return nwdaf, nil
 }
@@ -194,12 +202,12 @@ func (a *NwdafApp) Start() {
 	// Set WaitGroup for processor goroutine lifecycle management
 	a.processor.SetWaitGroup(&a.wg)
 
-	// Start MTLF training scheduler (managed by processor)
-	a.processor.StartMtlfTrainingScheduler(&a.wg)
-
-	if err := a.sbiServer.Run(&a.wg); err != nil {
-		logger.InitLog.Fatalf("Run SBI server failed: %+v", err)
+	if err := a.startOwnedServers(); err != nil {
+		logger.InitLog.Fatalf("Run NWDAF servers failed: %+v", err)
 	}
+
+	// Start MTLF training scheduler only after the owned listeners are ready.
+	a.processor.StartMtlfTrainingScheduler(&a.wg)
 
 	a.WaitRoutineStopped()
 }
@@ -220,6 +228,34 @@ func (a *NwdafApp) Terminate() {
 	a.cancel()
 }
 
+func (a *NwdafApp) startOwnedServers() error {
+	if err := a.anlfServer.Run(&a.wg); err != nil {
+		return err
+	}
+	if err := a.mtlfServer.Run(&a.wg); err != nil {
+		a.anlfServer.Shutdown()
+		return err
+	}
+	if err := a.sbiServer.Run(&a.wg); err != nil {
+		a.anlfServer.Shutdown()
+		a.mtlfServer.Shutdown()
+		return err
+	}
+	return nil
+}
+
+func (a *NwdafApp) stopOwnedServers() {
+	if a.mtlfServer != nil {
+		a.mtlfServer.Shutdown()
+	}
+	if a.anlfServer != nil {
+		a.anlfServer.Shutdown()
+	}
+	if a.sbiServer != nil {
+		a.sbiServer.Shutdown()
+	}
+}
+
 func (a *NwdafApp) terminateProcedure() {
 	logger.MainLog.Infof("Terminating NWDAF...")
 
@@ -227,9 +263,7 @@ func (a *NwdafApp) terminateProcedure() {
 		a.nwdafCtx.StopAllSubscriptionSchedulers()
 	}
 
-	if a.sbiServer != nil {
-		a.sbiServer.Shutdown()
-	}
+	a.stopOwnedServers()
 
 	logger.InitLog.Infof("NWDAF terminated")
 }

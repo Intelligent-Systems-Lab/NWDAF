@@ -116,6 +116,14 @@ func (a *AnlfService) InferenceEngine() InferenceEngineAPI {
 	return a.inferenceEngine
 }
 
+func (a *AnlfService) BuildProvisionNotificationURI() string {
+	cfg := a.config()
+	if cfg == nil {
+		return ""
+	}
+	return cfg.GetAnlfServerURI() + "/mlmodel-notify"
+}
+
 func (a *AnlfService) acquireStartupWarmupDuration(accCfg *factory.AccuracyMonitorConfig) int {
 	a.warmupMu.Lock()
 	defer a.warmupMu.Unlock()

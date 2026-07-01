@@ -198,7 +198,12 @@ func TestSubmitDaisyTaskUsesInjectedClient(t *testing.T) {
 				Port:         8000,
 			},
 			Mtlf: &factory.MtlfConfig{
-				Enabled:        true,
+				Enabled: true,
+				Server: &factory.AuxiliaryServerConfig{
+					BindingIPv4:  "127.0.0.1",
+					RegisterIPv4: "127.0.0.1",
+					Port:         9001,
+				},
 				Endpoint:       "http://daisy.example",
 				StaticModelUrl: "file:///old-model.onnx",
 				Task: map[string]any{
@@ -222,9 +227,9 @@ func TestSubmitDaisyTaskUsesInjectedClient(t *testing.T) {
 	if client.lastCtx == nil {
 		t.Fatal("TriggerTrainingAsync should receive a parent context")
 	}
-	if client.lastCallbackURL != "http://127.0.0.1:8000/mtlf/training-complete" {
+	if client.lastCallbackURL != "http://127.0.0.1:9001/mtlf/training-complete" {
 		t.Fatalf("callbackURL = %q, want %q",
-			client.lastCallbackURL, "http://127.0.0.1:8000/mtlf/training-complete")
+			client.lastCallbackURL, "http://127.0.0.1:9001/mtlf/training-complete")
 	}
 	if _, ok := client.lastModelTask["NUM_ROUNDS"]; !ok {
 		t.Fatal("expected task payload to be forwarded to Daisy client")

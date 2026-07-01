@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"sync"
@@ -67,6 +68,7 @@ type Server struct {
 	nwdafApp
 
 	httpServer *http.Server
+	listener   net.Listener
 	router     *gin.Engine
 	processor  processorAPI
 }
@@ -137,11 +139,13 @@ func (s *Server) Processor() processorAPI {
 	return s.processor
 }
 
-func (s *Server) Router() *gin.Engine {
-	return s.router
-}
-
 func (s *Server) Run(wg *sync.WaitGroup) error {
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", s.httpServer.Addr)
+	if err != nil {
+		return err
+	}
+	s.listener = listener
+
 	wg.Add(1)
 	go s.startServer(wg)
 
@@ -177,7 +181,7 @@ func (s *Server) startServer(wg *sync.WaitGroup) {
 	var err error
 	switch scheme {
 	case "http":
-		err = s.httpServer.ListenAndServe()
+		err = s.httpServer.Serve(s.listener)
 	case "https":
 		// TLS support to be added later
 		err = fmt.Errorf("HTTPS not yet supported")

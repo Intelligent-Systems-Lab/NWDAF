@@ -19,14 +19,6 @@ type DaisyTrainingCompleteNotification struct {
 	Error    string `json:"error,omitempty"`
 }
 
-// RegisterCallbackRoutes registers Daisy callback routes outside the SBI package.
-func RegisterCallbackRoutes(router gin.IRouter, service *MtlfService) {
-	if router == nil || service == nil {
-		return
-	}
-	router.POST("/training-complete", service.HandleDaisyTrainingComplete)
-}
-
 // HandleDaisyTrainingComplete handles POST /mtlf/training-complete.
 func (m *MtlfService) HandleDaisyTrainingComplete(c *gin.Context) {
 	var notif DaisyTrainingCompleteNotification

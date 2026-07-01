@@ -19,6 +19,8 @@ const (
 	NwdafSbiDefaultScheme      = "http"
 	NwdafSbiDefaultIPv4        = "127.0.0.1"
 	NwdafSbiDefaultPort        = 8080
+	NwdafAnlfDefaultPort       = 8090
+	NwdafMtlfDefaultPort       = 8091
 	NwdafDefaultNwdafName      = "NWDAF"
 	NwdafEventsSubResUriPrefix = "/nnwdaf-eventssubscription/v1"
 	NwdafSupportedEventUEComm  = "UE_COMMUNICATION"
@@ -48,6 +50,7 @@ type Configuration struct {
 	NrfUri             string                 `yaml:"nrfUri,omitempty"`
 	SupportedAnalytics []string               `yaml:"supportedAnalytics,omitempty"`
 	Smf                *SmfConfig             `yaml:"smf,omitempty"`
+	Anlf               *AnlfConfig            `yaml:"anlf,omitempty"`
 	ExternalMtlf       *ExternalMtlfConfig    `yaml:"externalMtlf,omitempty"`
 	InferenceEngine    *InferenceEngineConfig `yaml:"inferenceEngine,omitempty"`
 	GroupMembership    *GroupMembershipConfig `yaml:"groupMembership,omitempty"`
@@ -74,6 +77,10 @@ type ExternalMtlfConfig struct {
 	Enabled   bool     `yaml:"enabled"`
 	Endpoints []string `yaml:"endpoints,omitempty"`
 	NotifUri  string   `yaml:"notifUri,omitempty"` // Callback URI for ML model notifications
+}
+
+type AnlfConfig struct {
+	Server *AuxiliaryServerConfig `yaml:"server,omitempty"`
 }
 
 // AnalyticsConfig holds per-analytics-type model parameters
@@ -167,6 +174,7 @@ type InferenceEngineConfig struct {
 // MtlfConfig configuration for 1st-party MTLF / Daisy FL framework integration
 type MtlfConfig struct {
 	Enabled          bool                   `yaml:"enabled"`                    // Master switch for all Daisy FL features
+	Server           *AuxiliaryServerConfig `yaml:"server,omitempty"`           // Auxiliary inbound callback server
 	Endpoint         string                 `yaml:"endpoint,omitempty"`         // Master REST API
 	TriggerOnStartup bool                   `yaml:"triggerOnStartup,omitempty"` // Trigger training on NWDAF startup
 	TriggerDelay     int                    `yaml:"triggerDelay,omitempty"`     // Startup trigger delay (default: 30)
@@ -491,6 +499,12 @@ type Sbi struct {
 	Port         int    `yaml:"port,omitempty"`
 }
 
+type AuxiliaryServerConfig struct {
+	RegisterIPv4 string `yaml:"registerIPv4,omitempty"`
+	BindingIPv4  string `yaml:"bindingIPv4,omitempty"`
+	Port         int    `yaml:"port,omitempty"`
+}
+
 type Logger struct {
 	Enable       bool   `yaml:"enable"`
 	Level        string `yaml:"level"`
@@ -517,6 +531,30 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Configuration.Sbi.Port == 0 {
 		c.Configuration.Sbi.Port = NwdafSbiDefaultPort
+	}
+	if c.Configuration.Anlf == nil {
+		c.Configuration.Anlf = &AnlfConfig{}
+	}
+	if c.Configuration.Anlf.Server == nil {
+		c.Configuration.Anlf.Server = &AuxiliaryServerConfig{}
+	}
+	if c.Configuration.Anlf.Server.BindingIPv4 == "" {
+		c.Configuration.Anlf.Server.BindingIPv4 = NwdafSbiDefaultIPv4
+	}
+	if c.Configuration.Anlf.Server.Port == 0 {
+		c.Configuration.Anlf.Server.Port = NwdafAnlfDefaultPort
+	}
+	if c.Configuration.Mtlf == nil {
+		c.Configuration.Mtlf = &MtlfConfig{}
+	}
+	if c.Configuration.Mtlf.Server == nil {
+		c.Configuration.Mtlf.Server = &AuxiliaryServerConfig{}
+	}
+	if c.Configuration.Mtlf.Server.BindingIPv4 == "" {
+		c.Configuration.Mtlf.Server.BindingIPv4 = NwdafSbiDefaultIPv4
+	}
+	if c.Configuration.Mtlf.Server.Port == 0 {
+		c.Configuration.Mtlf.Server.Port = NwdafMtlfDefaultPort
 	}
 
 	if len(c.Configuration.SupportedAnalytics) == 0 {
@@ -548,6 +586,16 @@ func (c *Configuration) validate() error {
 	if c.Sbi == nil {
 		errs = append(errs, errors.New("sbi section is required"))
 	} else if err := c.Sbi.validate(); err != nil {
+		errs = append(errs, err)
+	}
+	if c.Anlf == nil {
+		errs = append(errs, errors.New("anlf section is required"))
+	} else if err := c.Anlf.validate(); err != nil {
+		errs = append(errs, err)
+	}
+	if c.Mtlf == nil {
+		errs = append(errs, errors.New("mtlf section is required"))
+	} else if err := c.Mtlf.validate(); err != nil {
 		errs = append(errs, err)
 	}
 
@@ -611,6 +659,48 @@ func (s *Sbi) validate() error {
 	}
 	if s.Port <= 0 || s.Port > 65535 {
 		errs = append(errs, fmt.Errorf("sbi.port must be between 1 and 65535"))
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+func (a *AnlfConfig) validate() error {
+	if a.Server == nil {
+		return errors.New("anlf.server section is required")
+	}
+	return a.Server.validate("anlf.server")
+}
+
+func (m *MtlfConfig) validate() error {
+	if m.Server == nil {
+		return errors.New("mtlf.server section is required")
+	}
+	return m.Server.validate("mtlf.server")
+}
+
+func (s *AuxiliaryServerConfig) validate(fieldPrefix string) error {
+	var errs []error
+
+	s.BindingIPv4 = strings.TrimSpace(s.BindingIPv4)
+	s.RegisterIPv4 = strings.TrimSpace(s.RegisterIPv4)
+
+	if !isValidHostValue(s.BindingIPv4) {
+		errs = append(errs, fmt.Errorf("%s.bindingIPv4 must be a valid host or IP", fieldPrefix))
+	}
+	if s.RegisterIPv4 != "" && !isValidHostValue(s.RegisterIPv4) {
+		errs = append(errs, fmt.Errorf("%s.registerIPv4 must be a valid host or IP", fieldPrefix))
+	}
+	if s.Port <= 0 || s.Port > 65535 {
+		errs = append(errs, fmt.Errorf("%s.port must be between 1 and 65535", fieldPrefix))
+	}
+	if s.RegisterIPv4 == "" && isWildcardHostValue(s.BindingIPv4) {
+		errs = append(errs, fmt.Errorf(
+			"%s.registerIPv4 is required when bindingIPv4 is a wildcard address",
+			fieldPrefix,
+		))
 	}
 
 	if len(errs) > 0 {
@@ -805,6 +895,15 @@ func isValidHostValue(value string) bool {
 	return true
 }
 
+func isWildcardHostValue(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "0.0.0.0", "::":
+		return true
+	default:
+		return false
+	}
+}
+
 func ReadConfig(cfgPath string) (*Config, error) {
 	if cfgPath == "" {
 		cfgPath = NwdafDefaultConfigPath
@@ -882,6 +981,82 @@ func (c *Config) GetSbiScheme() string {
 		return NwdafSbiDefaultScheme
 	}
 	return strings.ToLower(strings.TrimSpace(c.Configuration.Sbi.Scheme))
+}
+
+func (c *Config) GetAnlfServerBindingAddr() string {
+	return c.GetAnlfServerBindingIP() + ":" + strconv.Itoa(c.GetAnlfServerPort())
+}
+
+func (c *Config) GetAnlfServerBindingIP() string {
+	if c == nil || c.Configuration == nil || c.Configuration.Anlf == nil || c.Configuration.Anlf.Server == nil ||
+		strings.TrimSpace(c.Configuration.Anlf.Server.BindingIPv4) == "" {
+		return NwdafSbiDefaultIPv4
+	}
+	return strings.TrimSpace(c.Configuration.Anlf.Server.BindingIPv4)
+}
+
+func (c *Config) GetAnlfServerRegisterIP() string {
+	if c == nil || c.Configuration == nil || c.Configuration.Anlf == nil || c.Configuration.Anlf.Server == nil {
+		return NwdafSbiDefaultIPv4
+	}
+	if registerIP := strings.TrimSpace(c.Configuration.Anlf.Server.RegisterIPv4); registerIP != "" {
+		return registerIP
+	}
+	return c.GetAnlfServerBindingIP()
+}
+
+func (c *Config) GetAnlfServerRegisterAddr() string {
+	return c.GetAnlfServerRegisterIP() + ":" + strconv.Itoa(c.GetAnlfServerPort())
+}
+
+func (c *Config) GetAnlfServerURI() string {
+	return NwdafSbiDefaultScheme + "://" + c.GetAnlfServerRegisterAddr()
+}
+
+func (c *Config) GetAnlfServerPort() int {
+	if c == nil || c.Configuration == nil || c.Configuration.Anlf == nil || c.Configuration.Anlf.Server == nil ||
+		c.Configuration.Anlf.Server.Port == 0 {
+		return NwdafAnlfDefaultPort
+	}
+	return c.Configuration.Anlf.Server.Port
+}
+
+func (c *Config) GetMtlfServerBindingAddr() string {
+	return c.GetMtlfServerBindingIP() + ":" + strconv.Itoa(c.GetMtlfServerPort())
+}
+
+func (c *Config) GetMtlfServerBindingIP() string {
+	if c == nil || c.Configuration == nil || c.Configuration.Mtlf == nil || c.Configuration.Mtlf.Server == nil ||
+		strings.TrimSpace(c.Configuration.Mtlf.Server.BindingIPv4) == "" {
+		return NwdafSbiDefaultIPv4
+	}
+	return strings.TrimSpace(c.Configuration.Mtlf.Server.BindingIPv4)
+}
+
+func (c *Config) GetMtlfServerRegisterIP() string {
+	if c == nil || c.Configuration == nil || c.Configuration.Mtlf == nil || c.Configuration.Mtlf.Server == nil {
+		return NwdafSbiDefaultIPv4
+	}
+	if registerIP := strings.TrimSpace(c.Configuration.Mtlf.Server.RegisterIPv4); registerIP != "" {
+		return registerIP
+	}
+	return c.GetMtlfServerBindingIP()
+}
+
+func (c *Config) GetMtlfServerRegisterAddr() string {
+	return c.GetMtlfServerRegisterIP() + ":" + strconv.Itoa(c.GetMtlfServerPort())
+}
+
+func (c *Config) GetMtlfServerURI() string {
+	return NwdafSbiDefaultScheme + "://" + c.GetMtlfServerRegisterAddr()
+}
+
+func (c *Config) GetMtlfServerPort() int {
+	if c == nil || c.Configuration == nil || c.Configuration.Mtlf == nil || c.Configuration.Mtlf.Server == nil ||
+		c.Configuration.Mtlf.Server.Port == 0 {
+		return NwdafMtlfDefaultPort
+	}
+	return c.Configuration.Mtlf.Server.Port
 }
 
 // GetSamplingInterval returns the configured UE communication sampling interval,
