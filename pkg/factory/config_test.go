@@ -57,11 +57,43 @@ configuration:
 			wantErr: `supportedAnalytics[0]`,
 		},
 		{
-			name: "unsupported sbi scheme",
+			name: "https sbi requires tls paths",
 			yaml: `
 configuration:
   sbi:
     scheme: https
+`,
+			wantErr: "sbi.tls",
+		},
+		{
+			name: "https sbi accepts free5gc style tls config",
+			yaml: `
+configuration:
+  sbi:
+    scheme: https
+    tls:
+      pem: cert/nwdaf.pem
+      key: cert/nwdaf.key
+`,
+			checkConfig: func(t *testing.T, cfg *factory.Config) {
+				t.Helper()
+				if got := cfg.GetSbiUri(); got != "https://127.0.0.1:8080" {
+					t.Fatalf("GetSbiUri() = %q, want %q", got, "https://127.0.0.1:8080")
+				}
+				if got := cfg.GetCertPemPath(); got != "cert/nwdaf.pem" {
+					t.Fatalf("GetCertPemPath() = %q, want %q", got, "cert/nwdaf.pem")
+				}
+				if got := cfg.GetCertKeyPath(); got != "cert/nwdaf.key" {
+					t.Fatalf("GetCertKeyPath() = %q, want %q", got, "cert/nwdaf.key")
+				}
+			},
+		},
+		{
+			name: "unsupported sbi scheme",
+			yaml: `
+configuration:
+  sbi:
+    scheme: ftp
 `,
 			wantErr: "sbi.scheme",
 		},
@@ -93,6 +125,25 @@ configuration:
     enabled: true
 `,
 			wantErr: "smf.endpoints",
+		},
+		{
+			name: "owned collector callback scheme must match sbi scheme",
+			yaml: `
+configuration:
+  sbi:
+    scheme: https
+    tls:
+      pem: cert/nwdaf.pem
+      key: cert/nwdaf.key
+  smf:
+    enabled: true
+    endpoints:
+      - http://127.0.0.1:8081
+    notifUris:
+      smf: http://127.0.0.1:8080/collector/notify
+      upf: https://127.0.0.1:8080/collector/upf-notify
+`,
+			wantErr: "smf.notifUris.smf scheme must match sbi.scheme (https)",
 		},
 		{
 			name: "inference engine enabled requires endpoint",
@@ -182,6 +233,10 @@ func TestConfigSbiGetters(t *testing.T) {
 				BindingIPv4:  "0.0.0.0",
 				RegisterIPv4: "192.168.1.10",
 				Port:         8080,
+				Tls: &factory.Tls{
+					Pem: "cert/nwdaf.pem",
+					Key: "cert/nwdaf.key",
+				},
 			},
 		},
 	}
@@ -194,6 +249,12 @@ func TestConfigSbiGetters(t *testing.T) {
 	}
 	if got := cfg.GetSbiUri(); got != "http://192.168.1.10:8080" {
 		t.Fatalf("GetSbiUri() = %q, want %q", got, "http://192.168.1.10:8080")
+	}
+	if got := cfg.GetCertPemPath(); got != "cert/nwdaf.pem" {
+		t.Fatalf("GetCertPemPath() = %q, want %q", got, "cert/nwdaf.pem")
+	}
+	if got := cfg.GetCertKeyPath(); got != "cert/nwdaf.key" {
+		t.Fatalf("GetCertKeyPath() = %q, want %q", got, "cert/nwdaf.key")
 	}
 }
 

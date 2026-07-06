@@ -17,6 +17,7 @@ import (
 const (
 	NwdafDefaultConfigPath     = "./config/nwdafcfg.yaml"
 	NwdafSbiDefaultScheme      = "http"
+	NwdafSbiTLSScheme          = "https"
 	NwdafSbiDefaultIPv4        = "127.0.0.1"
 	NwdafSbiDefaultPort        = 8080
 	NwdafAnlfDefaultPort       = 8090
@@ -496,6 +497,12 @@ type Sbi struct {
 	RegisterIPv4 string `yaml:"registerIPv4,omitempty"`
 	BindingIPv4  string `yaml:"bindingIPv4,omitempty"`
 	Port         int    `yaml:"port,omitempty"`
+	Tls          *Tls   `yaml:"tls,omitempty"`
+}
+
+type Tls struct {
+	Pem string `yaml:"pem,omitempty"`
+	Key string `yaml:"key,omitempty"`
 }
 
 type AuxiliaryServerConfig struct {
@@ -610,6 +617,21 @@ func (c *Configuration) validate() error {
 	if c.Smf != nil && c.Smf.Enabled {
 		if validateErr := c.Smf.validate(); validateErr != nil {
 			errs = append(errs, validateErr)
+		} else if c.Sbi != nil && c.Smf.NotifUris != nil {
+			if schemeErr := validateOwnedCallbackScheme(
+				"smf.notifUris.smf",
+				c.Smf.NotifUris.Smf,
+				c.Sbi.Scheme,
+			); schemeErr != nil {
+				errs = append(errs, schemeErr)
+			}
+			if schemeErr := validateOwnedCallbackScheme(
+				"smf.notifUris.upf",
+				c.Smf.NotifUris.Upf,
+				c.Sbi.Scheme,
+			); schemeErr != nil {
+				errs = append(errs, schemeErr)
+			}
 		}
 	}
 	if c.InferenceEngine != nil && c.InferenceEngine.Enabled {
@@ -641,14 +663,10 @@ func (s *Sbi) validate() error {
 	s.BindingIPv4 = strings.TrimSpace(s.BindingIPv4)
 	s.RegisterIPv4 = strings.TrimSpace(s.RegisterIPv4)
 
-	if s.Scheme != NwdafSbiDefaultScheme {
-		errs = append(
-			errs,
-			fmt.Errorf(
-				"sbi.scheme must be %q; HTTPS is not supported by the current runtime",
-				NwdafSbiDefaultScheme,
-			),
-		)
+	switch s.Scheme {
+	case NwdafSbiDefaultScheme, NwdafSbiTLSScheme:
+	default:
+		errs = append(errs, fmt.Errorf("sbi.scheme must be %q or %q", NwdafSbiDefaultScheme, NwdafSbiTLSScheme))
 	}
 	if !isValidHostValue(s.BindingIPv4) {
 		errs = append(errs, fmt.Errorf("sbi.bindingIPv4 must be a valid host or IP"))
@@ -658,6 +676,36 @@ func (s *Sbi) validate() error {
 	}
 	if s.Port <= 0 || s.Port > 65535 {
 		errs = append(errs, fmt.Errorf("sbi.port must be between 1 and 65535"))
+	}
+	if s.Scheme == NwdafSbiTLSScheme {
+		if s.Tls == nil {
+			errs = append(errs, errors.New("sbi.tls is required when sbi.scheme is https"))
+		} else if err := s.Tls.validate("sbi.tls"); err != nil {
+			errs = append(errs, err)
+		}
+	} else if s.Tls != nil {
+		if err := s.Tls.validate("sbi.tls"); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+func (t *Tls) validate(fieldPrefix string) error {
+	var errs []error
+
+	t.Pem = strings.TrimSpace(t.Pem)
+	t.Key = strings.TrimSpace(t.Key)
+
+	if t.Pem == "" {
+		errs = append(errs, fmt.Errorf("%s.pem is required", fieldPrefix))
+	}
+	if t.Key == "" {
+		errs = append(errs, fmt.Errorf("%s.key is required", fieldPrefix))
 	}
 
 	if len(errs) > 0 {
@@ -862,6 +910,28 @@ func validateHTTPURL(fieldName string, raw string) error {
 	return nil
 }
 
+func validateOwnedCallbackScheme(fieldName string, raw string, expectedScheme string) error {
+	trimmedScheme := strings.ToLower(strings.TrimSpace(expectedScheme))
+	if trimmedScheme == "" {
+		trimmedScheme = NwdafSbiDefaultScheme
+	}
+
+	trimmedURL := strings.TrimSpace(raw)
+	if trimmedURL == "" {
+		return nil
+	}
+
+	parsed, err := url.ParseRequestURI(trimmedURL)
+	if err != nil {
+		return fmt.Errorf("%s must be a valid URL: %w", fieldName, err)
+	}
+	if parsed.Scheme != trimmedScheme {
+		return fmt.Errorf("%s scheme must match sbi.scheme (%s)", fieldName, trimmedScheme)
+	}
+
+	return nil
+}
+
 func isValidHostValue(value string) bool {
 	if value == "" {
 		return false
@@ -977,6 +1047,20 @@ func (c *Config) GetSbiScheme() string {
 		return NwdafSbiDefaultScheme
 	}
 	return strings.ToLower(strings.TrimSpace(c.Configuration.Sbi.Scheme))
+}
+
+func (c *Config) GetCertPemPath() string {
+	if c == nil || c.Configuration == nil || c.Configuration.Sbi == nil || c.Configuration.Sbi.Tls == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.Configuration.Sbi.Tls.Pem)
+}
+
+func (c *Config) GetCertKeyPath() string {
+	if c == nil || c.Configuration == nil || c.Configuration.Sbi == nil || c.Configuration.Sbi.Tls == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.Configuration.Sbi.Tls.Key)
 }
 
 func (c *Config) GetAnlfServerBindingAddr() string {

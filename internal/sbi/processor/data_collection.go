@@ -78,8 +78,9 @@ func (p *Processor) triggerUeCommunicationCollection(
 	}
 
 	// Get notification URIs from config
-	smfNotifUri := "http://localhost:8080/collector/notify"
-	upfNotifUri := "http://localhost:8080/collector/upf-notify"
+	sbiBaseURI := cfg.GetSbiUri()
+	smfNotifUri := sbiBaseURI + "/collector/notify"
+	upfNotifUri := sbiBaseURI + "/collector/upf-notify"
 	if smfConfig.NotifUris != nil {
 		if smfConfig.NotifUris.Smf != "" {
 			smfNotifUri = smfConfig.NotifUris.Smf

@@ -146,7 +146,13 @@ func (s *Server) Processor() processorAPI {
 
 func (s *Server) Run(wg *sync.WaitGroup) error {
 	scheme := s.Config().GetSbiScheme()
-	if scheme != "http" {
+	switch scheme {
+	case "http":
+	case "https":
+		if s.Config().GetCertPemPath() == "" || s.Config().GetCertKeyPath() == "" {
+			return fmt.Errorf("SBI TLS config is required for https scheme")
+		}
+	default:
 		return fmt.Errorf("unsupported SBI scheme: %s", scheme)
 	}
 
@@ -165,6 +171,9 @@ func (s *Server) Run(wg *sync.WaitGroup) error {
 	wg.Add(1)
 	go s.startServer(wg, serveErrCh)
 
+	// The readiness check intentionally proves that the listener is accepting
+	// connections before Run() reports success. In https mode this is a
+	// listener-readiness guarantee, not a full TLS client handshake proof.
 	if waitErr := s.waitUntilServing(readyCh, serveErrCh); waitErr != nil {
 		s.Shutdown()
 		return waitErr
@@ -204,9 +213,9 @@ func (s *Server) startServer(wg *sync.WaitGroup, serveErrCh chan<- error) {
 	case "http":
 		err = s.httpServer.ListenAndServe()
 	case "https":
-		err = fmt.Errorf("unsupported SBI scheme: %s", scheme)
+		err = s.httpServer.ListenAndServeTLS(cfg.GetCertPemPath(), cfg.GetCertKeyPath())
 	default:
-		err = fmt.Errorf("unsupported scheme: %s", scheme)
+		err = fmt.Errorf("unsupported SBI scheme: %s", scheme)
 	}
 
 	if err != nil && err != http.ErrServerClosed {
@@ -252,6 +261,8 @@ func (s *Server) waitUntilServing(readyCh <-chan struct{}, serveErrCh <-chan err
 			return fmt.Errorf("start SBI server: readiness timeout after %s", sbiStartupReadyTimeout)
 		}
 
+		// Probe only the TCP accept path. This keeps startup cleanup semantics
+		// simple and matches the current listener-readiness contract used by Run().
 		probeCtx, cancel := context.WithTimeout(context.Background(), sbiStartupProbeTimeout)
 		conn, probeErr := (&net.Dialer{Timeout: sbiStartupProbeTimeout}).DialContext(
 			probeCtx,

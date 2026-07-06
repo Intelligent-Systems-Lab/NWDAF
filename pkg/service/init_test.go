@@ -2,7 +2,16 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -24,6 +33,36 @@ func TestStartOwnedServersStartsAndStopsAllListeners(t *testing.T) {
 	}
 
 	assertPortOpen(t, cfg.GetSbiBindingAddr())
+	assertPortOpen(t, cfg.GetAnlfServerBindingAddr())
+	assertPortOpen(t, cfg.GetMtlfServerBindingAddr())
+
+	app.stopOwnedServers()
+	waitForWaitGroup(t, &app.wg)
+}
+
+func TestStartOwnedServersStartsAndStopsHttpsSbiListener(t *testing.T) {
+	t.Parallel()
+
+	certPemPath, certKeyPath := writeTempTLSCertPair(t)
+
+	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+	cfg.Configuration.Sbi.Scheme = "https"
+	cfg.Configuration.Sbi.Tls = &factory.Tls{
+		Pem: certPemPath,
+		Key: certKeyPath,
+	}
+
+	app, err := NewApp(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+
+	startErr := app.startOwnedServers()
+	if startErr != nil {
+		t.Fatalf("startOwnedServers() error = %v", startErr)
+	}
+
+	assertTLSPortOpen(t, cfg.GetSbiBindingAddr())
 	assertPortOpen(t, cfg.GetAnlfServerBindingAddr())
 	assertPortOpen(t, cfg.GetMtlfServerBindingAddr())
 
@@ -56,11 +95,33 @@ func TestStartOwnedServersCleansUpOnAuxiliaryBindFailure(t *testing.T) {
 	waitForWaitGroup(t, &app.wg)
 }
 
-func TestStartOwnedServersCleansUpOnUnsupportedSbiScheme(t *testing.T) {
+func TestStartOwnedServersCleansUpOnMissingHttpsTLSConfig(t *testing.T) {
 	t.Parallel()
 
 	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
 	cfg.Configuration.Sbi.Scheme = "https"
+
+	app, err := NewApp(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+
+	startErr := app.startOwnedServers()
+	if startErr == nil {
+		app.stopOwnedServers()
+		t.Fatal("startOwnedServers() error = nil, want missing TLS config failure")
+	}
+
+	assertPortClosedEventually(t, cfg.GetAnlfServerBindingAddr())
+	assertPortClosedEventually(t, cfg.GetMtlfServerBindingAddr())
+	waitForWaitGroup(t, &app.wg)
+}
+
+func TestStartOwnedServersCleansUpOnUnsupportedSbiScheme(t *testing.T) {
+	t.Parallel()
+
+	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+	cfg.Configuration.Sbi.Scheme = "ftp"
 
 	app, err := NewApp(context.Background(), cfg)
 	if err != nil {
@@ -144,6 +205,25 @@ func assertPortOpen(t *testing.T, addr string) {
 	closeConn(t, conn)
 }
 
+func assertTLSPortOpen(t *testing.T, addr string) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	dialer := &tls.Dialer{
+		NetDialer: &net.Dialer{Timeout: time.Second},
+		Config: &tls.Config{
+			InsecureSkipVerify: true,
+		},
+	}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		t.Fatalf("tls.Dial(%q) error = %v", addr, err)
+	}
+	closeConn(t, conn)
+}
+
 func assertPortClosedEventually(t *testing.T, addr string) {
 	t.Helper()
 
@@ -190,4 +270,48 @@ func closeConn(t *testing.T, conn net.Conn) {
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Conn.Close() error = %v", err)
 	}
+}
+
+func writeTempTLSCertPair(t *testing.T) (string, string) {
+	t.Helper()
+
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey() error = %v", err)
+	}
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			CommonName: "127.0.0.1",
+		},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:              []string{"localhost"},
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		t.Fatalf("x509.CreateCertificate() error = %v", err)
+	}
+
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "nwdaf.pem")
+	keyPath := filepath.Join(dir, "nwdaf.key")
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)})
+
+	if writeErr := os.WriteFile(certPath, certPEM, 0o600); writeErr != nil {
+		t.Fatalf("WriteFile(%q) error = %v", certPath, writeErr)
+	}
+	if writeErr := os.WriteFile(keyPath, keyPEM, 0o600); writeErr != nil {
+		t.Fatalf("WriteFile(%q) error = %v", keyPath, writeErr)
+	}
+
+	return certPath, keyPath
 }
