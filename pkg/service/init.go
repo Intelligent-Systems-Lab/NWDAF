@@ -95,7 +95,7 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 	nwdaf.processor = processor.NewProcessor(nwdaf, anlfService, mtlfService)
 
 	// Initialize SBI server
-	nwdaf.sbiServer, err = sbi.NewServer(nwdaf)
+	nwdaf.sbiServer, err = sbi.NewServer(nwdaf, "")
 	if err != nil {
 		return nil, err
 	}

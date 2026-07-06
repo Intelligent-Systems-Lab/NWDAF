@@ -56,6 +56,28 @@ func TestStartOwnedServersCleansUpOnAuxiliaryBindFailure(t *testing.T) {
 	waitForWaitGroup(t, &app.wg)
 }
 
+func TestStartOwnedServersCleansUpOnUnsupportedSbiScheme(t *testing.T) {
+	t.Parallel()
+
+	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+	cfg.Configuration.Sbi.Scheme = "https"
+
+	app, err := NewApp(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+
+	startErr := app.startOwnedServers()
+	if startErr == nil {
+		app.stopOwnedServers()
+		t.Fatal("startOwnedServers() error = nil, want unsupported scheme failure")
+	}
+
+	assertPortClosedEventually(t, cfg.GetAnlfServerBindingAddr())
+	assertPortClosedEventually(t, cfg.GetMtlfServerBindingAddr())
+	waitForWaitGroup(t, &app.wg)
+}
+
 func newLifecycleTestConfig(t *testing.T, sbiPort, anlfPort, mtlfPort int) *factory.Config {
 	t.Helper()
 

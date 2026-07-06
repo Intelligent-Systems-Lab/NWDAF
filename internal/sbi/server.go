@@ -18,6 +18,9 @@ import (
 	"github.com/free5gc/nwdaf/pkg/app"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
+	"github.com/free5gc/util/httpwrapper"
+	logger_util "github.com/free5gc/util/logger"
+	"github.com/free5gc/util/metrics"
 )
 
 type Route struct {
@@ -68,25 +71,26 @@ type Server struct {
 	nwdafApp
 
 	httpServer *http.Server
-	listener   net.Listener
 	router     *gin.Engine
 	processor  processorAPI
 }
 
-func NewServer(nwdaf nwdafApp) (*Server, error) {
+const (
+	sbiStartupReadyTimeout  = 2 * time.Second
+	sbiStartupProbeInterval = 50 * time.Millisecond
+	sbiStartupProbeTimeout  = 100 * time.Millisecond
+)
+
+func NewServer(nwdaf nwdafApp, tlsKeyLogPath string) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 
 	s := &Server{
 		nwdafApp:  nwdaf,
-		router:    gin.New(),
+		router:    logger_util.NewGinWithLogrus(logger.GinLog),
 		processor: nwdaf.Processor(),
 	}
 
-	// Setup middleware
-	s.router.Use(gin.Recovery())
-	s.router.Use(gin.LoggerWithConfig(gin.LoggerConfig{
-		Output: logger.GinLog.WriterLevel(logrus.DebugLevel),
-	}))
+	s.router.Use(metrics.InboundMetrics())
 
 	// EventsSubscription routes
 	eventsSubRoutes := s.getEventsSubscriptionRoutes()
@@ -103,11 +107,12 @@ func NewServer(nwdaf nwdafApp) (*Server, error) {
 
 	logger.SBILog.Infof("Binding addr: [%s]", bindAddr)
 
-	s.httpServer = &http.Server{
-		Addr:    bindAddr,
-		Handler: s.router,
+	var err error
+	if s.httpServer, err = httpwrapper.NewHttp2Server(bindAddr, tlsKeyLogPath, s.router); err != nil {
+		logger.InitLog.Errorf("Initialize HTTP server failed: %v", err)
+		return nil, err
 	}
-	s.httpServer.ErrorLog = log.New(logger.SBILog.WriterLevel(logrus.ErrorLevel), "HTTP: ", 0)
+	s.httpServer.ErrorLog = log.New(logger.SBILog.WriterLevel(logrus.ErrorLevel), "HTTP2: ", 0)
 
 	return s, nil
 }
@@ -140,14 +145,30 @@ func (s *Server) Processor() processorAPI {
 }
 
 func (s *Server) Run(wg *sync.WaitGroup) error {
+	scheme := s.Config().GetSbiScheme()
+	if scheme != "http" {
+		return fmt.Errorf("unsupported SBI scheme: %s", scheme)
+	}
+
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", s.httpServer.Addr)
 	if err != nil {
 		return err
 	}
-	s.listener = listener
+	if closeErr := listener.Close(); closeErr != nil {
+		return fmt.Errorf("close SBI preflight listener: %w", closeErr)
+	}
+
+	readyCh := make(chan struct{}, 1)
+	serveErrCh := make(chan error, 1)
+	s.installStartupReadySignal(readyCh)
 
 	wg.Add(1)
-	go s.startServer(wg)
+	go s.startServer(wg, serveErrCh)
+
+	if waitErr := s.waitUntilServing(readyCh, serveErrCh); waitErr != nil {
+		s.Shutdown()
+		return waitErr
+	}
 
 	return nil
 }
@@ -165,7 +186,7 @@ func (s *Server) Shutdown() {
 	}
 }
 
-func (s *Server) startServer(wg *sync.WaitGroup) {
+func (s *Server) startServer(wg *sync.WaitGroup, serveErrCh chan<- error) {
 	defer func() {
 		if p := recover(); p != nil {
 			logger.SBILog.Fatalf("panic: %v\n%s", p, string(debug.Stack()))
@@ -181,16 +202,75 @@ func (s *Server) startServer(wg *sync.WaitGroup) {
 	var err error
 	switch scheme {
 	case "http":
-		err = s.httpServer.Serve(s.listener)
+		err = s.httpServer.ListenAndServe()
 	case "https":
-		// TLS support to be added later
-		err = fmt.Errorf("HTTPS not yet supported")
+		err = fmt.Errorf("unsupported SBI scheme: %s", scheme)
 	default:
 		err = fmt.Errorf("unsupported scheme: %s", scheme)
 	}
 
 	if err != nil && err != http.ErrServerClosed {
+		select {
+		case serveErrCh <- err:
+		default:
+		}
 		logger.SBILog.Errorf("SBI server error: %v", err)
 	}
 	logger.SBILog.Infof("SBI server (listen on %s) stopped", s.httpServer.Addr)
+}
+
+func (s *Server) installStartupReadySignal(readyCh chan<- struct{}) {
+	existingConnState := s.httpServer.ConnState
+
+	s.httpServer.ConnState = func(conn net.Conn, state http.ConnState) {
+		if existingConnState != nil {
+			existingConnState(conn, state)
+		}
+
+		if state == http.StateNew {
+			select {
+			case readyCh <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
+func (s *Server) waitUntilServing(readyCh <-chan struct{}, serveErrCh <-chan error) error {
+	deadline := time.Now().Add(sbiStartupReadyTimeout)
+
+	for {
+		select {
+		case <-readyCh:
+			return nil
+		case serveErr := <-serveErrCh:
+			return fmt.Errorf("start SBI server: %w", serveErr)
+		default:
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("start SBI server: readiness timeout after %s", sbiStartupReadyTimeout)
+		}
+
+		probeCtx, cancel := context.WithTimeout(context.Background(), sbiStartupProbeTimeout)
+		conn, probeErr := (&net.Dialer{Timeout: sbiStartupProbeTimeout}).DialContext(
+			probeCtx,
+			"tcp",
+			s.httpServer.Addr,
+		)
+		cancel()
+		if probeErr == nil {
+			if closeErr := conn.Close(); closeErr != nil {
+				return fmt.Errorf("close SBI startup probe connection: %w", closeErr)
+			}
+		}
+
+		select {
+		case <-readyCh:
+			return nil
+		case serveErr := <-serveErrCh:
+			return fmt.Errorf("start SBI server: %w", serveErr)
+		case <-time.After(sbiStartupProbeInterval):
+		}
+	}
 }
