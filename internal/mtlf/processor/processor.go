@@ -1,7 +1,11 @@
 package processor
 
+import "github.com/free5gc/nwdaf/internal/mtlf"
+
 type trainingCompleteWorkflow interface {
-	CompleteTrainingTask(taskID, modelURL, status, errMsg string)
+	TakeTrainingCompletion(taskID string) (mtlf.TrainingCompletion, bool)
+	HandleFailedTrainingCompletion(taskID string, completion mtlf.TrainingCompletion, errMsg string)
+	HandleSuccessfulTrainingCompletion(taskID string, completion mtlf.TrainingCompletion, modelURL string)
 }
 
 type Processor struct {
@@ -10,11 +14,4 @@ type Processor struct {
 
 func NewProcessor(workflow trainingCompleteWorkflow) *Processor {
 	return &Processor{workflow: workflow}
-}
-
-func (p *Processor) HandleDaisyTrainingComplete(taskID, modelURL, status, errMsg string) {
-	if p == nil || p.workflow == nil {
-		return
-	}
-	p.workflow.CompleteTrainingTask(taskID, modelURL, status, errMsg)
 }

@@ -58,8 +58,9 @@ func (f *fakeDaisyClient) HTTPClient() *http.Client { return &http.Client{} }
 // TestHandleTrainingComplete_UnknownTaskId verifies that an unknown taskId is a no-op.
 func TestHandleTrainingComplete_UnknownTaskId(t *testing.T) {
 	m := &MtlfService{}
-	// Should not panic
-	m.CompleteTrainingTask("no-such-id", "model.npy", "success", "")
+	if _, ok := m.TakeTrainingCompletion("no-such-id"); ok {
+		t.Fatal("unknown task should not resolve a completion")
+	}
 }
 
 // TestHandleTrainingComplete_Failure_ClearsRetraining verifies that a failed
@@ -75,13 +76,17 @@ func TestHandleTrainingComplete_Failure_ClearsRetraining(t *testing.T) {
 		store:       store,
 	})
 
-	m.CompleteTrainingTask(taskId, "", "failure", "training error")
+	completion, ok := m.TakeTrainingCompletion(taskId)
+	if !ok {
+		t.Fatal("expected inFlight entry to resolve")
+	}
+	m.HandleFailedTrainingCompletion(taskId, completion, "training error")
 
 	if store.IsRetraining() {
 		t.Error("IsRetraining should be cleared after training failure")
 	}
-	if _, ok := m.inFlight.Load(taskId); ok {
-		t.Error("inFlight entry should be removed after CompleteTrainingTask")
+	if _, stillPresent := m.inFlight.Load(taskId); stillPresent {
+		t.Error("inFlight entry should be removed after TakeTrainingCompletion")
 	}
 }
 
@@ -96,10 +101,14 @@ func TestHandleTrainingComplete_Failure_NilStore(t *testing.T) {
 	})
 
 	// Should not panic even with nil store
-	m.CompleteTrainingTask(taskId, "", "failure", "some error")
+	completion, ok := m.TakeTrainingCompletion(taskId)
+	if !ok {
+		t.Fatal("expected inFlight entry to resolve")
+	}
+	m.HandleFailedTrainingCompletion(taskId, completion, "some error")
 
-	if _, ok := m.inFlight.Load(taskId); ok {
-		t.Error("inFlight entry should be removed after CompleteTrainingTask")
+	if _, stillPresent := m.inFlight.Load(taskId); stillPresent {
+		t.Error("inFlight entry should be removed after TakeTrainingCompletion")
 	}
 }
 
@@ -115,9 +124,13 @@ func TestHandleTrainingComplete_Success_ClearsInFlight(t *testing.T) {
 		store:       nil,
 	})
 
-	m.CompleteTrainingTask(taskId, "new.npy", "success", "")
+	completion, ok := m.TakeTrainingCompletion(taskId)
+	if !ok {
+		t.Fatal("expected inFlight entry to resolve")
+	}
+	m.HandleSuccessfulTrainingCompletion(taskId, completion, "new.npy")
 
-	if _, ok := m.inFlight.Load(taskId); ok {
+	if _, stillPresent := m.inFlight.Load(taskId); stillPresent {
 		t.Error("inFlight entry should be removed on success")
 	}
 }
@@ -135,9 +148,15 @@ func TestHandleTrainingComplete_DuplicateCallback(t *testing.T) {
 		store:       store,
 	})
 
-	m.CompleteTrainingTask(taskId, "", "failure", "err")
-	// Second call with same taskId — should be a no-op
-	m.CompleteTrainingTask(taskId, "", "failure", "err")
+	completion, ok := m.TakeTrainingCompletion(taskId)
+	if !ok {
+		t.Fatal("expected first completion to resolve")
+	}
+	m.HandleFailedTrainingCompletion(taskId, completion, "err")
+	// Second resolution with same taskId — should be a no-op
+	if _, resolvedAgain := m.TakeTrainingCompletion(taskId); resolvedAgain {
+		t.Fatal("duplicate completion should not resolve twice")
+	}
 }
 
 func TestSwapModelAfterRetrain_DeletesOldMonitorState(t *testing.T) {

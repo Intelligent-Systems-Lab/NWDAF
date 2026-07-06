@@ -1,9 +1,13 @@
 package processor
 
-import "github.com/free5gc/openapi/models"
+import (
+	"github.com/free5gc/nwdaf/internal/anlf"
+	"github.com/free5gc/openapi/models"
+)
 
 type mlModelProvisionWorkflow interface {
-	ProcessMlModelProvisionNotifications(notifications []models.NwdafMlModelProvNotif)
+	PlanModelProvisionActions(notif *models.NwdafMlModelProvNotif) []anlf.ModelProvisionAction
+	StartModelProvisionActions(actions []anlf.ModelProvisionAction)
 }
 
 type Processor struct {
@@ -12,11 +16,4 @@ type Processor struct {
 
 func NewProcessor(workflow mlModelProvisionWorkflow) *Processor {
 	return &Processor{workflow: workflow}
-}
-
-func (p *Processor) HandleMlModelProvisionNotify(notifications []models.NwdafMlModelProvNotif) {
-	if p == nil || p.workflow == nil {
-		return
-	}
-	p.workflow.ProcessMlModelProvisionNotifications(notifications)
 }

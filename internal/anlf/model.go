@@ -96,5 +96,5 @@ func (a *AnlfService) InitializeMlModel(
 	shared.SetModelId(modelId)
 	mlInfo.SetModelReady(modelId)
 	logger.AnlfLog.Infof("LoadMlModel: ready sub=%s modelId=%s", nwdafSubId, modelId)
-	// Note: accuracy monitor is started by the caller (processor) after this returns
+	// Note: accuracy monitor is started by the provision workflow after this returns.
 }

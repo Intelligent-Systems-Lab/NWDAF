@@ -23,6 +23,11 @@ type inFlightEntry struct {
 	store *nwdaf_context.ModelAccuracyStore
 }
 
+type TrainingCompletion struct {
+	OldModelURL string
+	Store       *nwdaf_context.ModelAccuracyStore
+}
+
 // StartTrainingScheduler starts background MTLF training scheduler.
 func (m *MtlfService) StartTrainingScheduler(wg *sync.WaitGroup) {
 	cfg := m.config()
@@ -91,7 +96,8 @@ func (m *MtlfService) startRetrainWorkflow(
 }
 
 // submitDaisyTask sends an async training request to Daisy and stores the
-// in-flight entry. When Daisy calls back, HandleTrainingComplete completes the swap.
+// in-flight entry. When Daisy calls back, the training-complete processor path
+// consumes the callback and completes the swap.
 // tid: if non-empty, uses this TID (ADRF path, must match UploadData TID);
 //
 //	if empty, generates a fresh UUID.
@@ -148,26 +154,39 @@ func (m *MtlfService) submitDaisyTask(
 	mtlfLog.Infof("SubmitTrainingTask: accepted task=%s", taskId)
 }
 
-// CompleteTrainingTask applies a Daisy completion callback after the HTTP edge
-// has already parsed and validated the payload.
-func (m *MtlfService) CompleteTrainingTask(taskId, modelUrl, status, errMsg string) {
-	val, ok := m.inFlight.LoadAndDelete(taskId)
+// TakeTrainingCompletion resolves and removes the in-flight state for one Daisy
+// completion callback after the HTTP edge has already parsed and validated it.
+func (m *MtlfService) TakeTrainingCompletion(taskID string) (TrainingCompletion, bool) {
+	val, ok := m.inFlight.LoadAndDelete(taskID)
 	if !ok {
-		mtlfLog.Warnf("CompleteTrainingTask: unknown task=%s", taskId)
-		return
+		mtlfLog.Warnf("TrainingCompletion: unknown task=%s", taskID)
+		return TrainingCompletion{}, false
 	}
 	entry := val.(*inFlightEntry)
+	return TrainingCompletion{
+		OldModelURL: entry.oldModelUrl,
+		Store:       entry.store,
+	}, true
+}
 
-	if status != "success" {
-		mtlfLog.Errorf("CompleteTrainingTask failed: task=%s err=%s", taskId, errMsg)
-		if entry.store != nil {
-			entry.store.SetRetraining(false)
-		}
-		return
+func (m *MtlfService) HandleFailedTrainingCompletion(
+	taskID string,
+	completion TrainingCompletion,
+	errMsg string,
+) {
+	mtlfLog.Errorf("TrainingCompletion failed: task=%s err=%s", taskID, errMsg)
+	if completion.Store != nil {
+		completion.Store.SetRetraining(false)
 	}
+}
 
-	mtlfLog.Infof("CompleteTrainingTask: complete task=%s", taskId)
-	m.swapModelAfterRetrain(entry.oldModelUrl, modelUrl)
+func (m *MtlfService) HandleSuccessfulTrainingCompletion(
+	taskID string,
+	completion TrainingCompletion,
+	modelURL string,
+) {
+	mtlfLog.Infof("TrainingCompletion: complete task=%s", taskID)
+	m.swapModelAfterRetrain(completion.OldModelURL, modelURL)
 }
 
 // swapModelAfterRetrain handles the hot-swap of models after a successful retraining.

@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -104,12 +103,105 @@ func TestHandleMlModelProvisionNotify_DelegatesToProcessor(t *testing.T) {
 	}
 }
 
-func TestProcessMlModelProvisionNotifications_InitializesModel(t *testing.T) {
+func TestPlanModelProvisionActions_ResolvesActivation(t *testing.T) {
 	nwdaf_context.Init()
 	ctx := nwdaf_context.GetSelf()
 	ctx.SetMlModelInfo("sub-123", nwdaf_context.NewMlModelInfo(models.NwdafEvent_UE_COMMUNICATION, "mtlf"))
 
-	done := make(chan struct{})
+	service := NewAnlfService(testNwdafApp{
+		ctx: context.Background(),
+		cfg: &factory.Config{
+			Configuration: &factory.Configuration{
+				InferenceEngine: &factory.InferenceEngineConfig{
+					Enabled:  true,
+					Endpoint: "http://inference-engine.example",
+				},
+			},
+		},
+	}, nil)
+
+	notif := models.NwdafMlModelProvNotif{
+		SubscriptionId: "mtlf-sub-1",
+		EventNotifs: []models.MlEventNotif{
+			{
+				Event:        models.NwdafEvent_UE_COMMUNICATION,
+				NotifCorreId: "sub-123",
+				MLFileAddr: &models.MlModelAddr{
+					MLModelUrl: "http://example.com/model.onnx",
+				},
+			},
+		},
+	}
+
+	actions := service.PlanModelProvisionActions(&notif)
+
+	if len(actions) != 1 {
+		t.Fatalf("action count = %d, want 1", len(actions))
+	}
+	if actions[0].NwdafSubID != "sub-123" {
+		t.Fatalf("action subscription = %q, want %q", actions[0].NwdafSubID, "sub-123")
+	}
+	if actions[0].ModelURL != "http://example.com/model.onnx" {
+		t.Fatalf("action modelURL = %q", actions[0].ModelURL)
+	}
+	if status := ctx.GetMlModelInfo("sub-123").GetStatus(); status != nwdaf_context.MlModelStatus_PENDING {
+		t.Fatalf("mlInfo status = %q, want %q", status, nwdaf_context.MlModelStatus_PENDING)
+	}
+}
+
+func TestPlanModelProvisionActions_UsesPerEventCorrelation(t *testing.T) {
+	nwdaf_context.Init()
+	ctx := nwdaf_context.GetSelf()
+	service := NewAnlfService(testNwdafApp{
+		ctx: context.Background(),
+		cfg: &factory.Config{
+			Configuration: &factory.Configuration{
+				InferenceEngine: &factory.InferenceEngineConfig{
+					Enabled:  true,
+					Endpoint: "http://inference-engine.example",
+				},
+			},
+		},
+	}, nil)
+
+	ctx.SetMlModelInfo("sub-a", nwdaf_context.NewMlModelInfo(models.NwdafEvent_UE_COMMUNICATION, "mtlf"))
+	ctx.SetMlModelInfo("sub-b", nwdaf_context.NewMlModelInfo(models.NwdafEvent_UE_COMMUNICATION, "mtlf"))
+
+	notif := models.NwdafMlModelProvNotif{
+		SubscriptionId: "fallback-sub",
+		EventNotifs: []models.MlEventNotif{
+			{
+				Event:        models.NwdafEvent_UE_COMMUNICATION,
+				NotifCorreId: "sub-a",
+				MLFileAddr:   &models.MlModelAddr{MLModelUrl: "http://example.com/model-a.onnx"},
+			},
+			{
+				Event:        models.NwdafEvent_UE_COMMUNICATION,
+				NotifCorreId: "sub-b",
+				MLFileAddr:   &models.MlModelAddr{MLModelUrl: "http://example.com/model-b.onnx"},
+			},
+		},
+	}
+
+	actions := service.PlanModelProvisionActions(&notif)
+
+	if len(actions) != 2 {
+		t.Fatalf("action count = %d, want 2", len(actions))
+	}
+	if actions[0].NwdafSubID != "sub-a" {
+		t.Fatalf("first action subscription = %q, want %q", actions[0].NwdafSubID, "sub-a")
+	}
+	if actions[1].NwdafSubID != "sub-b" {
+		t.Fatalf("second action subscription = %q, want %q", actions[1].NwdafSubID, "sub-b")
+	}
+}
+
+func TestExecuteModelProvisionActions_InitializesModel(t *testing.T) {
+	nwdaf_context.Init()
+	ctx := nwdaf_context.GetSelf()
+	mlInfo := nwdaf_context.NewMlModelInfo(models.NwdafEvent_UE_COMMUNICATION, "mtlf")
+	ctx.SetMlModelInfo("sub-123", mlInfo)
+
 	client := &fakeInferenceEngineClient{modelID: "model-123"}
 	service := NewAnlfService(testNwdafApp{
 		ctx: context.Background(),
@@ -123,39 +215,83 @@ func TestProcessMlModelProvisionNotifications_InitializesModel(t *testing.T) {
 		},
 	}, client)
 
-	var notifications []models.NwdafMlModelProvNotif
-	notificationBody := `[
+	service.ExecuteModelProvisionActions([]ModelProvisionAction{
 		{
-			"subscriptionId":"mtlf-sub-1",
-			"eventNotifs":[
-				{
-					"event":"UE_COMMUNICATION",
-					"notifCorreId":"sub-123",
-					"mLFileAddr":{"mLModelUrl":"http://example.com/model.onnx"}
-				}
-			]
-		}
-	]`
-	if err := json.Unmarshal([]byte(notificationBody), &notifications); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
+			NwdafSubID: "sub-123",
+			ModelURL:   "http://example.com/model.onnx",
+			Event:      models.NwdafEvent_UE_COMMUNICATION,
+		},
+	})
+
+	if client.initializeCalls != 1 {
+		t.Fatalf("InitializeModel called %d times, want 1", client.initializeCalls)
 	}
+	if got := mlInfo.GetStatus(); got != nwdaf_context.MlModelStatus_READY {
+		t.Fatalf("mlInfo status = %q, want %q", got, nwdaf_context.MlModelStatus_READY)
+	}
+	if got := mlInfo.ModelUrl; got != "http://example.com/model.onnx" {
+		t.Fatalf("mlInfo modelUrl = %q, want %q", got, "http://example.com/model.onnx")
+	}
+}
 
-	go func() {
-		for {
-			if client.initializeCalls > 0 {
-				close(done)
-				return
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-	}()
+func TestExecuteModelProvisionActions_CleansUpOldModelStateOnSwitch(t *testing.T) {
+	nwdaf_context.Init()
+	ctx := nwdaf_context.GetSelf()
 
-	service.ProcessMlModelProvisionNotifications(notifications)
+	const (
+		subID       = "sub-123"
+		oldModelURL = "http://example.com/model-old.onnx"
+		newModelURL = "http://example.com/model-new.onnx"
+	)
 
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("expected InitializeMlModel to be invoked")
+	mlInfo := nwdaf_context.NewMlModelInfo(models.NwdafEvent_UE_COMMUNICATION, "mtlf")
+	mlInfo.SetModelUrl(oldModelURL)
+	ctx.SetMlModelInfo(subID, mlInfo)
+
+	oldShared, _ := ctx.GetOrCreateSharedModel(oldModelURL, models.NwdafEvent_UE_COMMUNICATION)
+	oldShared.AddSubscriber(subID)
+	ctx.GetOrCreateModelAccuracyStore(oldModelURL)
+
+	client := &fakeInferenceEngineClient{modelID: "model-456"}
+	service := NewAnlfService(testNwdafApp{
+		ctx: context.Background(),
+		cfg: &factory.Config{
+			Configuration: &factory.Configuration{
+				InferenceEngine: &factory.InferenceEngineConfig{
+					Enabled:  true,
+					Endpoint: "http://inference-engine.example",
+				},
+				Mtlf: &factory.MtlfConfig{
+					Enabled: true,
+					AccuracyMonitor: &factory.AccuracyMonitorConfig{
+						Enabled: true,
+					},
+				},
+			},
+		},
+	}, client)
+
+	service.ExecuteModelProvisionActions([]ModelProvisionAction{
+		{
+			NwdafSubID: subID,
+			ModelURL:   newModelURL,
+			Event:      models.NwdafEvent_UE_COMMUNICATION,
+		},
+	})
+
+	if ctx.GetSharedModel(oldModelURL) != nil {
+		t.Fatal("old shared model should be removed after switching to a new model")
+	}
+	if ctx.GetModelAccuracyStore(oldModelURL) != nil {
+		t.Fatal("old accuracy store should be removed after switching to a new model")
+	}
+	if newShared := ctx.GetSharedModel(newModelURL); newShared == nil {
+		t.Fatal("new shared model should exist after switching to a new model")
+	} else if newShared.SubscriberCount() != 1 {
+		t.Fatalf("new shared model subscriber count = %d, want 1", newShared.SubscriberCount())
+	}
+	if got := mlInfo.ModelUrl; got != newModelURL {
+		t.Fatalf("mlInfo modelUrl = %q, want %q", got, newModelURL)
 	}
 }
 

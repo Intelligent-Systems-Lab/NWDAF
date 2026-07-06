@@ -112,6 +112,21 @@ func (a *AnlfService) SetWaitGroup(wg *sync.WaitGroup) {
 	a.wg = wg
 }
 
+func (a *AnlfService) launchOwnedTask(fn func()) {
+	if fn == nil {
+		return
+	}
+	if a.wg != nil {
+		a.wg.Add(1)
+		go func() {
+			defer a.wg.Done()
+			fn()
+		}()
+		return
+	}
+	go fn()
+}
+
 func (a *AnlfService) InferenceEngine() InferenceEngineAPI {
 	return a.inferenceEngine
 }

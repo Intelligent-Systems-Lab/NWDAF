@@ -33,7 +33,7 @@ type MtlfService struct {
 	onModelSwapReady func(newModelUrl, oldModelId string) (string, error)
 	// inFlight tracks async training tasks: taskId → *inFlightEntry.
 	// Populated when an async training request is accepted by Daisy;
-	// cleared when HandleTrainingComplete is called.
+	// cleared when the training-complete processor consumes the callback.
 	inFlight sync.Map
 	// activeJobs tracks in-progress ADRF-assisted retrain jobs.
 	// Key: TID (string) → Value: *retrainJob
