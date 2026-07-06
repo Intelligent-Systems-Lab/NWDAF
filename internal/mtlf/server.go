@@ -14,30 +14,78 @@ import (
 
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/pkg/factory"
+	"github.com/free5gc/util/httpwrapper"
+	logger_util "github.com/free5gc/util/logger"
 )
+
+type Route struct {
+	Name    string
+	Method  string
+	Pattern string
+	APIFunc gin.HandlerFunc
+}
+
+func applyRoutes(group *gin.RouterGroup, routes []Route) {
+	for _, route := range routes {
+		switch route.Method {
+		case http.MethodGet:
+			group.GET(route.Pattern, route.APIFunc)
+		case http.MethodPost:
+			group.POST(route.Pattern, route.APIFunc)
+		case http.MethodPut:
+			group.PUT(route.Pattern, route.APIFunc)
+		case http.MethodPatch:
+			group.PATCH(route.Pattern, route.APIFunc)
+		case http.MethodDelete:
+			group.DELETE(route.Pattern, route.APIFunc)
+		}
+	}
+}
+
+type processorAPI interface {
+	HandleDaisyTrainingComplete(taskID, modelURL, status, errMsg string)
+}
 
 type Server struct {
 	httpServer *http.Server
 	listener   net.Listener
+	router     *gin.Engine
+	processor  processorAPI
 }
 
-func NewServer(cfg *factory.Config, service *MtlfService) (*Server, error) {
+func NewServer(cfg *factory.Config, processor processorAPI) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 
-	router := gin.New()
-	router.Use(gin.Recovery())
-	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{
-		Output: logger.GinLog.WriterLevel(logrus.DebugLevel),
-	}))
-	router.POST("/mtlf/training-complete", service.HandleDaisyTrainingComplete)
-
-	httpServer := &http.Server{
-		Addr:    cfg.GetMtlfServerBindingAddr(),
-		Handler: router,
+	s := &Server{
+		router:    logger_util.NewGinWithLogrus(logger.GinLog),
+		processor: processor,
 	}
-	httpServer.ErrorLog = log.New(mtlfLog.WriterLevel(logrus.ErrorLevel), "HTTP: ", 0)
+	s.router.Use(gin.Recovery())
+	applyRoutes(s.router.Group(""), s.getRoutes())
 
-	return &Server{httpServer: httpServer}, nil
+	httpServer, err := httpwrapper.NewHttp2Server(
+		cfg.GetMtlfServerBindingAddr(),
+		"",
+		s.router,
+	)
+	if err != nil {
+		return nil, err
+	}
+	httpServer.ErrorLog = log.New(mtlfLog.WriterLevel(logrus.ErrorLevel), "HTTP2: ", 0)
+	s.httpServer = httpServer
+
+	return s, nil
+}
+
+func (s *Server) getRoutes() []Route {
+	return []Route{
+		{
+			Name:    "HandleDaisyTrainingComplete",
+			Method:  http.MethodPost,
+			Pattern: "/mtlf/training-complete",
+			APIFunc: s.HandleDaisyTrainingComplete,
+		},
+	}
 }
 
 func (s *Server) Run(wg *sync.WaitGroup) error {

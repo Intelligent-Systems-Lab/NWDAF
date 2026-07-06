@@ -1,4 +1,4 @@
-package anlf
+package client
 
 import (
 	"bytes"
@@ -7,25 +7,20 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/free5gc/nwdaf/internal/anlf"
+	"github.com/free5gc/nwdaf/internal/logger"
 )
 
-// InferenceEngineAPI defines the local inference-engine integration seam owned by AnLF.
-type InferenceEngineAPI interface {
-	InitializeModel(ctx context.Context, modelURL string) (string, error)
-	UnloadModel(ctx context.Context, modelID string) error
-	Predict(ctx context.Context, modelID string, trafficData []TrafficObservation) (*PredictResponse, error)
-	HTTPClient() *http.Client
-}
-
-// InferenceEngineClient handles local inference-engine API interactions.
-type InferenceEngineClient struct {
+// Client handles local inference-engine API interactions.
+type Client struct {
 	endpoint   string
 	httpClient *http.Client
 }
 
-// NewInferenceEngineClient creates a new inference-engine client.
-func NewInferenceEngineClient(endpoint string) *InferenceEngineClient {
-	return &InferenceEngineClient{
+// NewClient creates a new inference-engine client.
+func NewClient(endpoint string) *Client {
+	return &Client{
 		endpoint: endpoint,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
@@ -38,78 +33,9 @@ func NewInferenceEngineClient(endpoint string) *InferenceEngineClient {
 	}
 }
 
-// ============================================================================
-// Request/Response Models
-// ============================================================================
-
-// LoadModelRequest represents the request to load a model
-type LoadModelRequest struct {
-	ModelUrl string `json:"model_url"`
-}
-
-// LoadModelResponse represents the response from model loading
-type LoadModelResponse struct {
-	ModelId string `json:"model_id"`
-}
-
-// UnloadModelRequest represents the request to unload a model
-type UnloadModelRequest struct {
-	ModelId string `json:"model_id"`
-}
-
-// UnloadModelResponse represents the response from model unloading
-type UnloadModelResponse struct {
-	ModelId string `json:"model_id"`
-	Status  string `json:"status"`
-}
-
-// TrafficCharacterization represents predicted traffic volume data (used in response)
-type TrafficCharacterization struct {
-	UlVol int64 `json:"ul_vol"`
-	DlVol int64 `json:"dl_vol"`
-}
-
-// TrafficObservation represents a single traffic observation point for ML prediction.
-// Fields match the inference-engine feature extraction order (10 features).
-type TrafficObservation struct {
-	Ts          string  `json:"ts"`
-	TotalVol    float64 `json:"total_vol"`
-	UlVol       float64 `json:"ul_vol"`
-	DlVol       float64 `json:"dl_vol"`
-	TotalNbPkts float64 `json:"total_nb_pkts"`
-	UlNbPkts    float64 `json:"ul_nb_pkts"`
-	DlNbPkts    float64 `json:"dl_nb_pkts"`
-	UlThr       float64 `json:"ul_thr"`     // uplink throughput (bps)
-	DlThr       float64 `json:"dl_thr"`     // downlink throughput (bps)
-	UlPktThr    float64 `json:"ul_pkt_thr"` // uplink packet throughput (pps)
-	DlPktThr    float64 `json:"dl_pkt_thr"` // downlink packet throughput (pps)
-}
-
-// PredictRequest represents the prediction request
-type PredictRequest struct {
-	ModelId        string               `json:"model_id"`
-	HistoricalData []TrafficObservation `json:"historical_data"`
-}
-
-// UeCommunicationPrediction represents predicted UE communication data
-type UeCommunicationPrediction struct {
-	Ts         string                  `json:"ts"`
-	TrafChar   TrafficCharacterization `json:"traf_char"`
-	Confidence int32                   `json:"confidence"`
-}
-
-// PredictResponse represents the prediction response
-type PredictResponse struct {
-	PredictedData []UeCommunicationPrediction `json:"predicted_data"`
-}
-
-// ============================================================================
-// API Methods
-// ============================================================================
-
 // InitializeModel loads a model from the given URL and returns the model ID.
-func (c *InferenceEngineClient) InitializeModel(ctx context.Context, modelURL string) (string, error) {
-	request := LoadModelRequest{
+func (c *Client) InitializeModel(ctx context.Context, modelURL string) (string, error) {
+	request := anlf.LoadModelRequest{
 		ModelUrl: modelURL,
 	}
 
@@ -138,7 +64,7 @@ func (c *InferenceEngineClient) InitializeModel(ctx context.Context, modelURL st
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			anlfLog.Debugf("failed to close response body: %v", closeErr)
+			logger.AnlfLog.Debugf("failed to close response body: %v", closeErr)
 		}
 	}()
 
@@ -146,7 +72,7 @@ func (c *InferenceEngineClient) InitializeModel(ctx context.Context, modelURL st
 		return "", fmt.Errorf("inference engine model load failed: status=%d", resp.StatusCode)
 	}
 
-	var response LoadModelResponse
+	var response anlf.LoadModelResponse
 	if decodeErr := json.NewDecoder(resp.Body).Decode(&response); decodeErr != nil {
 		return "", fmt.Errorf("failed to decode response: %w", decodeErr)
 	}
@@ -155,8 +81,8 @@ func (c *InferenceEngineClient) InitializeModel(ctx context.Context, modelURL st
 }
 
 // UnloadModel unloads a model by ID.
-func (c *InferenceEngineClient) UnloadModel(ctx context.Context, modelID string) error {
-	request := UnloadModelRequest{
+func (c *Client) UnloadModel(ctx context.Context, modelID string) error {
+	request := anlf.UnloadModelRequest{
 		ModelId: modelID,
 	}
 
@@ -185,7 +111,7 @@ func (c *InferenceEngineClient) UnloadModel(ctx context.Context, modelID string)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			anlfLog.Debugf("failed to close response body: %v", closeErr)
+			logger.AnlfLog.Debugf("failed to close response body: %v", closeErr)
 		}
 	}()
 
@@ -197,15 +123,15 @@ func (c *InferenceEngineClient) UnloadModel(ctx context.Context, modelID string)
 }
 
 // Predict calls the inference engine to get traffic predictions.
-func (c *InferenceEngineClient) Predict(
+func (c *Client) Predict(
 	ctx context.Context,
 	modelID string,
-	trafficData []TrafficObservation,
-) (*PredictResponse, error) {
-	anlfLog.Debugf("Calling inference engine: modelId=%s, dataPoints=%d",
+	trafficData []anlf.TrafficObservation,
+) (*anlf.PredictResponse, error) {
+	logger.AnlfLog.Debugf("Calling inference engine: modelId=%s, dataPoints=%d",
 		modelID, len(trafficData))
 
-	request := PredictRequest{
+	request := anlf.PredictRequest{
 		ModelId:        modelID,
 		HistoricalData: trafficData,
 	}
@@ -235,7 +161,7 @@ func (c *InferenceEngineClient) Predict(
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			anlfLog.Debugf("failed to close response body: %v", closeErr)
+			logger.AnlfLog.Debugf("failed to close response body: %v", closeErr)
 		}
 	}()
 
@@ -243,22 +169,22 @@ func (c *InferenceEngineClient) Predict(
 		return nil, fmt.Errorf("inference engine prediction failed: status=%d", resp.StatusCode)
 	}
 
-	var response PredictResponse
+	var response anlf.PredictResponse
 	if decodeErr := json.NewDecoder(resp.Body).Decode(&response); decodeErr != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", decodeErr)
 	}
 
-	anlfLog.Debugf("Inference engine returned %d predictions", len(response.PredictedData))
+	logger.AnlfLog.Debugf("Inference engine returned %d predictions", len(response.PredictedData))
 	return &response, nil
 }
 
 // GetEndpoint returns the configured endpoint.
-func (c *InferenceEngineClient) GetEndpoint() string {
+func (c *Client) GetEndpoint() string {
 	return c.endpoint
 }
 
 // HTTPClient returns the underlying HTTP client for testing.
-func (c *InferenceEngineClient) HTTPClient() *http.Client {
+func (c *Client) HTTPClient() *http.Client {
 	return c.httpClient
 }
 

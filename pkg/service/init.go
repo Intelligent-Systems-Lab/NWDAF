@@ -12,9 +12,13 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/free5gc/nwdaf/internal/anlf"
+	anlfclient "github.com/free5gc/nwdaf/internal/anlf/client"
+	anlfprocessor "github.com/free5gc/nwdaf/internal/anlf/processor"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/mtlf"
+	mtlfclient "github.com/free5gc/nwdaf/internal/mtlf/client"
+	mtlfprocessor "github.com/free5gc/nwdaf/internal/mtlf/processor"
 	"github.com/free5gc/nwdaf/internal/sbi"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/internal/sbi/processor"
@@ -77,7 +81,7 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		cfg.Configuration.InferenceEngine != nil &&
 		cfg.Configuration.InferenceEngine.Enabled &&
 		cfg.Configuration.InferenceEngine.Endpoint != "" {
-		inferenceEngine = anlf.NewInferenceEngineClient(cfg.Configuration.InferenceEngine.Endpoint)
+		inferenceEngine = anlfclient.NewClient(cfg.Configuration.InferenceEngine.Endpoint)
 	}
 
 	var daisyClient mtlf.DaisyAPI
@@ -85,11 +89,13 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		cfg.Configuration.Mtlf != nil &&
 		cfg.Configuration.Mtlf.Enabled &&
 		cfg.Configuration.Mtlf.Endpoint != "" {
-		daisyClient = mtlf.NewDaisyClient(cfg.Configuration.Mtlf.Endpoint)
+		daisyClient = mtlfclient.NewClient(cfg.Configuration.Mtlf.Endpoint)
 	}
 
 	anlfService := anlf.NewAnlfService(nwdaf, inferenceEngine)
 	mtlfService := mtlf.NewMtlfService(nwdaf, daisyClient, nwdaf.consumer.AdrfClient())
+	anlfProcessor := anlfprocessor.NewProcessor(anlfService)
+	mtlfProcessor := mtlfprocessor.NewProcessor(mtlfService)
 
 	// Initialize processor
 	nwdaf.processor = processor.NewProcessor(nwdaf, anlfService, mtlfService)
@@ -99,11 +105,11 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 	if err != nil {
 		return nil, err
 	}
-	nwdaf.anlfServer, err = anlf.NewServer(cfg, anlfService)
+	nwdaf.anlfServer, err = anlf.NewServer(cfg, anlfProcessor)
 	if err != nil {
 		return nil, err
 	}
-	nwdaf.mtlfServer, err = mtlf.NewServer(cfg, mtlfService)
+	nwdaf.mtlfServer, err = mtlf.NewServer(cfg, mtlfProcessor)
 	if err != nil {
 		return nil, err
 	}

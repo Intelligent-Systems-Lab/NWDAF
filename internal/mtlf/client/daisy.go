@@ -1,4 +1,4 @@
-package mtlf
+package client
 
 import (
 	"bytes"
@@ -9,55 +9,31 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-)
 
-// DaisyAPI defines the local Daisy integration seam owned by MTLF.
-type DaisyAPI interface {
-	TriggerTrainingAsync(ctx context.Context, task map[string]any, callbackURL string, tidOverride string) (string, error)
-	UploadData(ctx context.Context, tid string, groupID string, upfEventNotifs []json.RawMessage) error
-	HTTPClient() *http.Client
-}
+	"github.com/free5gc/nwdaf/internal/logger"
+	"github.com/free5gc/nwdaf/internal/mtlf"
+)
 
 const (
-	// DaisyPublishTaskPath is the REST API endpoint to trigger FL training on Daisy master
-	DaisyPublishTaskPath = "/publish_task"
+	// AsyncTimeout is the timeout for the initial POST to Daisy.
+	AsyncTimeout = 10 * time.Second
 
-	// DaisyUploadDataPath is the REST API endpoint to upload historical training data
-	DaisyUploadDataPath = "/upload_data"
-
-	// DaisyTIDKey is the task ID key in the task payload (per Daisy convention)
-	DaisyTIDKey = "TID"
-
-	// DaisyCallbackURLKey is the key for the callback URL in the task payload
-	DaisyCallbackURLKey = "CALLBACK_URL"
-
-	// DaisyAsyncTimeout is the timeout for the initial POST to Daisy.
-	// Daisy should respond 202 immediately; no need for a long timeout.
-	DaisyAsyncTimeout = 10 * time.Second
-
-	// DaisyUploadTimeout is the timeout for uploading a data batch to Daisy.
-	DaisyUploadTimeout = 10 * time.Second
+	// UploadTimeout is the timeout for uploading a data batch to Daisy.
+	UploadTimeout = 10 * time.Second
 )
 
-// DaisyUploadDataRequest is the payload for POST /upload_data.
-type DaisyUploadDataRequest struct {
-	TID            string            `json:"TID"`
-	GroupId        string            `json:"group_id"`
-	UpfEventNotifs []json.RawMessage `json:"upfEventNotifs"`
-}
-
-// DaisyClient handles Daisy FL framework REST API interactions.
-type DaisyClient struct {
+// Client handles Daisy FL framework REST API interactions.
+type Client struct {
 	endpoint   string
 	httpClient *http.Client
 }
 
-// NewDaisyClient creates a new Daisy client.
-func NewDaisyClient(endpoint string) *DaisyClient {
-	return &DaisyClient{
+// NewClient creates a new Daisy client.
+func NewClient(endpoint string) *Client {
+	return &Client{
 		endpoint: endpoint,
 		httpClient: &http.Client{
-			Timeout: DaisyAsyncTimeout,
+			Timeout: AsyncTimeout,
 			Transport: &http.Transport{
 				MaxIdleConns:        10,
 				MaxIdleConnsPerHost: 5,
@@ -68,12 +44,7 @@ func NewDaisyClient(endpoint string) *DaisyClient {
 }
 
 // TriggerTrainingAsync sends a training task to Daisy in async mode.
-// Daisy should respond 202 Accepted immediately and call back NWDAF at callbackURL
-// when training completes. Returns the task ID (TID) on success.
-// tidOverride: if non-empty, uses this TID (ADRF path, must match the TID used for UploadData).
-//
-//	If empty, generates a fresh UUID.
-func (c *DaisyClient) TriggerTrainingAsync(
+func (c *Client) TriggerTrainingAsync(
 	ctx context.Context,
 	task map[string]any, callbackURL string, tidOverride string,
 ) (string, error) {
@@ -83,10 +54,10 @@ func (c *DaisyClient) TriggerTrainingAsync(
 	} else {
 		tidStr = uuid.New().String()
 	}
-	task[DaisyTIDKey] = tidStr
+	task[mtlf.DaisyTIDKey] = tidStr
 
 	if callbackURL != "" {
-		task[DaisyCallbackURLKey] = callbackURL
+		task[mtlf.DaisyCallbackURLKey] = callbackURL
 	}
 
 	jsonData, err := json.Marshal(task)
@@ -94,9 +65,9 @@ func (c *DaisyClient) TriggerTrainingAsync(
 		return "", fmt.Errorf("failed to marshal task payload: %w", err)
 	}
 
-	url := c.endpoint + DaisyPublishTaskPath
+	url := c.endpoint + mtlf.DaisyPublishTaskPath
 
-	ctx, cancel, err := timeoutContextFromParent(ctx, DaisyAsyncTimeout, "Daisy async training")
+	ctx, cancel, err := timeoutContextFromParent(ctx, AsyncTimeout, "Daisy async training")
 	if err != nil {
 		return "", err
 	}
@@ -114,7 +85,7 @@ func (c *DaisyClient) TriggerTrainingAsync(
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			mtlfLog.Debugf("failed to close response body: %v", closeErr)
+			logger.MtlfLog.Debugf("failed to close response body: %v", closeErr)
 		}
 	}()
 
@@ -126,14 +97,13 @@ func (c *DaisyClient) TriggerTrainingAsync(
 }
 
 // UploadData sends a batch of historical UPF records to Daisy for the retrain dataset.
-// Each call corresponds to one NadrfDataStoreRecord fetched from ADRF.
-func (c *DaisyClient) UploadData(
+func (c *Client) UploadData(
 	ctx context.Context,
 	tid string,
 	groupID string,
 	upfEventNotifs []json.RawMessage,
 ) error {
-	payload := DaisyUploadDataRequest{
+	payload := mtlf.DaisyUploadDataRequest{
 		TID:            tid,
 		GroupId:        groupID,
 		UpfEventNotifs: upfEventNotifs,
@@ -144,13 +114,13 @@ func (c *DaisyClient) UploadData(
 		return fmt.Errorf("marshal DaisyUploadDataRequest: %w", err)
 	}
 
-	ctx, cancel, err := timeoutContextFromParent(ctx, DaisyUploadTimeout, "Daisy data upload")
+	ctx, cancel, err := timeoutContextFromParent(ctx, UploadTimeout, "Daisy data upload")
 	if err != nil {
 		return err
 	}
 	defer cancel()
 
-	url := c.endpoint + DaisyUploadDataPath
+	url := c.endpoint + mtlf.DaisyUploadDataPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(body))
 	if err != nil {
 		return fmt.Errorf("build UploadData request: %w", err)
@@ -163,7 +133,7 @@ func (c *DaisyClient) UploadData(
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
-			mtlfLog.Debugf("failed to close UploadData response body: %v", closeErr)
+			logger.MtlfLog.Debugf("failed to close UploadData response body: %v", closeErr)
 		}
 	}()
 
@@ -177,13 +147,13 @@ func (c *DaisyClient) UploadData(
 	return nil
 }
 
-// GetEndpoint returns the configured endpoint
-func (c *DaisyClient) GetEndpoint() string {
+// GetEndpoint returns the configured endpoint.
+func (c *Client) GetEndpoint() string {
 	return c.endpoint
 }
 
-// HTTPClient returns the underlying HTTP client for testing
-func (c *DaisyClient) HTTPClient() *http.Client {
+// HTTPClient returns the underlying HTTP client for testing.
+func (c *Client) HTTPClient() *http.Client {
 	return c.httpClient
 }
 

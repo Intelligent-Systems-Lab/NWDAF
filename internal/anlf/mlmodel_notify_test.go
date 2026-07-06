@@ -18,6 +18,16 @@ import (
 
 const malformedRequestSyntaxTitle = "Malformed request syntax"
 
+type fakeMlModelNotifyProcessor struct {
+	callCount     int
+	notifications []models.NwdafMlModelProvNotif
+}
+
+func (f *fakeMlModelNotifyProcessor) HandleMlModelProvisionNotify(notifications []models.NwdafMlModelProvNotif) {
+	f.callCount++
+	f.notifications = notifications
+}
+
 func newJSONRequestContext(method, target string, body []byte) (*gin.Context, *httptest.ResponseRecorder) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -36,10 +46,10 @@ func decodeProblemDetailsResponse(t *testing.T, recorder *httptest.ResponseRecor
 }
 
 func TestHandleMlModelProvisionNotify_InvalidJSON(t *testing.T) {
-	service := NewAnlfService(testNwdafApp{}, nil)
+	server := &Server{}
 	c, recorder := newJSONRequestContext(http.MethodPost, "/mlmodel-notify", []byte(`{"subscriptionId":`))
 
-	service.HandleMlModelProvisionNotify(c)
+	server.HandleMlModelProvisionNotify(c)
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
@@ -52,10 +62,10 @@ func TestHandleMlModelProvisionNotify_InvalidJSON(t *testing.T) {
 }
 
 func TestHandleMlModelProvisionNotify_EmptyNotificationList(t *testing.T) {
-	service := NewAnlfService(testNwdafApp{}, nil)
+	server := &Server{}
 	c, recorder := newJSONRequestContext(http.MethodPost, "/mlmodel-notify", []byte(`[]`))
 
-	service.HandleMlModelProvisionNotify(c)
+	server.HandleMlModelProvisionNotify(c)
 	c.Writer.WriteHeaderNow()
 
 	if recorder.Code != http.StatusNoContent {
@@ -63,7 +73,38 @@ func TestHandleMlModelProvisionNotify_EmptyNotificationList(t *testing.T) {
 	}
 }
 
-func TestHandleMlModelProvisionNotify_InitializesModel(t *testing.T) {
+func TestHandleMlModelProvisionNotify_DelegatesToProcessor(t *testing.T) {
+	processor := &fakeMlModelNotifyProcessor{}
+	server := &Server{processor: processor}
+	body := `[
+		{
+			"subscriptionId":"mtlf-sub-1",
+			"eventNotifs":[
+				{
+					"event":"UE_COMMUNICATION",
+					"notifCorreId":"sub-123",
+					"mLFileAddr":{"mLModelUrl":"http://example.com/model.onnx"}
+				}
+			]
+		}
+	]`
+	c, recorder := newJSONRequestContext(http.MethodPost, "/mlmodel-notify", []byte(body))
+
+	server.HandleMlModelProvisionNotify(c)
+	c.Writer.WriteHeaderNow()
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNoContent)
+	}
+	if processor.callCount != 1 {
+		t.Fatalf("processor call count = %d, want 1", processor.callCount)
+	}
+	if len(processor.notifications) != 1 {
+		t.Fatalf("notifications length = %d, want 1", len(processor.notifications))
+	}
+}
+
+func TestProcessMlModelProvisionNotifications_InitializesModel(t *testing.T) {
 	nwdaf_context.Init()
 	ctx := nwdaf_context.GetSelf()
 	ctx.SetMlModelInfo("sub-123", nwdaf_context.NewMlModelInfo(models.NwdafEvent_UE_COMMUNICATION, "mtlf"))
@@ -82,6 +123,7 @@ func TestHandleMlModelProvisionNotify_InitializesModel(t *testing.T) {
 		},
 	}, client)
 
+	var notifications []models.NwdafMlModelProvNotif
 	notificationBody := `[
 		{
 			"subscriptionId":"mtlf-sub-1",
@@ -94,7 +136,9 @@ func TestHandleMlModelProvisionNotify_InitializesModel(t *testing.T) {
 			]
 		}
 	]`
-	c, recorder := newJSONRequestContext(http.MethodPost, "/mlmodel-notify", []byte(notificationBody))
+	if err := json.Unmarshal([]byte(notificationBody), &notifications); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
 
 	go func() {
 		for {
@@ -106,12 +150,7 @@ func TestHandleMlModelProvisionNotify_InitializesModel(t *testing.T) {
 		}
 	}()
 
-	service.HandleMlModelProvisionNotify(c)
-	c.Writer.WriteHeaderNow()
-
-	if recorder.Code != http.StatusNoContent {
-		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNoContent)
-	}
+	service.ProcessMlModelProvisionNotifications(notifications)
 
 	select {
 	case <-done:

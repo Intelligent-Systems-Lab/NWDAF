@@ -59,7 +59,7 @@ func (f *fakeDaisyClient) HTTPClient() *http.Client { return &http.Client{} }
 func TestHandleTrainingComplete_UnknownTaskId(t *testing.T) {
 	m := &MtlfService{}
 	// Should not panic
-	m.HandleTrainingComplete("no-such-id", "model.npy", "success", "")
+	m.CompleteTrainingTask("no-such-id", "model.npy", "success", "")
 }
 
 // TestHandleTrainingComplete_Failure_ClearsRetraining verifies that a failed
@@ -75,13 +75,13 @@ func TestHandleTrainingComplete_Failure_ClearsRetraining(t *testing.T) {
 		store:       store,
 	})
 
-	m.HandleTrainingComplete(taskId, "", "failure", "training error")
+	m.CompleteTrainingTask(taskId, "", "failure", "training error")
 
 	if store.IsRetraining() {
 		t.Error("IsRetraining should be cleared after training failure")
 	}
 	if _, ok := m.inFlight.Load(taskId); ok {
-		t.Error("inFlight entry should be removed after HandleTrainingComplete")
+		t.Error("inFlight entry should be removed after CompleteTrainingTask")
 	}
 }
 
@@ -96,10 +96,10 @@ func TestHandleTrainingComplete_Failure_NilStore(t *testing.T) {
 	})
 
 	// Should not panic even with nil store
-	m.HandleTrainingComplete(taskId, "", "failure", "some error")
+	m.CompleteTrainingTask(taskId, "", "failure", "some error")
 
 	if _, ok := m.inFlight.Load(taskId); ok {
-		t.Error("inFlight entry should be removed after HandleTrainingComplete")
+		t.Error("inFlight entry should be removed after CompleteTrainingTask")
 	}
 }
 
@@ -115,7 +115,7 @@ func TestHandleTrainingComplete_Success_ClearsInFlight(t *testing.T) {
 		store:       nil,
 	})
 
-	m.HandleTrainingComplete(taskId, "new.npy", "success", "")
+	m.CompleteTrainingTask(taskId, "new.npy", "success", "")
 
 	if _, ok := m.inFlight.Load(taskId); ok {
 		t.Error("inFlight entry should be removed on success")
@@ -135,9 +135,9 @@ func TestHandleTrainingComplete_DuplicateCallback(t *testing.T) {
 		store:       store,
 	})
 
-	m.HandleTrainingComplete(taskId, "", "failure", "err")
+	m.CompleteTrainingTask(taskId, "", "failure", "err")
 	// Second call with same taskId — should be a no-op
-	m.HandleTrainingComplete(taskId, "", "failure", "err")
+	m.CompleteTrainingTask(taskId, "", "failure", "err")
 }
 
 func TestSwapModelAfterRetrain_DeletesOldMonitorState(t *testing.T) {

@@ -1,47 +1,18 @@
 package anlf
 
 import (
-	"net/http"
-
-	"github.com/gin-gonic/gin"
-
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
-	"github.com/free5gc/nwdaf/internal/util"
-	"github.com/free5gc/openapi"
 	"github.com/free5gc/openapi/models"
 )
 
-// HandleMlModelProvisionNotify handles ML model provision notifications from MTLF.
-// Per TS 29.520 §5.4.5.2: callback body is []NwdafMlModelProvNotif.
-func (a *AnlfService) HandleMlModelProvisionNotify(c *gin.Context) {
-	var notifications []models.NwdafMlModelProvNotif
-	requestBody, err := c.GetRawData()
-	if err != nil {
-		anlfLog.Errorf("Get Request Body error: %+v", err)
-		util.GinProblemJson(c, openapi.ProblemDetailsSystemFailure(err.Error()))
-		return
-	}
-
-	if deserializeErr := openapi.Deserialize(&notifications, requestBody, "application/json"); deserializeErr != nil {
-		anlfLog.Errorf("Failed to deserialize ML model provision notification: %v", deserializeErr)
-		util.GinProblemJson(c, openapi.ProblemDetailsMalformedReqSyntax(deserializeErr.Error()))
-		return
-	}
-
-	if len(notifications) == 0 {
-		anlfLog.Warn("Empty ML model provision notification received")
-		c.Status(http.StatusNoContent)
-		return
-	}
-
-	anlfLog.Infof("Handle MlModelProvisionNotify: notifications=%d", len(notifications))
-
+// ProcessMlModelProvisionNotifications applies a provision-notify callback after
+// the HTTP edge has already parsed and validated the payload.
+func (a *AnlfService) ProcessMlModelProvisionNotifications(notifications []models.NwdafMlModelProvNotif) {
+	anlfLog.Infof("Process MlModelProvisionNotify: notifications=%d", len(notifications))
 	ctx := nwdaf_context.GetSelf()
 	for i := range notifications {
 		a.processMlModelNotification(ctx, &notifications[i])
 	}
-
-	c.Status(http.StatusNoContent)
 }
 
 func (a *AnlfService) processMlModelNotification(

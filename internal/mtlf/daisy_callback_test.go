@@ -12,6 +12,24 @@ import (
 
 const malformedRequestSyntaxTitle = "Malformed request syntax"
 
+type fakeTrainingCompleteProcessor struct {
+	taskID   string
+	modelURL string
+	status   string
+	errMsg   string
+	calls    int
+}
+
+func (f *fakeTrainingCompleteProcessor) HandleDaisyTrainingComplete(
+	taskID, modelURL, status, errMsg string,
+) {
+	f.taskID = taskID
+	f.modelURL = modelURL
+	f.status = status
+	f.errMsg = errMsg
+	f.calls++
+}
+
 func newCallbackRequestContext(method, target string, body []byte) (*gin.Context, *httptest.ResponseRecorder) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -30,10 +48,10 @@ func decodeCallbackProblemDetails(t *testing.T, recorder *httptest.ResponseRecor
 }
 
 func TestHandleDaisyTrainingComplete_InvalidPayload(t *testing.T) {
-	service := &MtlfService{}
+	server := &Server{}
 	c, recorder := newCallbackRequestContext(http.MethodPost, "/mtlf/training-complete", []byte(`{"task_id":`))
 
-	service.HandleDaisyTrainingComplete(c)
+	server.HandleDaisyTrainingComplete(c)
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
@@ -46,10 +64,10 @@ func TestHandleDaisyTrainingComplete_InvalidPayload(t *testing.T) {
 }
 
 func TestHandleDaisyTrainingComplete_MissingTaskID(t *testing.T) {
-	service := &MtlfService{}
+	server := &Server{}
 	c, recorder := newCallbackRequestContext(http.MethodPost, "/mtlf/training-complete", []byte(`{"status":"success"}`))
 
-	service.HandleDaisyTrainingComplete(c)
+	server.HandleDaisyTrainingComplete(c)
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
@@ -61,9 +79,9 @@ func TestHandleDaisyTrainingComplete_MissingTaskID(t *testing.T) {
 	}
 }
 
-func TestHandleDaisyTrainingComplete_Success(t *testing.T) {
-	service := &MtlfService{}
-	service.inFlight.Store("task-1", &inFlightEntry{oldModelUrl: "old-model"})
+func TestHandleDaisyTrainingComplete_DelegatesToProcessor(t *testing.T) {
+	processor := &fakeTrainingCompleteProcessor{}
+	server := &Server{processor: processor}
 
 	c, recorder := newCallbackRequestContext(
 		http.MethodPost,
@@ -71,13 +89,16 @@ func TestHandleDaisyTrainingComplete_Success(t *testing.T) {
 		[]byte(`{"task_id":"task-1","model_url":"http://example.com/model.onnx","status":"success"}`),
 	)
 
-	service.HandleDaisyTrainingComplete(c)
+	server.HandleDaisyTrainingComplete(c)
 	c.Writer.WriteHeaderNow()
 
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNoContent)
 	}
-	if _, ok := service.inFlight.Load("task-1"); ok {
-		t.Fatal("inFlight entry should be removed after callback handling")
+	if processor.calls != 1 {
+		t.Fatalf("processor call count = %d, want 1", processor.calls)
+	}
+	if processor.taskID != "task-1" {
+		t.Fatalf("taskID = %q, want %q", processor.taskID, "task-1")
 	}
 }

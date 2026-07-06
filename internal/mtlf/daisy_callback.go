@@ -10,17 +10,8 @@ import (
 	"github.com/free5gc/openapi/models"
 )
 
-// DaisyTrainingCompleteNotification is the callback payload sent by Daisy when async
-// training finishes.
-type DaisyTrainingCompleteNotification struct {
-	TaskID   string `json:"task_id"`
-	ModelURL string `json:"model_url,omitempty"`
-	Status   string `json:"status"`
-	Error    string `json:"error,omitempty"`
-}
-
 // HandleDaisyTrainingComplete handles POST /mtlf/training-complete.
-func (m *MtlfService) HandleDaisyTrainingComplete(c *gin.Context) {
+func (s *Server) HandleDaisyTrainingComplete(c *gin.Context) {
 	var notif DaisyTrainingCompleteNotification
 	if err := c.ShouldBindJSON(&notif); err != nil {
 		mtlfLog.Errorf("Failed to parse Daisy training callback: %v", err)
@@ -40,6 +31,6 @@ func (m *MtlfService) HandleDaisyTrainingComplete(c *gin.Context) {
 	mtlfLog.Infof("Handle DaisyTrainingComplete: task=%s status=%s",
 		notif.TaskID, notif.Status)
 
-	m.HandleTrainingComplete(notif.TaskID, notif.ModelURL, notif.Status, notif.Error)
+	s.processor.HandleDaisyTrainingComplete(notif.TaskID, notif.ModelURL, notif.Status, notif.Error)
 	c.Status(http.StatusNoContent)
 }

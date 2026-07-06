@@ -148,26 +148,25 @@ func (m *MtlfService) submitDaisyTask(
 	mtlfLog.Infof("SubmitTrainingTask: accepted task=%s", taskId)
 }
 
-// HandleTrainingComplete is called when Daisy posts the async training callback.
-// It looks up the in-flight entry and either clears the retraining flag (on
-// failure) or triggers the model hot-swap (on success).
-func (m *MtlfService) HandleTrainingComplete(taskId, modelUrl, status, errMsg string) {
+// CompleteTrainingTask applies a Daisy completion callback after the HTTP edge
+// has already parsed and validated the payload.
+func (m *MtlfService) CompleteTrainingTask(taskId, modelUrl, status, errMsg string) {
 	val, ok := m.inFlight.LoadAndDelete(taskId)
 	if !ok {
-		mtlfLog.Warnf("HandleTrainingComplete: unknown task=%s", taskId)
+		mtlfLog.Warnf("CompleteTrainingTask: unknown task=%s", taskId)
 		return
 	}
 	entry := val.(*inFlightEntry)
 
 	if status != "success" {
-		mtlfLog.Errorf("HandleTrainingComplete failed: task=%s err=%s", taskId, errMsg)
+		mtlfLog.Errorf("CompleteTrainingTask failed: task=%s err=%s", taskId, errMsg)
 		if entry.store != nil {
 			entry.store.SetRetraining(false)
 		}
 		return
 	}
 
-	mtlfLog.Infof("HandleTrainingComplete: complete task=%s", taskId)
+	mtlfLog.Infof("CompleteTrainingTask: complete task=%s", taskId)
 	m.swapModelAfterRetrain(entry.oldModelUrl, modelUrl)
 }
 
