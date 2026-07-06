@@ -110,7 +110,7 @@ func (m *MtlfService) submitDaisyTask(
 	}
 
 	mtlfLog.Infof("SubmitTrainingTask: dispatch tid=%s", tid)
-	cbURL := m.buildCallbackURL()
+	cbURL := m.buildTrainingCompleteCallbackURL()
 	if cbURL == "" {
 		mtlfLog.Warn("callback URL is empty; Daisy cannot notify completion")
 	}

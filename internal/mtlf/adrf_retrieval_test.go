@@ -127,3 +127,37 @@ func TestRunFetchLoopStopsOnShutdownWithoutWaitingForWatchdog(t *testing.T) {
 		t.Fatalf("TriggerTrainingAsync called %d times, want 0 during shutdown", daisy.triggerCalls)
 	}
 }
+
+func TestBuildCollectorRetrievalNotifyURLUsesSbiURI(t *testing.T) {
+	cfg := &factory.Config{
+		Configuration: &factory.Configuration{
+			Sbi: &factory.Sbi{
+				Scheme:       "https",
+				BindingIPv4:  "127.0.0.1",
+				RegisterIPv4: "nwdaf.example",
+				Port:         8443,
+				Tls: &factory.Tls{
+					Pem: "cert/nwdaf.pem",
+					Key: "cert/nwdaf.key",
+				},
+			},
+			Mtlf: &factory.MtlfConfig{
+				Server: &factory.AuxiliaryServerConfig{
+					BindingIPv4:  "127.0.0.1",
+					RegisterIPv4: "127.0.0.1",
+					Port:         9001,
+				},
+			},
+		},
+	}
+
+	service := newTestMtlfService(cfg)
+
+	if got := service.buildCollectorRetrievalNotifyURL(); got != "https://nwdaf.example:8443/collector/retrieval-notify" {
+		t.Fatalf(
+			"buildCollectorRetrievalNotifyURL() = %q, want %q",
+			got,
+			"https://nwdaf.example:8443/collector/retrieval-notify",
+		)
+	}
+}

@@ -64,7 +64,7 @@ func (m *MtlfService) config() *factory.Config {
 	return m.nwdaf.Config()
 }
 
-func (m *MtlfService) buildNwdafURL(urlPath string) string {
+func (m *MtlfService) buildMtlfURL(urlPath string) string {
 	cfg := m.config()
 	if cfg == nil {
 		return ""
@@ -72,8 +72,16 @@ func (m *MtlfService) buildNwdafURL(urlPath string) string {
 	return cfg.GetMtlfServerURI() + urlPath
 }
 
-func (m *MtlfService) buildCallbackURL() string {
-	return m.buildNwdafURL("/mtlf/training-complete")
+func (m *MtlfService) buildTrainingCompleteCallbackURL() string {
+	return m.buildMtlfURL("/mtlf/training-complete")
+}
+
+func (m *MtlfService) buildCollectorRetrievalNotifyURL() string {
+	cfg := m.config()
+	if cfg == nil {
+		return ""
+	}
+	return cfg.GetSbiUri() + "/collector/retrieval-notify"
 }
 
 // SetWaitGroup stores the application WaitGroup for goroutine lifecycle management.

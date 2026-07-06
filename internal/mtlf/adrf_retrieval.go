@@ -85,7 +85,7 @@ func (m *MtlfService) runAdrfRetrainWorkflow(
 	store *nwdaf_context.ModelAccuracyStore,
 ) {
 	tid := uuid.New().String()
-	notifURI := m.buildNwdafURL("/collector/retrieval-notify")
+	notifURI := m.buildCollectorRetrievalNotifyURL()
 
 	// Collect AdrfSmfInfos for SUPIs serving this model
 	nwdafCtx := nwdaf_context.GetSelf()
