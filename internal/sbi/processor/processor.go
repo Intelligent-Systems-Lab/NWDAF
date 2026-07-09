@@ -52,7 +52,7 @@ func NewProcessor(nwdaf NwdafApp, anlfService *anlf.AnlfService, mtlfService *mt
 		p.mtlf.HandleAccuracyReports(modelUrl, reports, store)
 	})
 
-	// Wire 2: MTLF requests inference-engine operations during hot-swap → AnLF executes them.
+	// Wire 2: MTLF requests backend model operations during hot-swap → AnLF executes them.
 	// AnLF loads the new model, unloads the old one, and returns the new model ID.
 	p.mtlf.SetOnModelSwapReady(func(newModelUrl, oldModelId string) (string, error) {
 		return p.anlf.SwapModel(newModelUrl, oldModelId)

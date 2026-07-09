@@ -53,7 +53,7 @@ type Configuration struct {
 	Smf                *SmfConfig             `yaml:"smf,omitempty"`
 	Anlf               *AnlfConfig            `yaml:"anlf,omitempty"`
 	ExternalMtlf       *ExternalMtlfConfig    `yaml:"externalMtlf,omitempty"`
-	InferenceEngine    *InferenceEngineConfig `yaml:"inferenceEngine,omitempty"`
+	AnlfBackend        *AnlfBackendConfig     `yaml:"anlfBackend,omitempty"`
 	GroupMembership    *GroupMembershipConfig `yaml:"groupMembership,omitempty"`
 	Mtlf               *MtlfConfig            `yaml:"mtlf,omitempty"`
 	Analytics          *AnalyticsConfig       `yaml:"analytics,omitempty"`
@@ -165,8 +165,8 @@ func (m *ModelParams) RingBufferSizeOrDefault() int {
 	return 50
 }
 
-// InferenceEngineConfig configuration for the local inference engine.
-type InferenceEngineConfig struct {
+// AnlfBackendConfig configures the downstream AnLF backend used by NWDAF.
+type AnlfBackendConfig struct {
 	Enabled  bool   `yaml:"enabled"`
 	Endpoint string `yaml:"endpoint,omitempty"`
 }
@@ -634,8 +634,8 @@ func (c *Configuration) validate() error {
 			}
 		}
 	}
-	if c.InferenceEngine != nil && c.InferenceEngine.Enabled {
-		if validateErr := c.InferenceEngine.validate(); validateErr != nil {
+	if c.AnlfBackend != nil && c.AnlfBackend.Enabled {
+		if validateErr := c.AnlfBackend.validate(); validateErr != nil {
 			errs = append(errs, validateErr)
 		}
 	}
@@ -784,8 +784,8 @@ func (s *SmfConfig) validate() error {
 	return nil
 }
 
-func (m *InferenceEngineConfig) validate() error {
-	return validateHTTPURL("inferenceEngine.endpoint", m.Endpoint)
+func (m *AnlfBackendConfig) validate() error {
+	return validateHTTPURL("anlfBackend.endpoint", m.Endpoint)
 }
 
 func (m *ExternalMtlfConfig) validate() error {

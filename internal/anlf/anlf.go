@@ -22,7 +22,7 @@ type NwdafApp interface {
 // AnlfService is the AnLF entry point.
 type AnlfService struct {
 	nwdaf             NwdafApp
-	inferenceEngine   InferenceEngineAPI
+	anlfBackend       AnlfBackendAPI
 	onDeviationReport func(modelUrl string, deviation float64, store *nwdaf_context.ModelAccuracyStore)
 	onAccuracyReports func(modelUrl string, reports []AccuracyReport, store *nwdaf_context.ModelAccuracyStore)
 	warmupMu          sync.Mutex
@@ -47,10 +47,10 @@ type AccuracyReport struct {
 }
 
 // NewAnlfService creates a new AnlfService instance.
-func NewAnlfService(nwdaf NwdafApp, inferenceEngine InferenceEngineAPI) *AnlfService {
+func NewAnlfService(nwdaf NwdafApp, anlfBackend AnlfBackendAPI) *AnlfService {
 	return &AnlfService{
-		nwdaf:           nwdaf,
-		inferenceEngine: inferenceEngine,
+		nwdaf:       nwdaf,
+		anlfBackend: anlfBackend,
 	}
 }
 
@@ -61,12 +61,12 @@ func (a *AnlfService) config() *factory.Config {
 	return a.nwdaf.Config()
 }
 
-func inferenceEngineEndpoint(cfg *factory.Config) string {
+func anlfBackendEndpoint(cfg *factory.Config) string {
 	if cfg == nil || cfg.Configuration == nil ||
-		cfg.Configuration.InferenceEngine == nil || !cfg.Configuration.InferenceEngine.Enabled {
+		cfg.Configuration.AnlfBackend == nil || !cfg.Configuration.AnlfBackend.Enabled {
 		return ""
 	}
-	return cfg.Configuration.InferenceEngine.Endpoint
+	return cfg.Configuration.AnlfBackend.Endpoint
 }
 
 func ueCommunicationModelParams(cfg *factory.Config) *factory.ModelParams {
@@ -127,8 +127,8 @@ func (a *AnlfService) launchOwnedTask(fn func()) {
 	go fn()
 }
 
-func (a *AnlfService) InferenceEngine() InferenceEngineAPI {
-	return a.inferenceEngine
+func (a *AnlfService) AnlfBackend() AnlfBackendAPI {
+	return a.anlfBackend
 }
 
 func (a *AnlfService) BuildProvisionNotificationURI() string {

@@ -10,12 +10,12 @@ import (
 	"github.com/free5gc/nwdaf/internal/anlf"
 )
 
-const testInferenceEngineEndpoint = "http://127.0.0.30:8000"
+const testAnlfBackendEndpoint = "http://127.0.0.30:8000"
 
-func newInterceptedInferenceEngineClient(t *testing.T) *Client {
+func newInterceptedAnlfBackendClient(t *testing.T) *Client {
 	t.Helper()
 
-	client := NewClient(testInferenceEngineEndpoint)
+	client := NewClient(testAnlfBackendEndpoint)
 	gock.InterceptClient(client.HTTPClient())
 	t.Cleanup(func() {
 		gock.Off()
@@ -24,40 +24,40 @@ func newInterceptedInferenceEngineClient(t *testing.T) *Client {
 	return client
 }
 
-func TestClient_InitializeModel(t *testing.T) {
-	client := newInterceptedInferenceEngineClient(t)
+func TestClient_LoadModel(t *testing.T) {
+	client := newInterceptedAnlfBackendClient(t)
 
-	gock.New(testInferenceEngineEndpoint).
+	gock.New(testAnlfBackendEndpoint).
 		Post("/model/load").
 		JSON(anlf.LoadModelRequest{ModelUrl: "http://example.com/model.h5"}).
 		Reply(http.StatusCreated).
 		JSON(anlf.LoadModelResponse{ModelId: "model-123"})
 
-	modelID, err := client.InitializeModel(context.Background(), "http://example.com/model.h5")
+	modelID, err := client.LoadModel(context.Background(), "http://example.com/model.h5")
 	if err != nil {
-		t.Fatalf("InitializeModel returned error: %v", err)
+		t.Fatalf("LoadModel returned error: %v", err)
 	}
 	if modelID != "model-123" {
-		t.Fatalf("InitializeModel returned %q, want %q", modelID, "model-123")
+		t.Fatalf("LoadModel returned %q, want %q", modelID, "model-123")
 	}
 }
 
-func TestClient_InitializeModelReturnsErrorOnFailureStatus(t *testing.T) {
-	client := newInterceptedInferenceEngineClient(t)
+func TestClient_LoadModelReturnsErrorOnFailureStatus(t *testing.T) {
+	client := newInterceptedAnlfBackendClient(t)
 
-	gock.New(testInferenceEngineEndpoint).
+	gock.New(testAnlfBackendEndpoint).
 		Post("/model/load").
 		Reply(http.StatusBadGateway)
 
-	if _, err := client.InitializeModel(context.Background(), "http://example.com/model.h5"); err == nil {
-		t.Fatal("expected InitializeModel to fail on non-success status")
+	if _, err := client.LoadModel(context.Background(), "http://example.com/model.h5"); err == nil {
+		t.Fatal("expected LoadModel to fail on non-success status")
 	}
 }
 
 func TestClient_UnloadModel(t *testing.T) {
-	client := newInterceptedInferenceEngineClient(t)
+	client := newInterceptedAnlfBackendClient(t)
 
-	gock.New(testInferenceEngineEndpoint).
+	gock.New(testAnlfBackendEndpoint).
 		Post("/model/unload").
 		JSON(anlf.UnloadModelRequest{ModelId: "model-123"}).
 		Reply(http.StatusOK)
@@ -68,7 +68,7 @@ func TestClient_UnloadModel(t *testing.T) {
 }
 
 func TestClient_Predict(t *testing.T) {
-	client := newInterceptedInferenceEngineClient(t)
+	client := newInterceptedAnlfBackendClient(t)
 
 	trafficData := []anlf.TrafficObservation{
 		{
@@ -86,7 +86,7 @@ func TestClient_Predict(t *testing.T) {
 		},
 	}
 
-	gock.New(testInferenceEngineEndpoint).
+	gock.New(testAnlfBackendEndpoint).
 		Post("/predict").
 		Reply(http.StatusOK).
 		JSON(anlf.PredictResponse{
@@ -112,9 +112,9 @@ func TestClient_Predict(t *testing.T) {
 }
 
 func TestClient_PredictReturnsDecodeError(t *testing.T) {
-	client := newInterceptedInferenceEngineClient(t)
+	client := newInterceptedAnlfBackendClient(t)
 
-	gock.New(testInferenceEngineEndpoint).
+	gock.New(testAnlfBackendEndpoint).
 		Post("/predict").
 		Reply(http.StatusOK).
 		BodyString("{not-json")

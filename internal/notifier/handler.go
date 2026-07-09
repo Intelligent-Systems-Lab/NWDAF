@@ -16,7 +16,7 @@ type AnalyticsHandler interface {
 		nwdafSubId string,
 		eventSub *models.NwdafEventsSubscriptionEventSubscription,
 		cfg *factory.Config,
-		inferenceEngine anlf.InferenceEngineAPI,
+		anlfBackend anlf.AnlfBackendAPI,
 	) models.NwdafEventsSubscriptionEventNotification
 }
 
@@ -40,11 +40,11 @@ func (h *UeCommunicationHandler) BuildEventNotification(
 	nwdafSubId string,
 	eventSub *models.NwdafEventsSubscriptionEventSubscription,
 	cfg *factory.Config,
-	inferenceEngine anlf.InferenceEngineAPI,
+	anlfBackend anlf.AnlfBackendAPI,
 ) models.NwdafEventsSubscriptionEventNotification {
 	return models.NwdafEventsSubscriptionEventNotification{
 		Event:   eventSub.Event,
-		UeComms: []models.UeCommunication{anlf.GenerateUeCommunicationAnalytics(parentCtx, nwdafSubId, cfg, inferenceEngine)},
+		UeComms: []models.UeCommunication{anlf.GenerateUeCommunicationAnalytics(parentCtx, nwdafSubId, cfg, anlfBackend)},
 	}
 }
 
@@ -56,7 +56,7 @@ func (h *AbnormalBehaviourHandler) BuildEventNotification(
 	nwdafSubId string,
 	eventSub *models.NwdafEventsSubscriptionEventSubscription,
 	cfg *factory.Config,
-	_ anlf.InferenceEngineAPI,
+	_ anlf.AnlfBackendAPI,
 ) models.NwdafEventsSubscriptionEventNotification {
 	return models.NwdafEventsSubscriptionEventNotification{
 		Event:        eventSub.Event,

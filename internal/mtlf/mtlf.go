@@ -27,9 +27,9 @@ type MtlfService struct {
 	wg             *sync.WaitGroup
 	stateStore     *MonitorStateStore
 	onModelSwapped func(modelUrl string, wg *sync.WaitGroup)
-	// onModelSwapReady is called by swapModelAfterRetrain to delegate inference-engine
+	// onModelSwapReady is called by swapModelAfterRetrain to delegate AnLF backend
 	// operations (load new model, unload old model) to AnLF.
-	// Returns the new model ID assigned by the inference engine, or an error.
+	// Returns the new model ID assigned by the backend, or an error.
 	onModelSwapReady func(newModelUrl, oldModelId string) (string, error)
 	// inFlight tracks async training tasks: taskId → *inFlightEntry.
 	// Populated when an async training request is accepted by Daisy;
@@ -95,7 +95,7 @@ func (m *MtlfService) SetOnModelSwapped(fn func(modelUrl string, wg *sync.WaitGr
 	m.onModelSwapped = fn
 }
 
-// SetOnModelSwapReady registers a callback that MTLF calls to delegate inference-engine
+// SetOnModelSwapReady registers a callback that MTLF calls to delegate backend
 // operations to AnLF during a hot-swap. AnLF loads the new model, unloads the old
 // one, and returns the new model ID.
 func (m *MtlfService) SetOnModelSwapReady(fn func(newModelUrl, oldModelId string) (string, error)) {

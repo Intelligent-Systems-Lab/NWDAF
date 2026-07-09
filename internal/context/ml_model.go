@@ -76,14 +76,14 @@ func (m *MlModelInfo) SetModelFailed(err error) {
 	m.LastError = err
 }
 
-// IsReady returns true if the model is ready for inference
+// IsReady returns true if the model is ready for backend prediction.
 func (m *MlModelInfo) IsReady() bool {
 	m.RLock()
 	defer m.RUnlock()
 	return m.Status == MlModelStatus_READY
 }
 
-// GetModelId returns the model ID (for inference calls)
+// GetModelId returns the model ID used for backend prediction calls.
 func (m *MlModelInfo) GetModelId() string {
 	m.RLock()
 	defer m.RUnlock()
@@ -103,11 +103,11 @@ func (m *MlModelInfo) GetStatus() MlModelStatus {
 
 // SharedModelInfo tracks a loaded ML model shared across subscriptions.
 // One SharedModelInfo per unique modelUrl. Multiple subscriptions can share
-// the same model, avoiding duplicate inference-engine initialization.
+// the same model, avoiding duplicate backend model loading.
 type SharedModelInfo struct {
 	sync.RWMutex
 	ModelUrl    string
-	ModelId     string              // From inference engine (set once on first init)
+	ModelId     string              // From the AnLF backend (set once on first load)
 	Event       models.NwdafEvent   // Analytics event type
 	Subscribers map[string]struct{} // nwdafSubId set
 	loadOnce    sync.Once
@@ -165,7 +165,7 @@ func (s *SharedModelInfo) GetModelId() string {
 	return s.ModelId
 }
 
-// SetModelId stores the inference-engine model ID and signals load completion.
+// SetModelId stores the backend model ID and signals load completion.
 func (s *SharedModelInfo) SetModelId(modelId string) {
 	s.Lock()
 	s.ModelId = modelId

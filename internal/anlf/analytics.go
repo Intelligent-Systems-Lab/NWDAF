@@ -61,7 +61,7 @@ func GenerateUeCommunicationAnalytics(
 	parentCtx context.Context,
 	nwdafSubId string,
 	cfg *factory.Config,
-	inferenceEngine InferenceEngineAPI,
+	anlfBackend AnlfBackendAPI,
 ) models.UeCommunication {
 	ctx := nwdaf_context.GetSelf()
 	now := time.Now()
@@ -69,7 +69,7 @@ func GenerateUeCommunicationAnalytics(
 	// Check if ML model is available for this subscription
 	mlInfo := ctx.GetMlModelInfo(nwdafSubId)
 	if mlInfo != nil && mlInfo.IsReady() {
-		result, err := generateMlBasedUeCommunication(parentCtx, nwdafSubId, mlInfo, ctx, cfg, inferenceEngine)
+		result, err := generateMlBasedUeCommunication(parentCtx, nwdafSubId, mlInfo, ctx, cfg, anlfBackend)
 		if err == nil {
 			return result
 		}
@@ -90,19 +90,19 @@ func GenerateUeCommunicationAnalytics(
 	}
 }
 
-// generateMlBasedUeCommunication uses the inference engine for prediction
+// generateMlBasedUeCommunication uses the AnLF backend for prediction.
 func generateMlBasedUeCommunication(
 	parentCtx context.Context,
 	nwdafSubId string,
 	mlInfo *nwdaf_context.MlModelInfo,
 	ctx *nwdaf_context.NWDAFContext,
 	cfg *factory.Config,
-	inferenceEngine InferenceEngineAPI,
+	anlfBackend AnlfBackendAPI,
 ) (models.UeCommunication, error) {
 	now := time.Now()
 
-	if inferenceEngine == nil {
-		return models.UeCommunication{}, fmt.Errorf("inference engine client not available")
+	if anlfBackend == nil {
+		return models.UeCommunication{}, fmt.Errorf("AnLF backend client not available")
 	}
 
 	// Resolve model params (with defaults)
@@ -141,9 +141,9 @@ func generateMlBasedUeCommunication(
 		last.UlThr, last.DlThr, last.UlPktThr, last.DlPktThr,
 		baseTargetTime.Format(time.RFC3339), baseTargetTimeFallback)
 
-	// Call the inference engine for prediction
+	// Call the AnLF backend for prediction.
 	modelId := mlInfo.GetModelId()
-	resp, err := inferenceEngine.Predict(parentCtx, modelId, historicalData)
+	resp, err := anlfBackend.Predict(parentCtx, modelId, historicalData)
 	if err != nil {
 		return models.UeCommunication{}, err
 	}

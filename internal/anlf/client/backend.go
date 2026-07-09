@@ -12,13 +12,13 @@ import (
 	"github.com/free5gc/nwdaf/internal/logger"
 )
 
-// Client handles local inference-engine API interactions.
+// Client handles local AnLF backend API interactions.
 type Client struct {
 	endpoint   string
 	httpClient *http.Client
 }
 
-// NewClient creates a new inference-engine client.
+// NewClient creates a new AnLF backend client.
 func NewClient(endpoint string) *Client {
 	return &Client{
 		endpoint: endpoint,
@@ -33,8 +33,8 @@ func NewClient(endpoint string) *Client {
 	}
 }
 
-// InitializeModel loads a model from the given URL and returns the model ID.
-func (c *Client) InitializeModel(ctx context.Context, modelURL string) (string, error) {
+// LoadModel loads a model from the given URL and returns the model ID.
+func (c *Client) LoadModel(ctx context.Context, modelURL string) (string, error) {
 	request := anlf.LoadModelRequest{
 		ModelUrl: modelURL,
 	}
@@ -46,7 +46,7 @@ func (c *Client) InitializeModel(ctx context.Context, modelURL string) (string, 
 
 	url := c.endpoint + "/model/load"
 
-	ctx, cancel, err := timeoutContextFromParent(ctx, 120*time.Second, "inference engine model initialization")
+	ctx, cancel, err := timeoutContextFromParent(ctx, 120*time.Second, "AnLF backend model load")
 	if err != nil {
 		return "", err
 	}
@@ -60,7 +60,7 @@ func (c *Client) InitializeModel(ctx context.Context, modelURL string) (string, 
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to send request to inference engine: %w", err)
+		return "", fmt.Errorf("failed to send request to AnLF backend: %w", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -69,7 +69,7 @@ func (c *Client) InitializeModel(ctx context.Context, modelURL string) (string, 
 	}()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("inference engine model load failed: status=%d", resp.StatusCode)
+		return "", fmt.Errorf("AnLF backend model load failed: status=%d", resp.StatusCode)
 	}
 
 	var response anlf.LoadModelResponse
@@ -93,7 +93,7 @@ func (c *Client) UnloadModel(ctx context.Context, modelID string) error {
 
 	url := c.endpoint + "/model/unload"
 
-	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "inference engine model unload")
+	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "AnLF backend model unload")
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,7 @@ func (c *Client) UnloadModel(ctx context.Context, modelID string) error {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send request to inference engine: %w", err)
+		return fmt.Errorf("failed to send request to AnLF backend: %w", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -116,19 +116,19 @@ func (c *Client) UnloadModel(ctx context.Context, modelID string) error {
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("inference engine model unload failed: status=%d", resp.StatusCode)
+		return fmt.Errorf("AnLF backend model unload failed: status=%d", resp.StatusCode)
 	}
 
 	return nil
 }
 
-// Predict calls the inference engine to get traffic predictions.
+// Predict calls the AnLF backend to get traffic predictions.
 func (c *Client) Predict(
 	ctx context.Context,
 	modelID string,
 	trafficData []anlf.TrafficObservation,
 ) (*anlf.PredictResponse, error) {
-	logger.AnlfLog.Debugf("Calling inference engine: modelId=%s, dataPoints=%d",
+	logger.AnlfLog.Debugf("Calling AnLF backend: modelId=%s, dataPoints=%d",
 		modelID, len(trafficData))
 
 	request := anlf.PredictRequest{
@@ -143,7 +143,7 @@ func (c *Client) Predict(
 
 	url := c.endpoint + "/predict"
 
-	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "inference engine prediction")
+	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "AnLF backend prediction")
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +157,7 @@ func (c *Client) Predict(
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request to inference engine: %w", err)
+		return nil, fmt.Errorf("failed to send request to AnLF backend: %w", err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -166,7 +166,7 @@ func (c *Client) Predict(
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("inference engine prediction failed: status=%d", resp.StatusCode)
+		return nil, fmt.Errorf("AnLF backend prediction failed: status=%d", resp.StatusCode)
 	}
 
 	var response anlf.PredictResponse
@@ -174,7 +174,7 @@ func (c *Client) Predict(
 		return nil, fmt.Errorf("failed to decode response: %w", decodeErr)
 	}
 
-	logger.AnlfLog.Debugf("Inference engine returned %d predictions", len(response.PredictedData))
+	logger.AnlfLog.Debugf("AnLF backend returned %d predictions", len(response.PredictedData))
 	return &response, nil
 }
 

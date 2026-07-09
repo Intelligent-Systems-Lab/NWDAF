@@ -5,9 +5,9 @@ import (
 	"net/http"
 )
 
-// InferenceEngineAPI defines the local inference-engine integration seam owned by AnLF.
-type InferenceEngineAPI interface {
-	InitializeModel(ctx context.Context, modelURL string) (string, error)
+// AnlfBackendAPI defines the downstream AnLF backend integration seam owned by AnLF.
+type AnlfBackendAPI interface {
+	LoadModel(ctx context.Context, modelURL string) (string, error)
 	UnloadModel(ctx context.Context, modelID string) error
 	Predict(ctx context.Context, modelID string, trafficData []TrafficObservation) (*PredictResponse, error)
 	HTTPClient() *http.Client
@@ -41,7 +41,7 @@ type TrafficCharacterization struct {
 }
 
 // TrafficObservation represents a single traffic observation point for ML prediction.
-// Fields match the inference-engine feature extraction order (10 features).
+// Fields match the backend feature extraction order (10 features).
 type TrafficObservation struct {
 	Ts          string  `json:"ts"`
 	TotalVol    float64 `json:"total_vol"`

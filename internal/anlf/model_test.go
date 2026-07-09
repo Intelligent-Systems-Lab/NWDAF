@@ -10,23 +10,23 @@ import (
 	"github.com/free5gc/openapi/models"
 )
 
-type fakeInferenceEngineClient struct {
-	initializeCalls int
-	lastCtx         context.Context
-	lastModelURL    string
-	modelID         string
+type fakeAnlfBackendClient struct {
+	loadCalls    int
+	lastCtx      context.Context
+	lastModelURL string
+	modelID      string
 }
 
-func (f *fakeInferenceEngineClient) InitializeModel(ctx context.Context, modelURL string) (string, error) {
-	f.initializeCalls++
+func (f *fakeAnlfBackendClient) LoadModel(ctx context.Context, modelURL string) (string, error) {
+	f.loadCalls++
 	f.lastCtx = ctx
 	f.lastModelURL = modelURL
 	return f.modelID, nil
 }
 
-func (f *fakeInferenceEngineClient) UnloadModel(context.Context, string) error { return nil }
+func (f *fakeAnlfBackendClient) UnloadModel(context.Context, string) error { return nil }
 
-func (f *fakeInferenceEngineClient) Predict(
+func (f *fakeAnlfBackendClient) Predict(
 	context.Context,
 	string,
 	[]TrafficObservation,
@@ -34,20 +34,20 @@ func (f *fakeInferenceEngineClient) Predict(
 	return nil, nil
 }
 
-func (f *fakeInferenceEngineClient) HTTPClient() *http.Client { return &http.Client{} }
+func (f *fakeAnlfBackendClient) HTTPClient() *http.Client { return &http.Client{} }
 
 func TestInitializeMlModelUsesInjectedClient(t *testing.T) {
 	nwdaf_context.Init()
 
 	cfg := &factory.Config{
 		Configuration: &factory.Configuration{
-			InferenceEngine: &factory.InferenceEngineConfig{
+			AnlfBackend: &factory.AnlfBackendConfig{
 				Enabled:  true,
-				Endpoint: "http://inference-engine.example",
+				Endpoint: "http://anlf-backend.example",
 			},
 		},
 	}
-	client := &fakeInferenceEngineClient{modelID: "model-123"}
+	client := &fakeAnlfBackendClient{modelID: "model-123"}
 	service := NewAnlfService(testNwdafApp{
 		ctx: context.Background(),
 		cfg: cfg,
@@ -59,14 +59,14 @@ func TestInitializeMlModelUsesInjectedClient(t *testing.T) {
 
 	service.InitializeMlModel("sub-1", mlInfo, modelURL)
 
-	if client.initializeCalls != 1 {
-		t.Fatalf("InitializeModel called %d times, want 1", client.initializeCalls)
+	if client.loadCalls != 1 {
+		t.Fatalf("LoadModel called %d times, want 1", client.loadCalls)
 	}
 	if client.lastCtx == nil {
-		t.Fatal("InitializeModel should receive a parent context")
+		t.Fatal("LoadModel should receive a parent context")
 	}
 	if client.lastModelURL != modelURL {
-		t.Fatalf("InitializeModel modelURL = %q, want %q", client.lastModelURL, modelURL)
+		t.Fatalf("LoadModel modelURL = %q, want %q", client.lastModelURL, modelURL)
 	}
 	if !mlInfo.IsReady() {
 		t.Fatal("mlInfo should be READY after successful initialization")

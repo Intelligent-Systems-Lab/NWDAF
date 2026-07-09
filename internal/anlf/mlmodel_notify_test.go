@@ -112,9 +112,9 @@ func TestPlanModelProvisionActions_ResolvesActivation(t *testing.T) {
 		ctx: context.Background(),
 		cfg: &factory.Config{
 			Configuration: &factory.Configuration{
-				InferenceEngine: &factory.InferenceEngineConfig{
+				AnlfBackend: &factory.AnlfBackendConfig{
 					Enabled:  true,
-					Endpoint: "http://inference-engine.example",
+					Endpoint: "http://anlf-backend.example",
 				},
 			},
 		},
@@ -156,9 +156,9 @@ func TestPlanModelProvisionActions_UsesPerEventCorrelation(t *testing.T) {
 		ctx: context.Background(),
 		cfg: &factory.Config{
 			Configuration: &factory.Configuration{
-				InferenceEngine: &factory.InferenceEngineConfig{
+				AnlfBackend: &factory.AnlfBackendConfig{
 					Enabled:  true,
-					Endpoint: "http://inference-engine.example",
+					Endpoint: "http://anlf-backend.example",
 				},
 			},
 		},
@@ -202,14 +202,14 @@ func TestExecuteModelProvisionActions_InitializesModel(t *testing.T) {
 	mlInfo := nwdaf_context.NewMlModelInfo(models.NwdafEvent_UE_COMMUNICATION, "mtlf")
 	ctx.SetMlModelInfo("sub-123", mlInfo)
 
-	client := &fakeInferenceEngineClient{modelID: "model-123"}
+	client := &fakeAnlfBackendClient{modelID: "model-123"}
 	service := NewAnlfService(testNwdafApp{
 		ctx: context.Background(),
 		cfg: &factory.Config{
 			Configuration: &factory.Configuration{
-				InferenceEngine: &factory.InferenceEngineConfig{
+				AnlfBackend: &factory.AnlfBackendConfig{
 					Enabled:  true,
-					Endpoint: "http://inference-engine.example",
+					Endpoint: "http://anlf-backend.example",
 				},
 			},
 		},
@@ -223,8 +223,8 @@ func TestExecuteModelProvisionActions_InitializesModel(t *testing.T) {
 		},
 	})
 
-	if client.initializeCalls != 1 {
-		t.Fatalf("InitializeModel called %d times, want 1", client.initializeCalls)
+	if client.loadCalls != 1 {
+		t.Fatalf("LoadModel called %d times, want 1", client.loadCalls)
 	}
 	if got := mlInfo.GetStatus(); got != nwdaf_context.MlModelStatus_READY {
 		t.Fatalf("mlInfo status = %q, want %q", got, nwdaf_context.MlModelStatus_READY)
@@ -252,14 +252,14 @@ func TestExecuteModelProvisionActions_CleansUpOldModelStateOnSwitch(t *testing.T
 	oldShared.AddSubscriber(subID)
 	ctx.GetOrCreateModelAccuracyStore(oldModelURL)
 
-	client := &fakeInferenceEngineClient{modelID: "model-456"}
+	client := &fakeAnlfBackendClient{modelID: "model-456"}
 	service := NewAnlfService(testNwdafApp{
 		ctx: context.Background(),
 		cfg: &factory.Config{
 			Configuration: &factory.Configuration{
-				InferenceEngine: &factory.InferenceEngineConfig{
+				AnlfBackend: &factory.AnlfBackendConfig{
 					Enabled:  true,
-					Endpoint: "http://inference-engine.example",
+					Endpoint: "http://anlf-backend.example",
 				},
 				Mtlf: &factory.MtlfConfig{
 					Enabled: true,

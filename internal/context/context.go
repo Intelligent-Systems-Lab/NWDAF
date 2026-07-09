@@ -70,7 +70,7 @@ type NWDAFContext struct {
 	// --- Accuracy Monitoring ---
 
 	// Shared model registry: modelUrl → *SharedModelInfo
-	// Tracks loaded models to avoid duplicate inference-engine initialization
+	// Tracks loaded models to avoid duplicate backend model loading.
 	sharedModelRegistry sync.Map
 
 	// Per-model accuracy stores: modelUrl → *ModelAccuracyStore

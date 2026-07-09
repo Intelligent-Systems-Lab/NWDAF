@@ -342,9 +342,9 @@ func TestTriggerMlModelProvisioning_StaticUrl(t *testing.T) {
 				Enabled:        false, // MTLF Disabled
 				StaticModelUrl: "file:///test/model.pth",
 			},
-			InferenceEngine: &factory.InferenceEngineConfig{
+			AnlfBackend: &factory.AnlfBackendConfig{
 				Enabled:  true,
-				Endpoint: "http://inference-engine-mock",
+				Endpoint: "http://anlf-backend-mock",
 			},
 		},
 	}

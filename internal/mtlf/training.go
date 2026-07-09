@@ -208,7 +208,7 @@ func (m *MtlfService) swapModelAfterRetrain(oldModelUrl, newModelUrl string) {
 		oldModelId = oldShared.GetModelId()
 	}
 
-	// 2. Delegate inference-engine operations to AnLF via callback:
+	// 2. Delegate backend model operations to AnLF via callback:
 	//    load new model → unload old model → return new model ID
 	if m.onModelSwapReady == nil {
 		mtlfLog.Error("onModelSwapReady callback not set; cannot perform model swap")

@@ -76,12 +76,12 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		return nil, err
 	}
 
-	var inferenceEngine anlf.InferenceEngineAPI
+	var anlfBackend anlf.AnlfBackendAPI
 	if cfg.Configuration != nil &&
-		cfg.Configuration.InferenceEngine != nil &&
-		cfg.Configuration.InferenceEngine.Enabled &&
-		cfg.Configuration.InferenceEngine.Endpoint != "" {
-		inferenceEngine = anlfclient.NewClient(cfg.Configuration.InferenceEngine.Endpoint)
+		cfg.Configuration.AnlfBackend != nil &&
+		cfg.Configuration.AnlfBackend.Enabled &&
+		cfg.Configuration.AnlfBackend.Endpoint != "" {
+		anlfBackend = anlfclient.NewClient(cfg.Configuration.AnlfBackend.Endpoint)
 	}
 
 	var daisyClient mtlf.DaisyAPI
@@ -92,7 +92,7 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		daisyClient = mtlfclient.NewClient(cfg.Configuration.Mtlf.Endpoint)
 	}
 
-	anlfService := anlf.NewAnlfService(nwdaf, inferenceEngine)
+	anlfService := anlf.NewAnlfService(nwdaf, anlfBackend)
 	mtlfService := mtlf.NewMtlfService(nwdaf, daisyClient, nwdaf.consumer.AdrfClient())
 	anlfProcessor := anlfprocessor.NewProcessor(anlfService)
 	mtlfProcessor := mtlfprocessor.NewProcessor(mtlfService)

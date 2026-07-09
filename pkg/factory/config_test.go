@@ -146,13 +146,13 @@ configuration:
 			wantErr: "smf.notifUris.smf scheme must match sbi.scheme (https)",
 		},
 		{
-			name: "inference engine enabled requires endpoint",
+			name: "anlf backend enabled requires endpoint",
 			yaml: `
 configuration:
-  inferenceEngine:
+  anlfBackend:
     enabled: true
 `,
-			wantErr: "inferenceEngine.endpoint",
+			wantErr: "anlfBackend.endpoint",
 		},
 		{
 			name: "external mtlf enabled accepts endpoint-only config",

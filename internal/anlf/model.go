@@ -7,28 +7,28 @@ import (
 	"github.com/free5gc/nwdaf/internal/logger"
 )
 
-// SwapModel loads a new model and unloads the old one via the inference engine.
+// SwapModel loads a new model and unloads the old one via the AnLF backend.
 // Called by MTLF (via processor callback) during model hot-swap after retraining.
-// Returns the new model ID assigned by the inference engine.
+// Returns the new model ID assigned by the AnLF backend.
 func (a *AnlfService) SwapModel(newModelUrl, oldModelId string) (string, error) {
 	cfg := a.config()
-	endpoint := inferenceEngineEndpoint(cfg)
+	endpoint := anlfBackendEndpoint(cfg)
 	if endpoint == "" {
-		return "", fmt.Errorf("inference engine not configured")
+		return "", fmt.Errorf("AnLF backend not configured")
 	}
 
-	if a.inferenceEngine == nil {
-		return "", fmt.Errorf("inference engine client not initialized")
+	if a.anlfBackend == nil {
+		return "", fmt.Errorf("AnLF backend client not initialized")
 	}
 
-	newModelId, err := a.inferenceEngine.InitializeModel(a.nwdaf.CancelContext(), newModelUrl)
+	newModelId, err := a.anlfBackend.LoadModel(a.nwdaf.CancelContext(), newModelUrl)
 	if err != nil {
 		return "", fmt.Errorf("failed to load new model %s: %w", newModelUrl, err)
 	}
 	logger.AnlfLog.Infof("SwapModel: loaded modelId=%s", newModelId)
 
 	if oldModelId != "" {
-		if unloadErr := a.inferenceEngine.UnloadModel(a.nwdaf.CancelContext(), oldModelId); unloadErr != nil {
+		if unloadErr := a.anlfBackend.UnloadModel(a.nwdaf.CancelContext(), oldModelId); unloadErr != nil {
 			logger.AnlfLog.Warnf("SwapModel: unload failed modelId=%s err=%v", oldModelId, unloadErr)
 		} else {
 			logger.AnlfLog.Infof("SwapModel: unloaded modelId=%s", oldModelId)
@@ -38,7 +38,7 @@ func (a *AnlfService) SwapModel(newModelUrl, oldModelId string) (string, error) 
 	return newModelId, nil
 }
 
-// InitializeMlModel initializes the model directly using the inference engine.
+// InitializeMlModel initializes the model directly using the AnLF backend.
 // Deduplicates model loading: if modelUrl is already loaded by another
 // subscription, reuses the existing modelId from SharedModelRegistry.
 func (a *AnlfService) InitializeMlModel(
@@ -46,11 +46,11 @@ func (a *AnlfService) InitializeMlModel(
 ) {
 	logger.AnlfLog.Infof("LoadMlModel: start sub=%s", nwdafSubId)
 
-	// Get inference-engine configuration
+	// Get AnLF backend configuration
 	cfg := a.config()
-	endpoint := inferenceEngineEndpoint(cfg)
+	endpoint := anlfBackendEndpoint(cfg)
 	if endpoint == "" {
-		logger.AnlfLog.Warnf("Inference engine not configured, cannot initialize model")
+		logger.AnlfLog.Warnf("AnLF backend not configured, cannot initialize model")
 		mlInfo.SetModelFailed(nil)
 		return
 	}
@@ -77,15 +77,15 @@ func (a *AnlfService) InitializeMlModel(
 	}
 
 	// isNew=true: this goroutine is responsible for loading
-	if a.inferenceEngine == nil {
-		err := fmt.Errorf("inference engine client not initialized")
+	if a.anlfBackend == nil {
+		err := fmt.Errorf("AnLF backend client not initialized")
 		logger.AnlfLog.Errorf("Failed to initialize ML model: %v", err)
 		shared.LoadDone()
 		mlInfo.SetModelFailed(err)
 		return
 	}
 
-	modelId, err := a.inferenceEngine.InitializeModel(a.nwdaf.CancelContext(), modelUrl)
+	modelId, err := a.anlfBackend.LoadModel(a.nwdaf.CancelContext(), modelUrl)
 	if err != nil {
 		logger.AnlfLog.Errorf("LoadMlModel failed: sub=%s err=%v", nwdafSubId, err)
 		shared.LoadDone()

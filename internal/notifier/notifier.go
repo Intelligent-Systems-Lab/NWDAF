@@ -19,7 +19,7 @@ import (
 type NotificationScheduler struct {
 	baseCtx         context.Context
 	cfg             *factory.Config
-	inferenceEngine anlf.InferenceEngineAPI
+	anlfBackend     anlf.AnlfBackendAPI
 	httpClient      *http.Client
 	subscriptionId  string
 	notificationURI string
@@ -44,7 +44,7 @@ type NotificationScheduler struct {
 func NewNotificationScheduler(
 	baseCtx context.Context,
 	cfg *factory.Config,
-	inferenceEngine anlf.InferenceEngineAPI,
+	anlfBackend anlf.AnlfBackendAPI,
 	subscriptionId string,
 	notificationURI string,
 	repPeriod int32,
@@ -55,9 +55,9 @@ func NewNotificationScheduler(
 	onComplete func(subscriptionId string, reason string),
 ) *NotificationScheduler {
 	return &NotificationScheduler{
-		baseCtx:         baseCtx,
-		cfg:             cfg,
-		inferenceEngine: inferenceEngine,
+		baseCtx:     baseCtx,
+		cfg:         cfg,
+		anlfBackend: anlfBackend,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 			Transport: &http.Transport{
@@ -287,7 +287,7 @@ func (s *NotificationScheduler) buildNotification(
 				s.subscriptionId,
 				eventSub,
 				s.cfg,
-				s.inferenceEngine,
+				s.anlfBackend,
 			))
 		}
 	}
