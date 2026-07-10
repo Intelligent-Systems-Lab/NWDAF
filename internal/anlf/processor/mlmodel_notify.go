@@ -1,7 +1,7 @@
 package processor
 
 import (
-	"github.com/free5gc/nwdaf/internal/anlf"
+	"github.com/free5gc/nwdaf/internal/anlf/coordinator"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -10,7 +10,7 @@ func (p *Processor) HandleMlModelProvisionNotify(notifications []models.NwdafMlM
 		return
 	}
 
-	allActions := make([]anlf.ModelProvisionAction, 0)
+	allActions := make([]coordinator.ModelProvisionAction, 0)
 	for i := range notifications {
 		actions := p.workflow.PlanModelProvisionActions(&notifications[i])
 		if len(actions) > 0 {

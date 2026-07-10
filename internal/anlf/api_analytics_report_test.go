@@ -9,6 +9,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
+	"github.com/free5gc/nwdaf/internal/anlf/processor"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -16,7 +18,7 @@ type analyticsReportProcessorStub struct{ err error }
 
 func (*analyticsReportProcessorStub) HandleMlModelProvisionNotify([]models.NwdafMlModelProvNotif) {}
 
-func (p *analyticsReportProcessorStub) HandleAnalyticsReport(string, *AnalyticsReport) error {
+func (p *analyticsReportProcessorStub) HandleAnalyticsReport(string, *contract.AnalyticsReport) error {
 	return p.err
 }
 
@@ -31,10 +33,10 @@ func TestHandleAnalyticsReportStatusMapping(t *testing.T) {
 		want int
 	}{
 		{name: "success", want: http.StatusNoContent},
-		{name: "not found", err: ErrSubscriptionNotFound, want: http.StatusNotFound},
-		{name: "stale", err: ErrStaleAnalyticsReport, want: http.StatusConflict},
-		{name: "invalid", err: ErrInvalidAnalyticsReport, want: http.StatusBadRequest},
-		{name: "in flight", err: ErrAnalyticsReportInFlight, want: http.StatusServiceUnavailable},
+		{name: "not found", err: processor.ErrSubscriptionNotFound, want: http.StatusNotFound},
+		{name: "stale", err: processor.ErrStaleAnalyticsReport, want: http.StatusConflict},
+		{name: "invalid", err: processor.ErrInvalidAnalyticsReport, want: http.StatusBadRequest},
+		{name: "in flight", err: processor.ErrAnalyticsReportInFlight, want: http.StatusServiceUnavailable},
 		{name: "delivery", err: errors.New("network"), want: http.StatusBadGateway},
 	}
 	for _, test := range tests {

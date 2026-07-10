@@ -10,6 +10,15 @@ import (
 	"github.com/free5gc/openapi/models"
 )
 
+func (s *Server) mlModelNotifyRoutes() []Route {
+	return []Route{{
+		Name:    "HandleMlModelProvisionNotify",
+		Method:  http.MethodPost,
+		Pattern: "/mlmodel-notify",
+		APIFunc: s.HandleMlModelProvisionNotify,
+	}}
+}
+
 // HandleMlModelProvisionNotify handles POST /mlmodel-notify.
 // Per TS 29.520 §5.4.5.2: callback body is []NwdafMlModelProvNotif.
 func (s *Server) HandleMlModelProvisionNotify(c *gin.Context) {

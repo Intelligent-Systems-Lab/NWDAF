@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/free5gc/nwdaf/internal/anlf"
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/openapi/models"
 )
@@ -42,13 +42,13 @@ func TestReportDispatcherMapsDeliversAndDeduplicates(t *testing.T) {
 	nwdaf_context.GetSelf().AddSubscription(subscription)
 
 	dispatcher := NewReportDispatcher(context.Background(), nil)
-	report := &anlf.AnalyticsReport{
+	report := &contract.AnalyticsReport{
 		ReportID: "report-1", ReportSequence: 1, RuntimeRevision: 3, GeneratedAt: time.Now(),
-		EventNotifications: []anlf.AnalyticsEventNotification{{
+		EventNotifications: []contract.AnalyticsEventNotification{{
 			Event: string(models.NwdafEvent_UE_COMMUNICATION),
-			UeCommunications: []anlf.AnalyticsUeCommunication{{
+			UeCommunications: []contract.AnalyticsUeCommunication{{
 				Timestamp: time.Now(), Confidence: 0,
-				TrafficCharacterization: anlf.AnalyticsTrafficCharacterization{Dnn: "internet"},
+				TrafficCharacterization: contract.AnalyticsTrafficCharacterization{Dnn: "internet"},
 			}},
 		}},
 	}
@@ -77,7 +77,7 @@ func TestReportDispatcherMapsDeliversAndDeduplicates(t *testing.T) {
 	stale := *report
 	stale.ReportID = "report-stale"
 	stale.RuntimeRevision = 2
-	if err := dispatcher.DispatchAnalyticsReport("sub-1", &stale); !errors.Is(err, anlf.ErrStaleAnalyticsReport) {
+	if err := dispatcher.DispatchAnalyticsReport("sub-1", &stale); !errors.Is(err, ErrStaleAnalyticsReport) {
 		t.Fatalf("stale report error = %v", err)
 	}
 }

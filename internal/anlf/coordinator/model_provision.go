@@ -1,17 +1,18 @@
-package anlf
+package coordinator
 
 import (
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/openapi/models"
 )
 
 type ModelProvisionAction struct {
-	Request ApplySubscriptionRuntimeRequest
+	Request contract.ApplySubscriptionRuntimeRequest
 }
 
 // PlanModelProvisionActions resolves one callback payload into model-activation
 // actions after the HTTP edge has already parsed and validated the body.
-func (a *AnlfService) PlanModelProvisionActions(
+func (a *Coordinator) PlanModelProvisionActions(
 	notif *models.NwdafMlModelProvNotif,
 ) []ModelProvisionAction {
 	if notif == nil {
@@ -41,11 +42,11 @@ func (a *AnlfService) PlanModelProvisionActions(
 		mlInfo.RLock()
 		mtlfSubscriptionID := mlInfo.MtlfSubId
 		mlInfo.RUnlock()
-		request, err := a.BuildSubscriptionRuntimeRequest(nwdafSubID, &ProvisionContext{
+		request, err := a.BuildSubscriptionRuntimeRequest(nwdafSubID, &contract.ProvisionContext{
 			Source:              provisionSourceMTLF,
 			MtlfSubscriptionID:  mtlfSubscriptionID,
 			NotifSubscriptionID: notif.SubscriptionId,
-			MLEventNotification: MLEventNotification{MlEventNotif: eventNotif},
+			MLEventNotification: contract.MLEventNotification{MlEventNotif: eventNotif},
 		})
 		if err != nil {
 			anlfLog.Warnf("Cannot build runtime apply request: sub=%s err=%v", nwdafSubID, err)
@@ -61,7 +62,7 @@ func (a *AnlfService) PlanModelProvisionActions(
 
 // StartModelProvisionActions runs one callback-derived action batch under the
 // AnLF-owned lifecycle boundary.
-func (a *AnlfService) StartModelProvisionActions(actions []ModelProvisionAction) {
+func (a *Coordinator) StartModelProvisionActions(actions []ModelProvisionAction) {
 	if len(actions) == 0 {
 		return
 	}
@@ -73,7 +74,7 @@ func (a *AnlfService) StartModelProvisionActions(actions []ModelProvisionAction)
 
 // ExecuteModelProvisionActions applies one callback-derived action batch in
 // order so shared subscription state stays aligned with the model being loaded.
-func (a *AnlfService) ExecuteModelProvisionActions(actions []ModelProvisionAction) {
+func (a *Coordinator) ExecuteModelProvisionActions(actions []ModelProvisionAction) {
 	for _, action := range actions {
 		subscriptionID := action.Request.Subscription.SubscriptionID
 		if subscriptionID == "" {
@@ -91,7 +92,7 @@ func (a *AnlfService) ExecuteModelProvisionActions(actions []ModelProvisionActio
 	}
 }
 
-func (a *AnlfService) resolveNwdafSubscriptionID(notifCorrelationID, mtlfSubscriptionID string) string {
+func (a *Coordinator) resolveNwdafSubscriptionID(notifCorrelationID, mtlfSubscriptionID string) string {
 	ctx := nwdaf_context.GetSelf()
 	if notifCorrelationID != "" && ctx.GetSubscription(notifCorrelationID) != nil {
 		return notifCorrelationID

@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/free5gc/nwdaf/internal/anlf"
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/mtlf"
@@ -19,10 +19,20 @@ type NwdafApp interface {
 	Consumer() consumer.ConsumerAPI
 }
 
+type anlfCoordinator interface {
+	ApplyInitialSubscriptionRuntime(
+		subscription *nwdaf_context.Subscription,
+	) (*contract.ApplySubscriptionRuntimeResponse, error)
+	ReleaseSubscriptionRuntime(subscriptionID string) error
+	SyncCurrentObservationBindings(subscriptionID string) error
+	BuildProvisionNotificationURI() string
+	EnqueueObservations(sourceID string, observations []contract.SourceObservation) bool
+}
+
 type Processor struct {
 	nwdaf      NwdafApp
 	wg         *sync.WaitGroup
-	anlf       *anlf.AnlfService
+	anlf       anlfCoordinator
 	mtlf       *mtlf.MtlfService
 	adrfBuffer *adrfBuffer
 }
@@ -34,29 +44,12 @@ func (p *Processor) config() *factory.Config {
 	return p.nwdaf.Config()
 }
 
-func NewProcessor(nwdaf NwdafApp, anlfService *anlf.AnlfService, mtlfService *mtlf.MtlfService) *Processor {
+func NewProcessor(nwdaf NwdafApp, coordinator anlfCoordinator, mtlfService *mtlf.MtlfService) *Processor {
 	p := &Processor{
 		nwdaf: nwdaf,
-		anlf:  anlfService,
+		anlf:  coordinator,
 		mtlf:  mtlfService,
 	}
-
-	// Wire 1: AnLF reports deviation → MTLF decides whether to retrain.
-	// Per TS 23.288 §6.2D→§6.2E: AnLF produces Analytics Accuracy Information;
-	// MTLF receives per-scope reports and determines retraining necessity.
-	p.anlf.SetOnAccuracyReports(func(
-		modelUrl string,
-		reports []anlf.AccuracyReport,
-		store *nwdaf_context.ModelAccuracyStore,
-	) {
-		p.mtlf.HandleAccuracyReports(modelUrl, reports, store)
-	})
-
-	// Retrain completion is translated into the same provision-style apply path
-	// used by external MTLF notifications.
-	p.mtlf.SetOnModelProvisionUpdated(func(oldModelReference, newModelReference string) error {
-		return p.anlf.ApplyRetrainedModel(oldModelReference, newModelReference)
-	})
 
 	// ADRF buffer: forward UPF notifications to ADRF for retrain dataset.
 	if c := p.nwdaf.Consumer(); c != nil {
@@ -77,21 +70,12 @@ func NewProcessor(nwdaf NwdafApp, anlfService *anlf.AnlfService, mtlfService *mt
 // SetWaitGroup stores the application WaitGroup for goroutine lifecycle management.
 func (p *Processor) SetWaitGroup(wg *sync.WaitGroup) {
 	p.wg = wg
-	p.anlf.SetWaitGroup(wg)
 	p.mtlf.SetWaitGroup(wg)
 }
 
 // StartMtlfTrainingScheduler delegates to MtlfService.
 func (p *Processor) StartMtlfTrainingScheduler(wg *sync.WaitGroup) {
 	p.mtlf.StartTrainingScheduler(wg)
-}
-
-func (p *Processor) StartObservationDelivery() {
-	p.anlf.StartObservationDelivery()
-}
-
-func (p *Processor) StopObservationDelivery() {
-	p.anlf.StopObservationDelivery()
 }
 
 // HandleAdrfRetrievalNotify delegates an ADRF retrieval callback to MtlfService.

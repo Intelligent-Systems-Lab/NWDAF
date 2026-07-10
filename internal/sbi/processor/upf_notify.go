@@ -10,7 +10,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/mongo"
 
-	"github.com/free5gc/nwdaf/internal/anlf"
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/openapi/models"
@@ -159,7 +159,7 @@ func (p *Processor) HandleUpfNotification(notif *UpfNotificationData) error {
 
 	processed := 0
 	malformed := 0
-	observations := make([]anlf.SourceObservation, 0)
+	observations := make([]contract.SourceObservation, 0)
 
 	// Process each notification item into unified storage
 	for i := range notif.NotificationItems {
@@ -206,7 +206,7 @@ func (p *Processor) processUpfNotificationItemUnified(
 	ctx *nwdaf_context.NWDAFContext,
 	bucket *nwdaf_context.TrafficDataBucket,
 	item *UpfNotificationItem,
-) (bool, int, []anlf.SourceObservation) {
+) (bool, int, []contract.SourceObservation) {
 	cfg := p.config()
 
 	// Get IP address (required field per TS 29.564)
@@ -255,7 +255,7 @@ func (p *Processor) processUpfNotificationItemUnified(
 
 	// Process Measurements and save to MongoDB
 	malformed := 0
-	observations := make([]anlf.SourceObservation, 0, len(item.UserDataUsageMeasurements))
+	observations := make([]contract.SourceObservation, 0, len(item.UserDataUsageMeasurements))
 	for _, usage := range item.UserDataUsageMeasurements {
 		dataPoint := nwdaf_context.UpfDataPoint{
 			Timestamp: measurementTs,
@@ -346,7 +346,7 @@ func (p *Processor) processUpfNotificationItemUnified(
 			drop := len(data.RawUpfData) - ringBufferSize
 			data.RawUpfData = data.RawUpfData[drop:]
 		}
-		observation := anlf.SourceObservation{
+		observation := contract.SourceObservation{
 			ObservedAt:               measurementTs,
 			IPv4Address:              ipAddr,
 			Supi:                     item.Supi,
@@ -363,7 +363,7 @@ func (p *Processor) processUpfNotificationItemUnified(
 			DownlinkPacketThroughput: dataPoint.DlPacketThroughput,
 		}
 		if item.Snssai != nil {
-			observation.Snssai = &anlf.ObservationSnssai{Sst: item.Snssai.Sst, Sd: item.Snssai.Sd}
+			observation.Snssai = &contract.ObservationSnssai{Sst: item.Snssai.Sst, Sd: item.Snssai.Sd}
 		}
 		observations = append(observations, observation)
 	}

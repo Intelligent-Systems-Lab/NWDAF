@@ -3,44 +3,45 @@ package processor
 import (
 	"testing"
 
-	"github.com/free5gc/nwdaf/internal/anlf"
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
+	"github.com/free5gc/nwdaf/internal/anlf/coordinator"
 	"github.com/free5gc/openapi/models"
 )
 
 type fakeMlModelProvisionWorkflow struct {
 	plannedNotifications []string
-	plannedActions       []anlf.ModelProvisionAction
-	startedBatches       [][]anlf.ModelProvisionAction
+	plannedActions       []coordinator.ModelProvisionAction
+	startedBatches       [][]coordinator.ModelProvisionAction
 }
 
 func (f *fakeMlModelProvisionWorkflow) PlanModelProvisionActions(
 	notif *models.NwdafMlModelProvNotif,
-) []anlf.ModelProvisionAction {
+) []coordinator.ModelProvisionAction {
 	if notif != nil {
 		f.plannedNotifications = append(f.plannedNotifications, notif.SubscriptionId)
 	}
 	if len(f.plannedActions) == 0 {
 		return nil
 	}
-	actions := make([]anlf.ModelProvisionAction, len(f.plannedActions))
+	actions := make([]coordinator.ModelProvisionAction, len(f.plannedActions))
 	copy(actions, f.plannedActions)
 	return actions
 }
 
-func (f *fakeMlModelProvisionWorkflow) StartModelProvisionActions(actions []anlf.ModelProvisionAction) {
-	copied := make([]anlf.ModelProvisionAction, len(actions))
+func (f *fakeMlModelProvisionWorkflow) StartModelProvisionActions(actions []coordinator.ModelProvisionAction) {
+	copied := make([]coordinator.ModelProvisionAction, len(actions))
 	copy(copied, actions)
 	f.startedBatches = append(f.startedBatches, copied)
 }
 
 func TestHandleMlModelProvisionNotify_PlansAndStartsActions(t *testing.T) {
 	workflow := &fakeMlModelProvisionWorkflow{
-		plannedActions: []anlf.ModelProvisionAction{
-			{Request: anlf.ApplySubscriptionRuntimeRequest{
-				Subscription: anlf.SubscriptionRuntimeContext{SubscriptionID: "sub-1"},
+		plannedActions: []coordinator.ModelProvisionAction{
+			{Request: contract.ApplySubscriptionRuntimeRequest{
+				Subscription: contract.SubscriptionRuntimeContext{SubscriptionID: "sub-1"},
 			}},
-			{Request: anlf.ApplySubscriptionRuntimeRequest{
-				Subscription: anlf.SubscriptionRuntimeContext{SubscriptionID: "sub-2"},
+			{Request: contract.ApplySubscriptionRuntimeRequest{
+				Subscription: contract.SubscriptionRuntimeContext{SubscriptionID: "sub-2"},
 			}},
 		},
 	}

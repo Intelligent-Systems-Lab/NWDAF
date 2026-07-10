@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/free5gc/nwdaf/internal/anlf"
+	anlf "github.com/free5gc/nwdaf/internal/anlf/accuracy"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/pkg/factory"
 )

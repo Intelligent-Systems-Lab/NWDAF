@@ -8,44 +8,26 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/free5gc/nwdaf/internal/anlf"
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/openapi/models"
 )
 
-type predictionRecorder interface {
-	RecordAnalyticsReport(subscriptionID string, report *anlf.AnalyticsReport)
-}
-
-type ReportDispatcher struct {
-	baseCtx  context.Context
-	client   *http.Client
-	recorder predictionRecorder
-}
-
-func NewReportDispatcher(baseCtx context.Context, recorder predictionRecorder) *ReportDispatcher {
-	return &ReportDispatcher{
-		baseCtx:  baseCtx,
-		client:   &http.Client{Timeout: 10 * time.Second},
-		recorder: recorder,
-	}
-}
-
 func (d *ReportDispatcher) DispatchAnalyticsReport(
 	subscriptionID string,
-	report *anlf.AnalyticsReport,
+	report *contract.AnalyticsReport,
 ) error {
 	ctx := nwdaf_context.GetSelf()
 	if ctx == nil {
-		return fmt.Errorf("%w: context unavailable", anlf.ErrExternalDelivery)
+		return fmt.Errorf("%w: context unavailable", ErrExternalDelivery)
 	}
 	subscription := ctx.GetSubscription(subscriptionID)
 	if subscription == nil {
-		return anlf.ErrSubscriptionNotFound
+		return ErrSubscriptionNotFound
 	}
 	if report == nil || report.ReportID == "" || len(report.EventNotifications) == 0 {
-		return anlf.ErrInvalidAnalyticsReport
+		return ErrInvalidAnalyticsReport
 	}
 	duplicate, inFlight, stale := subscription.BeginReport(
 		report.ReportID,
@@ -53,10 +35,10 @@ func (d *ReportDispatcher) DispatchAnalyticsReport(
 		report.ReportSequence,
 	)
 	if stale {
-		return anlf.ErrStaleAnalyticsReport
+		return ErrStaleAnalyticsReport
 	}
 	if inFlight {
-		return anlf.ErrAnalyticsReportInFlight
+		return ErrAnalyticsReportInFlight
 	}
 	if duplicate {
 		return nil
@@ -72,7 +54,7 @@ func (d *ReportDispatcher) DispatchAnalyticsReport(
 	}
 	body, err := json.Marshal(NotificationListOutput{notification})
 	if err != nil {
-		return fmt.Errorf("%w: marshal notification: %v", anlf.ErrInvalidAnalyticsReport, err)
+		return fmt.Errorf("%w: marshal notification: %v", ErrInvalidAnalyticsReport, err)
 	}
 	requestCtx, cancel := context.WithTimeout(d.baseCtx, 10*time.Second)
 	defer cancel()
@@ -83,12 +65,12 @@ func (d *ReportDispatcher) DispatchAnalyticsReport(
 		bytes.NewReader(body),
 	)
 	if err != nil {
-		return fmt.Errorf("%w: create request: %v", anlf.ErrExternalDelivery, err)
+		return fmt.Errorf("%w: create request: %v", ErrExternalDelivery, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("%w: %v", anlf.ErrExternalDelivery, err)
+		return fmt.Errorf("%w: %v", ErrExternalDelivery, err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -96,7 +78,7 @@ func (d *ReportDispatcher) DispatchAnalyticsReport(
 		}
 	}()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf("%w: status=%d", anlf.ErrExternalDelivery, resp.StatusCode)
+		return fmt.Errorf("%w: status=%d", ErrExternalDelivery, resp.StatusCode)
 	}
 	delivered = true
 	if d.recorder != nil {
@@ -107,7 +89,7 @@ func (d *ReportDispatcher) DispatchAnalyticsReport(
 
 func mapAnalyticsReport(
 	subscription *nwdaf_context.Subscription,
-	report *anlf.AnalyticsReport,
+	report *contract.AnalyticsReport,
 ) (NotificationOutput, error) {
 	requestedEvents := make(map[models.NwdafEvent]struct{}, len(subscription.EventSubs))
 	for i := range subscription.EventSubs {
@@ -120,15 +102,15 @@ func mapAnalyticsReport(
 	for _, event := range report.EventNotifications {
 		eventType := models.NwdafEvent(event.Event)
 		if eventType != models.NwdafEvent_UE_COMMUNICATION {
-			return NotificationOutput{}, fmt.Errorf("%w: unsupported event %q", anlf.ErrInvalidAnalyticsReport, event.Event)
+			return NotificationOutput{}, fmt.Errorf("%w: unsupported event %q", ErrInvalidAnalyticsReport, event.Event)
 		}
 		if _, ok := requestedEvents[eventType]; !ok {
-			return NotificationOutput{}, fmt.Errorf("%w: event %q not requested", anlf.ErrInvalidAnalyticsReport, event.Event)
+			return NotificationOutput{}, fmt.Errorf("%w: event %q not requested", ErrInvalidAnalyticsReport, event.Event)
 		}
 		if len(event.UeCommunications) == 0 {
 			return NotificationOutput{}, fmt.Errorf(
 				"%w: UE communication report is empty",
-				anlf.ErrInvalidAnalyticsReport,
+				ErrInvalidAnalyticsReport,
 			)
 		}
 		mapped := models.NwdafEventsSubscriptionEventNotification{Event: eventType}
@@ -137,7 +119,7 @@ func mapAnalyticsReport(
 				communication.Confidence < 0 || communication.Confidence > 100 {
 				return NotificationOutput{}, fmt.Errorf(
 					"%w: invalid UE communication report",
-					anlf.ErrInvalidAnalyticsReport,
+					ErrInvalidAnalyticsReport,
 				)
 			}
 			timestamp := communication.Timestamp

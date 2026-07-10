@@ -1,4 +1,4 @@
-package anlf
+package accuracy
 
 import (
 	"context"
@@ -10,13 +10,100 @@ import (
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/nwdaf/internal/logger"
+	"github.com/free5gc/nwdaf/pkg/app"
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
+
+var anlfLog = logger.AnlfLog
+
+type NwdafApp interface {
+	app.App
+	CancelContext() context.Context
+}
+
+type Monitor struct {
+	nwdaf             NwdafApp
+	onDeviationReport func(modelURL string, deviation float64, store *nwdaf_context.ModelAccuracyStore)
+	onAccuracyReports func(modelURL string, reports []Report, store *nwdaf_context.ModelAccuracyStore)
+	warmupMu          sync.Mutex
+	startupWarmupDone bool
+	wg                *sync.WaitGroup
+}
+
+func NewMonitor(nwdaf NwdafApp) *Monitor {
+	return &Monitor{nwdaf: nwdaf}
+}
+
+func (m *Monitor) config() *factory.Config {
+	if m == nil || m.nwdaf == nil {
+		return nil
+	}
+	return m.nwdaf.Config()
+}
+
+func activeSamplingInterval(subscriptionID string) int {
+	ctx := nwdaf_context.GetSelf()
+	if ctx != nil {
+		if subscription := ctx.GetSubscription(subscriptionID); subscription != nil {
+			_, requirements, _, _ := subscription.RuntimeSnapshot()
+			if requirements.SamplingIntervalSeconds > 0 {
+				return requirements.SamplingIntervalSeconds
+			}
+		}
+	}
+	return 10
+}
+
+func accuracyMonitorConfig(cfg *factory.Config) *factory.AccuracyMonitorConfig {
+	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.Mtlf == nil {
+		return nil
+	}
+	return cfg.Configuration.Mtlf.AccuracyMonitor
+}
+
+func isAccuracyMonitorEnabled(cfg *factory.Config) bool {
+	return cfg != nil && cfg.Configuration != nil &&
+		cfg.Configuration.Mtlf != nil && cfg.Configuration.Mtlf.Enabled &&
+		cfg.Configuration.Mtlf.AccuracyMonitor != nil && cfg.Configuration.Mtlf.AccuracyMonitor.Enabled
+}
+
+func (m *Monitor) SetOnDeviationReport(
+	fn func(modelURL string, deviation float64, store *nwdaf_context.ModelAccuracyStore),
+) {
+	m.onDeviationReport = fn
+}
+
+func (m *Monitor) SetOnAccuracyReports(
+	fn func(modelURL string, reports []Report, store *nwdaf_context.ModelAccuracyStore),
+) {
+	m.onAccuracyReports = fn
+}
+
+func (m *Monitor) SetWaitGroup(wg *sync.WaitGroup) {
+	m.wg = wg
+}
+
+func (m *Monitor) acquireStartupWarmupDuration(accCfg *factory.AccuracyMonitorConfig) int {
+	m.warmupMu.Lock()
+	defer m.warmupMu.Unlock()
+
+	if m.startupWarmupDone {
+		return 0
+	}
+	m.startupWarmupDone = true
+
+	warmup := accCfg.WarmupDuration
+	if warmup <= 0 {
+		warmup = 120
+	}
+	return warmup
+}
 
 // StartAccuracyMonitorForModel starts a per-model accuracy monitoring goroutine.
 // Idempotent — skips if a monitor is already running for this modelUrl.
 // Per TS 23.288 §6.2D: monitoring activated when analytics model becomes active.
-func (a *AnlfService) StartAccuracyMonitorForModel(modelUrl string, wg *sync.WaitGroup) {
+func (a *Monitor) StartAccuracyMonitorForModel(modelUrl string, wg *sync.WaitGroup) {
 	cfg := a.config()
 	if !isAccuracyMonitorEnabled(cfg) {
 		return
@@ -46,7 +133,7 @@ func (a *AnlfService) StartAccuracyMonitorForModel(modelUrl string, wg *sync.Wai
 	anlfLog.Infof("Accuracy monitor started: model=%s, interval=%ds", modelUrl, interval)
 }
 
-func (a *AnlfService) StartOwnedAccuracyMonitorForModel(modelUrl string) {
+func (a *Monitor) StartOwnedAccuracyMonitorForModel(modelUrl string) {
 	if a == nil || a.wg == nil {
 		return
 	}
@@ -55,7 +142,7 @@ func (a *AnlfService) StartOwnedAccuracyMonitorForModel(modelUrl string) {
 
 // StopAccuracyMonitorForModel stops the monitor for a model if no subscribers remain.
 // Checks SharedModelInfo subscriber count to decide.
-func (a *AnlfService) StopAccuracyMonitorForModel(modelUrl string) {
+func (a *Monitor) StopAccuracyMonitorForModel(modelUrl string) {
 	if !isAccuracyMonitorEnabled(a.config()) {
 		return
 	}
@@ -71,7 +158,7 @@ func (a *AnlfService) StopAccuracyMonitorForModel(modelUrl string) {
 }
 
 // runModelAccuracyLoop periodically checks accuracy for one model.
-func (a *AnlfService) runModelAccuracyLoop(
+func (a *Monitor) runModelAccuracyLoop(
 	ctx context.Context,
 	modelUrl string,
 	store *nwdaf_context.ModelAccuracyStore,
@@ -122,7 +209,7 @@ func (a *AnlfService) runModelAccuracyLoop(
 // the deviation to MTLF via the onDeviationReport callback.
 // Per TS 23.288 §6.2D: AnLF generates Analytics Accuracy Information from
 // prediction vs ground truth comparison.
-func (a *AnlfService) checkModelAccuracy(
+func (a *Monitor) checkModelAccuracy(
 	ctx context.Context,
 	modelUrl string,
 	store *nwdaf_context.ModelAccuracyStore,
@@ -205,7 +292,7 @@ func (a *AnlfService) checkModelAccuracy(
 	if minSamples <= 0 {
 		minSamples = 5
 	}
-	eligibleReports := make([]AccuracyReport, 0, len(reports))
+	eligibleReports := make([]Report, 0, len(reports))
 	for _, report := range reports {
 		if report.SampleCount < minSamples {
 			anlfLog.Debugf(
@@ -255,7 +342,7 @@ type groundTruth struct {
 // slot. Both predictions and actuals are mapped onto the same slot grid by
 // rounding actual timestamps relative to pred.TargetSlotTime; only exact slot-key
 // matches are accepted.
-func (a *AnlfService) lookupGroundTruth(
+func (a *Monitor) lookupGroundTruth(
 	parentCtx context.Context,
 	ctx *nwdaf_context.NWDAFContext,
 	pred nwdaf_context.PredictionRecord,
@@ -567,7 +654,7 @@ func buildAccuracyReports(
 	modelURL string,
 	scopedPairs map[string]*scopedPairAccumulator,
 	inferenceNum int,
-) []AccuracyReport {
+) []Report {
 	if len(scopedPairs) == 0 {
 		return nil
 	}
@@ -578,14 +665,14 @@ func buildAccuracyReports(
 	}
 	slices.Sort(scopeKeys)
 
-	reports := make([]AccuracyReport, 0, len(scopeKeys))
+	reports := make([]Report, 0, len(scopeKeys))
 	for _, scopeKey := range scopeKeys {
 		acc := scopedPairs[scopeKey]
 		if acc == nil || len(acc.pairs) == 0 {
 			continue
 		}
 
-		report := AccuracyReport{
+		report := Report{
 			ModelURL:              modelURL,
 			ScopeKey:              scopeKey,
 			NwdafSubID:            singleNwdafSubID(acc.nwdafSubIDs),

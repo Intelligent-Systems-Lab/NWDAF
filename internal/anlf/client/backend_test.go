@@ -7,7 +7,7 @@ import (
 
 	"github.com/h2non/gock"
 
-	"github.com/free5gc/nwdaf/internal/anlf"
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -23,20 +23,20 @@ func newInterceptedAnlfBackendClient(t *testing.T) *Client {
 	return client
 }
 
-func testApplyRequest() anlf.ApplySubscriptionRuntimeRequest {
-	return anlf.ApplySubscriptionRuntimeRequest{
-		Subscription: anlf.SubscriptionRuntimeContext{
+func testApplyRequest() contract.ApplySubscriptionRuntimeRequest {
+	return contract.ApplySubscriptionRuntimeRequest{
+		Subscription: contract.SubscriptionRuntimeContext{
 			SubscriptionID: "sub-123",
 			NotifCorrID:    "corr-123",
 			EventSubscriptions: []models.NwdafEventsSubscriptionEventSubscription{
 				{Event: models.NwdafEvent_UE_COMMUNICATION},
 			},
 		},
-		ProvisionContext: &anlf.ProvisionContext{
+		ProvisionContext: &contract.ProvisionContext{
 			Source:              "MTLF_PROVISION",
 			MtlfSubscriptionID:  "mtlf-sub-1",
 			NotifSubscriptionID: "mtlf-sub-1",
-			MLEventNotification: anlf.MLEventNotification{
+			MLEventNotification: contract.MLEventNotification{
 				MlEventNotif: models.MlEventNotif{
 					Event:        models.NwdafEvent_UE_COMMUNICATION,
 					NotifCorreId: "sub-123",
@@ -55,10 +55,10 @@ func TestClientApplySubscriptionRuntime(t *testing.T) {
 		Put("/subscriptions/sub-123/runtime").
 		JSON(request).
 		Reply(http.StatusOK).
-		JSON(anlf.ApplySubscriptionRuntimeResponse{
+		JSON(contract.ApplySubscriptionRuntimeResponse{
 			SubscriptionID:       "sub-123",
 			RuntimeState:         "READY",
-			Result:               anlf.ApplyResultActivated,
+			Result:               contract.ApplyResultActivated,
 			ActiveModelReference: "http://example.com/model-a",
 		})
 
@@ -66,8 +66,8 @@ func TestClientApplySubscriptionRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplySubscriptionRuntime() error = %v", err)
 	}
-	if response.Result != anlf.ApplyResultActivated {
-		t.Fatalf("result = %q, want %q", response.Result, anlf.ApplyResultActivated)
+	if response.Result != contract.ApplyResultActivated {
+		t.Fatalf("result = %q, want %q", response.Result, contract.ApplyResultActivated)
 	}
 }
 
@@ -98,7 +98,7 @@ func TestClientReleaseSubscriptionRuntime(t *testing.T) {
 
 func TestClientSyncObservationBindings(t *testing.T) {
 	client := newInterceptedAnlfBackendClient(t)
-	request := anlf.SyncObservationBindingsRequest{RuntimeRevision: 1}
+	request := contract.SyncObservationBindingsRequest{RuntimeRevision: 1}
 
 	gock.New(testAnlfBackendEndpoint).
 		Put("/subscriptions/sub-123/observation-bindings").
@@ -112,7 +112,7 @@ func TestClientSyncObservationBindings(t *testing.T) {
 
 func TestClientSendObservationsUsesSourceID(t *testing.T) {
 	client := newInterceptedAnlfBackendClient(t)
-	batch := anlf.ObservationBatch{BatchID: "batch-1", Observations: []anlf.SourceObservation{{}}}
+	batch := contract.ObservationBatch{BatchID: "batch-1", Observations: []contract.SourceObservation{{}}}
 
 	gock.New(testAnlfBackendEndpoint).
 		Post("/observation-sources/corr-1/observations").

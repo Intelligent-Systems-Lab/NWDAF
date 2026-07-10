@@ -12,12 +12,15 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 	"github.com/free5gc/util/httpwrapper"
 	logger_util "github.com/free5gc/util/logger"
 )
+
+var anlfLog = logger.AnlfLog
 
 type Route struct {
 	Name    string
@@ -45,7 +48,7 @@ func applyRoutes(group *gin.RouterGroup, routes []Route) {
 
 type processorAPI interface {
 	HandleMlModelProvisionNotify(notifications []models.NwdafMlModelProvNotif)
-	HandleAnalyticsReport(subscriptionID string, report *AnalyticsReport) error
+	HandleAnalyticsReport(subscriptionID string, report *contract.AnalyticsReport) error
 }
 
 type Server struct {
@@ -63,7 +66,8 @@ func NewServer(cfg *factory.Config, processor processorAPI) (*Server, error) {
 		processor: processor,
 	}
 	s.router.Use(gin.Recovery())
-	applyRoutes(s.router.Group(""), s.getRoutes())
+	routes := append(s.mlModelNotifyRoutes(), s.analyticsReportRoutes()...)
+	applyRoutes(s.router.Group(""), routes)
 
 	httpServer, err := httpwrapper.NewHttp2Server(
 		cfg.GetAnlfServerBindingAddr(),
@@ -77,23 +81,6 @@ func NewServer(cfg *factory.Config, processor processorAPI) (*Server, error) {
 	s.httpServer = httpServer
 
 	return s, nil
-}
-
-func (s *Server) getRoutes() []Route {
-	return []Route{
-		{
-			Name:    "HandleMlModelProvisionNotify",
-			Method:  http.MethodPost,
-			Pattern: "/mlmodel-notify",
-			APIFunc: s.HandleMlModelProvisionNotify,
-		},
-		{
-			Name:    "HandleAnalyticsReport",
-			Method:  http.MethodPost,
-			Pattern: "/subscriptions/:subscriptionId/analytics-reports",
-			APIFunc: s.HandleAnalyticsReport,
-		},
-	}
 }
 
 func (s *Server) Run(wg *sync.WaitGroup) error {

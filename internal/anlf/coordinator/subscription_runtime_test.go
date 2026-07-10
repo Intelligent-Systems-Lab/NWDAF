@@ -1,10 +1,12 @@
-package anlf
+package coordinator
 
 import (
 	"context"
 	"net/http"
 	"testing"
 
+	"github.com/free5gc/nwdaf/internal/anlf/accuracy"
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
@@ -12,21 +14,21 @@ import (
 
 type fakeAnlfBackendClient struct {
 	applyCalls    int
-	applyRequests []ApplySubscriptionRuntimeRequest
-	applyResponse *ApplySubscriptionRuntimeResponse
+	applyRequests []contract.ApplySubscriptionRuntimeRequest
+	applyResponse *contract.ApplySubscriptionRuntimeResponse
 	applyErr      error
 	releaseCalls  []string
 	releaseErr    error
 	syncCalls     int
 	sendCalls     int
 	sendErrors    []error
-	sentBatches   []ObservationBatch
+	sentBatches   []contract.ObservationBatch
 }
 
 func (f *fakeAnlfBackendClient) ApplySubscriptionRuntime(
 	_ context.Context,
-	request ApplySubscriptionRuntimeRequest,
-) (*ApplySubscriptionRuntimeResponse, error) {
+	request contract.ApplySubscriptionRuntimeRequest,
+) (*contract.ApplySubscriptionRuntimeResponse, error) {
 	f.applyCalls++
 	f.applyRequests = append(f.applyRequests, request)
 	if f.applyResponse != nil {
@@ -34,7 +36,7 @@ func (f *fakeAnlfBackendClient) ApplySubscriptionRuntime(
 			f.applyResponse.RuntimeRevision = 1
 		}
 		if f.applyResponse.CollectionRequirements.SamplingIntervalSeconds == 0 {
-			f.applyResponse.CollectionRequirements = CollectionRequirements{
+			f.applyResponse.CollectionRequirements = contract.CollectionRequirements{
 				SamplingIntervalSeconds: 30,
 				RequiredMeasurements:    []string{"UL_VOLUME"},
 			}
@@ -51,7 +53,7 @@ func (f *fakeAnlfBackendClient) ReleaseSubscriptionRuntime(_ context.Context, su
 func (f *fakeAnlfBackendClient) SyncObservationBindings(
 	_ context.Context,
 	_ string,
-	_ SyncObservationBindingsRequest,
+	_ contract.SyncObservationBindingsRequest,
 ) error {
 	f.syncCalls++
 	return nil
@@ -60,7 +62,7 @@ func (f *fakeAnlfBackendClient) SyncObservationBindings(
 func (f *fakeAnlfBackendClient) SendObservations(
 	_ context.Context,
 	_ string,
-	batch ObservationBatch,
+	batch contract.ObservationBatch,
 ) error {
 	f.sendCalls++
 	f.sentBatches = append(f.sentBatches, batch)
@@ -71,6 +73,32 @@ func (f *fakeAnlfBackendClient) SendObservations(
 }
 
 func (f *fakeAnlfBackendClient) HTTPClient() *http.Client { return &http.Client{} }
+
+type testNwdafApp struct {
+	ctx context.Context
+	cfg *factory.Config
+}
+
+func (testNwdafApp) SetLogEnable(bool)                    {}
+func (testNwdafApp) SetLogLevel(string)                   {}
+func (testNwdafApp) SetReportCaller(bool)                 {}
+func (testNwdafApp) Start()                               {}
+func (testNwdafApp) Terminate()                           {}
+func (a testNwdafApp) Config() *factory.Config            { return a.cfg }
+func (testNwdafApp) Context() *nwdaf_context.NWDAFContext { return nwdaf_context.GetSelf() }
+func (a testNwdafApp) CancelContext() context.Context     { return a.ctx }
+
+func newTestCoordinator(app testNwdafApp, client *fakeAnlfBackendClient) *Coordinator {
+	monitor := accuracy.NewMonitor(app)
+	var runtimeClient BackendRuntimeClient
+	var sender ObservationSender
+	if client != nil {
+		runtimeClient = client
+		sender = client
+	}
+	delivery := NewObservationDelivery(app.ctx, sender, nil)
+	return New(app, runtimeClient, monitor, delivery)
+}
 
 func addTestSubscription(subscriptionID string) {
 	nwdaf_context.GetSelf().AddSubscription(&nwdaf_context.Subscription{
@@ -89,13 +117,13 @@ func TestApplySubscriptionRuntimeUpdatesOnlyCorrelationState(t *testing.T) {
 	mlInfo := nwdaf_context.NewMlModelInfo(models.NwdafEvent_UE_COMMUNICATION, "")
 	nwdaf_context.GetSelf().SetMlModelInfo("sub-1", mlInfo)
 
-	client := &fakeAnlfBackendClient{applyResponse: &ApplySubscriptionRuntimeResponse{
+	client := &fakeAnlfBackendClient{applyResponse: &contract.ApplySubscriptionRuntimeResponse{
 		SubscriptionID:       "sub-1",
 		RuntimeState:         "READY",
-		Result:               ApplyResultActivated,
+		Result:               contract.ApplyResultActivated,
 		ActiveModelReference: "http://example.com/model-a",
 	}}
-	service := NewAnlfService(testNwdafApp{
+	service := newTestCoordinator(testNwdafApp{
 		ctx: context.Background(),
 		cfg: &factory.Config{Configuration: &factory.Configuration{
 			AnlfBackend: &factory.AnlfBackendConfig{Enabled: true, Endpoint: "http://anlf-backend.example"},
@@ -129,15 +157,15 @@ func TestApplySubscriptionRuntimeKeepsPreviousCorrelationOnFallback(t *testing.T
 	mlInfo.SetModelReady()
 	nwdaf_context.GetSelf().SetMlModelInfo("sub-1", mlInfo)
 
-	client := &fakeAnlfBackendClient{applyResponse: &ApplySubscriptionRuntimeResponse{
+	client := &fakeAnlfBackendClient{applyResponse: &contract.ApplySubscriptionRuntimeResponse{
 		SubscriptionID:       "sub-1",
 		RuntimeState:         "READY",
-		Result:               ApplyResultFailedUsingPrevious,
+		Result:               contract.ApplyResultFailedUsingPrevious,
 		FallbackApplied:      true,
 		ActiveModelReference: "http://example.com/model-old",
 		Message:              "download failed",
 	}}
-	service := NewAnlfService(testNwdafApp{ctx: context.Background()}, client)
+	service := newTestCoordinator(testNwdafApp{ctx: context.Background()}, client)
 	request, err := service.BuildSubscriptionRuntimeRequest("sub-1", nil)
 	if err != nil {
 		t.Fatalf("BuildSubscriptionRuntimeRequest() error = %v", err)
@@ -165,7 +193,7 @@ func TestReleaseSubscriptionRuntimeCallsBackendAndRemovesCorrelation(t *testing.
 	shared.AddSubscriber("sub-1")
 
 	client := &fakeAnlfBackendClient{}
-	service := NewAnlfService(testNwdafApp{ctx: context.Background()}, client)
+	service := newTestCoordinator(testNwdafApp{ctx: context.Background()}, client)
 	if err := service.ReleaseSubscriptionRuntime("sub-1"); err != nil {
 		t.Fatalf("ReleaseSubscriptionRuntime() error = %v", err)
 	}
@@ -197,12 +225,12 @@ func TestApplyRetrainedModelUsesProvisionContractForAffectedSubscriptions(t *tes
 	oldShared.AddSubscriber("sub-1")
 	oldShared.AddSubscriber("sub-2")
 
-	client := &fakeAnlfBackendClient{applyResponse: &ApplySubscriptionRuntimeResponse{
+	client := &fakeAnlfBackendClient{applyResponse: &contract.ApplySubscriptionRuntimeResponse{
 		RuntimeState:         "READY",
-		Result:               ApplyResultReplaced,
+		Result:               contract.ApplyResultReplaced,
 		ActiveModelReference: newReference,
 	}}
-	service := NewAnlfService(testNwdafApp{ctx: context.Background()}, client)
+	service := newTestCoordinator(testNwdafApp{ctx: context.Background()}, client)
 
 	if err := service.ApplyRetrainedModel(oldReference, newReference); err != nil {
 		t.Fatalf("ApplyRetrainedModel() error = %v", err)

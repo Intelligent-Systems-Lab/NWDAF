@@ -1,4 +1,4 @@
-package anlf
+package accuracy
 
 import (
 	"testing"

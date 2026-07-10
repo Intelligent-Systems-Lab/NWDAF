@@ -1,17 +1,18 @@
 package processor
 
 import (
-	"github.com/free5gc/nwdaf/internal/anlf"
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
+	"github.com/free5gc/nwdaf/internal/anlf/coordinator"
 	"github.com/free5gc/openapi/models"
 )
 
 type mlModelProvisionWorkflow interface {
-	PlanModelProvisionActions(notif *models.NwdafMlModelProvNotif) []anlf.ModelProvisionAction
-	StartModelProvisionActions(actions []anlf.ModelProvisionAction)
+	PlanModelProvisionActions(notif *models.NwdafMlModelProvNotif) []coordinator.ModelProvisionAction
+	StartModelProvisionActions(actions []coordinator.ModelProvisionAction)
 }
 
 type analyticsReportDispatcher interface {
-	DispatchAnalyticsReport(subscriptionID string, report *anlf.AnalyticsReport) error
+	DispatchAnalyticsReport(subscriptionID string, report *contract.AnalyticsReport) error
 }
 
 type Processor struct {

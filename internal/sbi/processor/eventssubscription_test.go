@@ -10,7 +10,7 @@ import (
 
 	"go.uber.org/mock/gomock"
 
-	"github.com/free5gc/nwdaf/internal/anlf"
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/mtlf"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
@@ -68,18 +68,18 @@ type subscriptionTestBackend struct{ applyErr error }
 
 func (b *subscriptionTestBackend) ApplySubscriptionRuntime(
 	_ context.Context,
-	request anlf.ApplySubscriptionRuntimeRequest,
-) (*anlf.ApplySubscriptionRuntimeResponse, error) {
+	request contract.ApplySubscriptionRuntimeRequest,
+) (*contract.ApplySubscriptionRuntimeResponse, error) {
 	if b.applyErr != nil {
 		return nil, b.applyErr
 	}
-	return &anlf.ApplySubscriptionRuntimeResponse{
+	return &contract.ApplySubscriptionRuntimeResponse{
 		SubscriptionID:       request.Subscription.SubscriptionID,
 		RuntimeState:         "READY",
-		Result:               anlf.ApplyResultActivated,
+		Result:               contract.ApplyResultActivated,
 		ActiveModelReference: "file:///models/old-model",
 		RuntimeRevision:      2,
-		CollectionRequirements: anlf.CollectionRequirements{
+		CollectionRequirements: contract.CollectionRequirements{
 			SamplingIntervalSeconds: 10,
 			RequiredMeasurements:    []string{"UL_VOLUME", "DL_VOLUME"},
 		},
@@ -93,12 +93,12 @@ func (*subscriptionTestBackend) ReleaseSubscriptionRuntime(context.Context, stri
 func (*subscriptionTestBackend) SyncObservationBindings(
 	context.Context,
 	string,
-	anlf.SyncObservationBindingsRequest,
+	contract.SyncObservationBindingsRequest,
 ) error {
 	return nil
 }
 
-func (*subscriptionTestBackend) SendObservations(context.Context, string, anlf.ObservationBatch) error {
+func (*subscriptionTestBackend) SendObservations(context.Context, string, contract.ObservationBatch) error {
 	return nil
 }
 
@@ -141,7 +141,7 @@ func TestNewProcessorUsesInjectedDomainServices(t *testing.T) {
 		ctx:      context.Background(),
 		consumer: consumerClient,
 	}
-	anlfService := anlf.NewAnlfService(app, nil)
+	anlfService := newTestAnlfCoordinator(app, nil, nil)
 	mtlfService := mtlf.NewMtlfService(app, nil, nil)
 	p := NewProcessor(app, anlfService, mtlfService)
 
@@ -159,7 +159,7 @@ func TestHandleCreateSubscriptionRejectsUnavailableAnalyticsRuntime(t *testing.T
 	backend := &subscriptionTestBackend{applyErr: errors.New("unavailable")}
 	processor := NewProcessor(
 		app,
-		anlf.NewAnlfService(app, backend),
+		newTestAnlfCoordinator(app, backend, backend),
 		mtlf.NewMtlfService(app, nil, nil),
 	)
 	request := &models.NnwdafEventsSubscription{
@@ -956,7 +956,7 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 	}
 	p := NewProcessor(
 		app,
-		anlf.NewAnlfService(app, &subscriptionTestBackend{}),
+		newTestAnlfCoordinator(app, &subscriptionTestBackend{}, &subscriptionTestBackend{}),
 		mtlf.NewMtlfService(app, nil, nil),
 	)
 

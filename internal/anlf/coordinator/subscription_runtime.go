@@ -1,9 +1,10 @@
-package anlf
+package coordinator
 
 import (
 	"errors"
 	"fmt"
 
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/openapi/models"
@@ -11,29 +12,29 @@ import (
 
 const provisionSourceMTLF = "MTLF_PROVISION"
 
-func (a *AnlfService) BuildSubscriptionRuntimeRequest(
+func (a *Coordinator) BuildSubscriptionRuntimeRequest(
 	subscriptionID string,
-	provisionContext *ProvisionContext,
-) (ApplySubscriptionRuntimeRequest, error) {
+	provisionContext *contract.ProvisionContext,
+) (contract.ApplySubscriptionRuntimeRequest, error) {
 	ctx := nwdaf_context.GetSelf()
 	if ctx == nil {
-		return ApplySubscriptionRuntimeRequest{}, fmt.Errorf("NWDAF context not initialized")
+		return contract.ApplySubscriptionRuntimeRequest{}, fmt.Errorf("NWDAF context not initialized")
 	}
 
 	subscription := ctx.GetSubscription(subscriptionID)
 	if subscription == nil {
-		return ApplySubscriptionRuntimeRequest{}, fmt.Errorf("subscription %s not found", subscriptionID)
+		return contract.ApplySubscriptionRuntimeRequest{}, fmt.Errorf("subscription %s not found", subscriptionID)
 	}
 
 	return a.BuildSubscriptionRuntimeRequestForSubscription(subscription, provisionContext), nil
 }
 
-func (a *AnlfService) BuildSubscriptionRuntimeRequestForSubscription(
+func (a *Coordinator) BuildSubscriptionRuntimeRequestForSubscription(
 	subscription *nwdaf_context.Subscription,
-	provisionContext *ProvisionContext,
-) ApplySubscriptionRuntimeRequest {
-	return ApplySubscriptionRuntimeRequest{
-		Subscription: SubscriptionRuntimeContext{
+	provisionContext *contract.ProvisionContext,
+) contract.ApplySubscriptionRuntimeRequest {
+	return contract.ApplySubscriptionRuntimeRequest{
+		Subscription: contract.SubscriptionRuntimeContext{
 			SubscriptionID:     subscription.ID,
 			NotifCorrID:        subscription.NotifCorrId,
 			EvtReq:             subscription.EvtReq,
@@ -44,14 +45,14 @@ func (a *AnlfService) BuildSubscriptionRuntimeRequestForSubscription(
 	}
 }
 
-func (a *AnlfService) ApplySubscriptionRuntime(
-	request ApplySubscriptionRuntimeRequest,
-) (*ApplySubscriptionRuntimeResponse, error) {
-	if a.anlfBackend == nil {
+func (a *Coordinator) ApplySubscriptionRuntime(
+	request contract.ApplySubscriptionRuntimeRequest,
+) (*contract.ApplySubscriptionRuntimeResponse, error) {
+	if a.backend == nil {
 		return nil, fmt.Errorf("AnLF backend client not initialized")
 	}
 
-	response, err := a.anlfBackend.ApplySubscriptionRuntime(a.nwdaf.CancelContext(), request)
+	response, err := a.backend.ApplySubscriptionRuntime(a.nwdaf.CancelContext(), request)
 	if err != nil {
 		return nil, err
 	}
@@ -73,10 +74,10 @@ func (a *AnlfService) ApplySubscriptionRuntime(
 		)
 	}
 	switch response.Result {
-	case ApplyResultPendingProvision:
+	case contract.ApplyResultPendingProvision:
 		logger.AnlfLog.Debugf("AnLF runtime pending provision: sub=%s", subscriptionID)
 		return response, nil
-	case ApplyResultActivated, ApplyResultReused, ApplyResultReplaced:
+	case contract.ApplyResultActivated, contract.ApplyResultReused, contract.ApplyResultReplaced:
 		if response.ActiveModelReference == "" {
 			return response, fmt.Errorf("AnLF backend returned %s without active model reference", response.Result)
 		}
@@ -88,9 +89,9 @@ func (a *AnlfService) ApplySubscriptionRuntime(
 		}
 		logger.AnlfLog.Infof("AnLF runtime applied: sub=%s result=%s", subscriptionID, response.Result)
 		return response, nil
-	case ApplyResultFailedUsingPrevious:
+	case contract.ApplyResultFailedUsingPrevious:
 		return response, fmt.Errorf("runtime replacement failed for subscription %s: %s", subscriptionID, response.Message)
-	case ApplyResultFailedNoPrevious:
+	case contract.ApplyResultFailedNoPrevious:
 		if mlInfo := nwdaf_context.GetSelf().GetMlModelInfo(subscriptionID); mlInfo != nil {
 			mlInfo.SetModelFailed(errors.New(response.Message))
 		}
@@ -100,20 +101,20 @@ func (a *AnlfService) ApplySubscriptionRuntime(
 	}
 }
 
-func (a *AnlfService) BuildCurrentObservationBindings(subscriptionID string) []ObservationBinding {
+func (a *Coordinator) BuildCurrentObservationBindings(subscriptionID string) []contract.ObservationBinding {
 	ctx := nwdaf_context.GetSelf()
 	subscription := ctx.GetSubscription(subscriptionID)
 	if subscription == nil {
 		return nil
 	}
 	requirements := subscription.CollectionRequirementsSnapshot()
-	bindings := make([]ObservationBinding, 0)
+	bindings := make([]contract.ObservationBinding, 0)
 	for _, resource := range ctx.GetNwdafSubResources(subscriptionID) {
-		bindings = append(bindings, ObservationBinding{
+		bindings = append(bindings, contract.ObservationBinding{
 			ObservationSourceID: resource.CorrelationId,
-			Source:              ObservationSource{SourceType: "SMF_UPF", Supi: resource.Supi},
-			SubscriptionScope:   SubscriptionScope{OriginalGroupID: resource.OriginalGroupId},
-			CollectionProfile: CollectionRequirements{
+			Source:              contract.ObservationSource{SourceType: "SMF_UPF", Supi: resource.Supi},
+			SubscriptionScope:   contract.SubscriptionScope{OriginalGroupID: resource.OriginalGroupId},
+			CollectionProfile: contract.CollectionRequirements{
 				SamplingIntervalSeconds: requirements.SamplingIntervalSeconds,
 				RequiredMeasurements:    append([]string(nil), requirements.RequiredMeasurements...),
 			},
@@ -122,7 +123,7 @@ func (a *AnlfService) BuildCurrentObservationBindings(subscriptionID string) []O
 	return bindings
 }
 
-func (a *AnlfService) SyncCurrentObservationBindings(subscriptionID string) error {
+func (a *Coordinator) SyncCurrentObservationBindings(subscriptionID string) error {
 	ctx := nwdaf_context.GetSelf()
 	subscription := ctx.GetSubscription(subscriptionID)
 	if subscription == nil {
@@ -139,9 +140,9 @@ func (a *AnlfService) SyncCurrentObservationBindings(subscriptionID string) erro
 	)
 }
 
-func (a *AnlfService) ApplyInitialSubscriptionRuntime(
+func (a *Coordinator) ApplyInitialSubscriptionRuntime(
 	subscription *nwdaf_context.Subscription,
-) (*ApplySubscriptionRuntimeResponse, error) {
+) (*contract.ApplySubscriptionRuntimeResponse, error) {
 	if subscription == nil {
 		return nil, fmt.Errorf("subscription is required")
 	}
@@ -150,7 +151,7 @@ func (a *AnlfService) ApplyInitialSubscriptionRuntime(
 	)
 }
 
-func (a *AnlfService) ApplySubscriptionRegistration(subscriptionID string) error {
+func (a *Coordinator) ApplySubscriptionRegistration(subscriptionID string) error {
 	request, err := a.BuildSubscriptionRuntimeRequest(subscriptionID, nil)
 	if err != nil {
 		return err
@@ -159,30 +160,30 @@ func (a *AnlfService) ApplySubscriptionRegistration(subscriptionID string) error
 	return err
 }
 
-func (a *AnlfService) ReleaseSubscriptionRuntime(subscriptionID string) error {
+func (a *Coordinator) ReleaseSubscriptionRuntime(subscriptionID string) error {
 	defer a.removeModelReferenceCorrelation(subscriptionID)
 
-	if a.anlfBackend == nil {
+	if a.backend == nil {
 		return nil
 	}
-	if err := a.anlfBackend.ReleaseSubscriptionRuntime(a.nwdaf.CancelContext(), subscriptionID); err != nil {
+	if err := a.backend.ReleaseSubscriptionRuntime(a.nwdaf.CancelContext(), subscriptionID); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (a *AnlfService) SyncObservationBindings(
+func (a *Coordinator) SyncObservationBindings(
 	subscriptionID string,
 	revision int64,
-	bindings []ObservationBinding,
+	bindings []contract.ObservationBinding,
 ) error {
-	if a.anlfBackend == nil {
+	if a.backend == nil {
 		return fmt.Errorf("AnLF backend client not initialized")
 	}
-	if err := a.anlfBackend.SyncObservationBindings(
+	if err := a.backend.SyncObservationBindings(
 		a.nwdaf.CancelContext(),
 		subscriptionID,
-		SyncObservationBindingsRequest{RuntimeRevision: revision, Bindings: bindings},
+		contract.SyncObservationBindingsRequest{RuntimeRevision: revision, Bindings: bindings},
 	); err != nil {
 		return err
 	}
@@ -197,44 +198,7 @@ func (a *AnlfService) SyncObservationBindings(
 	return nil
 }
 
-// RecordAnalyticsReport keeps the Phase 4 transitional accuracy correlation in Go.
-func (a *AnlfService) RecordAnalyticsReport(
-	subscriptionID string,
-	report *AnalyticsReport,
-) {
-	if report == nil || !isAccuracyMonitorEnabled(a.config()) {
-		return
-	}
-	ctx := nwdaf_context.GetSelf()
-	mlInfo := ctx.GetMlModelInfo(subscriptionID)
-	if mlInfo == nil || mlInfo.GetModelURL() == "" {
-		return
-	}
-	store := ctx.GetModelAccuracyStore(mlInfo.GetModelURL())
-	if store == nil {
-		return
-	}
-	scopeKey, _ := resolveMonitoringScope(subscriptionID, ctx)
-	for _, event := range report.EventNotifications {
-		if event.Event != string(models.NwdafEvent_UE_COMMUNICATION) {
-			continue
-		}
-		for _, communication := range event.UeCommunications {
-			store.AddPrediction(nwdaf_context.PredictionRecord{
-				ModelUrl:       mlInfo.GetModelURL(),
-				PredictedAt:    report.GeneratedAt,
-				TargetTime:     communication.Timestamp,
-				TargetSlotTime: communication.Timestamp,
-				PredUlVol:      communication.TrafficCharacterization.UplinkVolume,
-				PredDlVol:      communication.TrafficCharacterization.DownlinkVolume,
-				NwdafSubId:     subscriptionID,
-				ScopeKey:       scopeKey,
-			})
-		}
-	}
-}
-
-func (a *AnlfService) ApplyRetrainedModel(oldModelReference, newModelReference string) error {
+func (a *Coordinator) ApplyRetrainedModel(oldModelReference, newModelReference string) error {
 	ctx := nwdaf_context.GetSelf()
 	if ctx == nil {
 		return fmt.Errorf("NWDAF context not initialized")
@@ -269,11 +233,11 @@ func (a *AnlfService) ApplyRetrainedModel(oldModelReference, newModelReference s
 		mtlfSubscriptionID := mlInfo.MtlfSubId
 		mlInfo.RUnlock()
 
-		request, err := a.BuildSubscriptionRuntimeRequest(subscriptionID, &ProvisionContext{
+		request, err := a.BuildSubscriptionRuntimeRequest(subscriptionID, &contract.ProvisionContext{
 			Source:              provisionSourceMTLF,
 			MtlfSubscriptionID:  mtlfSubscriptionID,
 			NotifSubscriptionID: mtlfSubscriptionID,
-			MLEventNotification: MLEventNotification{
+			MLEventNotification: contract.MLEventNotification{
 				MlEventNotif: models.MlEventNotif{
 					Event:        event,
 					NotifCorreId: subscriptionID,
@@ -292,7 +256,7 @@ func (a *AnlfService) ApplyRetrainedModel(oldModelReference, newModelReference s
 	return errors.Join(applyErrors...)
 }
 
-func (a *AnlfService) applyModelReferenceCorrelation(subscriptionID, modelReference string) {
+func (a *Coordinator) applyModelReferenceCorrelation(subscriptionID, modelReference string) {
 	ctx := nwdaf_context.GetSelf()
 	mlInfo := ctx.GetMlModelInfo(subscriptionID)
 	if mlInfo == nil {
@@ -307,17 +271,17 @@ func (a *AnlfService) applyModelReferenceCorrelation(subscriptionID, modelRefere
 				ctx.DeleteSharedModel(oldModelReference)
 			}
 		}
-		a.StopAccuracyMonitorForModel(oldModelReference)
+		a.accuracy.StopAccuracyMonitorForModel(oldModelReference)
 	}
 
 	mlInfo.SetModelUrl(modelReference)
 	mlInfo.SetModelReady()
 	shared, _ := ctx.GetOrCreateSharedModel(modelReference, mlInfo.Event)
 	shared.AddSubscriber(subscriptionID)
-	a.StartOwnedAccuracyMonitorForModel(modelReference)
+	a.accuracy.StartOwnedAccuracyMonitorForModel(modelReference)
 }
 
-func (a *AnlfService) removeModelReferenceCorrelation(subscriptionID string) {
+func (a *Coordinator) removeModelReferenceCorrelation(subscriptionID string) {
 	ctx := nwdaf_context.GetSelf()
 	if ctx == nil {
 		return
@@ -334,7 +298,7 @@ func (a *AnlfService) removeModelReferenceCorrelation(subscriptionID string) {
 				ctx.DeleteSharedModel(modelReference)
 			}
 		}
-		a.StopAccuracyMonitorForModel(modelReference)
+		a.accuracy.StopAccuracyMonitorForModel(modelReference)
 	}
 	ctx.DeleteMlModelInfo(subscriptionID)
 }

@@ -1,4 +1,4 @@
-package anlf
+package coordinator
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
@@ -20,9 +21,9 @@ func TestObservationDeliveryRetryKeepsBatchID(t *testing.T) {
 	delivery.retryInterval = time.Millisecond
 	item := queuedObservationBatch{
 		sourceID: "corr-1",
-		batch: ObservationBatch{
+		batch: contract.ObservationBatch{
 			BatchID:      "batch-stable",
-			Observations: []SourceObservation{{}},
+			Observations: []contract.SourceObservation{{}},
 		},
 	}
 

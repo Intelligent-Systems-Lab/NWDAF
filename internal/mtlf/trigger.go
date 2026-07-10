@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/free5gc/nwdaf/internal/anlf"
+	"github.com/free5gc/nwdaf/internal/anlf/accuracy"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 )
 
@@ -46,7 +46,7 @@ func composeHitReason(degradationHit, chronicHit, lowTrafficHit bool) string {
 // determines whether retraining is necessary.
 func (m *MtlfService) HandleAccuracyReports(
 	modelUrl string,
-	reports []anlf.AccuracyReport,
+	reports []accuracy.Report,
 	store *nwdaf_context.ModelAccuracyStore,
 ) {
 	cfg := m.config()

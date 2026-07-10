@@ -12,16 +12,18 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/free5gc/nwdaf/internal/anlf"
+	"github.com/free5gc/nwdaf/internal/anlf/accuracy"
 	anlfclient "github.com/free5gc/nwdaf/internal/anlf/client"
+	"github.com/free5gc/nwdaf/internal/anlf/coordinator"
 	anlfprocessor "github.com/free5gc/nwdaf/internal/anlf/processor"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/mtlf"
 	mtlfclient "github.com/free5gc/nwdaf/internal/mtlf/client"
 	mtlfprocessor "github.com/free5gc/nwdaf/internal/mtlf/processor"
-	"github.com/free5gc/nwdaf/internal/notifier"
 	"github.com/free5gc/nwdaf/internal/sbi"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
+	"github.com/free5gc/nwdaf/internal/sbi/notifier"
 	"github.com/free5gc/nwdaf/internal/sbi/processor"
 	"github.com/free5gc/nwdaf/pkg/app"
 	"github.com/free5gc/nwdaf/pkg/factory"
@@ -31,16 +33,17 @@ import (
 var _ app.App = &NwdafApp{}
 
 type NwdafApp struct {
-	cfg        *factory.Config
-	nwdafCtx   *nwdaf_context.NWDAFContext
-	ctx        context.Context
-	cancel     context.CancelFunc
-	consumer   *consumer.Consumer
-	processor  *processor.Processor
-	sbiServer  *sbi.Server
-	anlfServer *anlf.Server
-	mtlfServer *mtlf.Server
-	wg         sync.WaitGroup
+	cfg             *factory.Config
+	nwdafCtx        *nwdaf_context.NWDAFContext
+	ctx             context.Context
+	cancel          context.CancelFunc
+	consumer        *consumer.Consumer
+	processor       *processor.Processor
+	sbiServer       *sbi.Server
+	anlfServer      *anlf.Server
+	anlfCoordinator *coordinator.Coordinator
+	mtlfServer      *mtlf.Server
+	wg              sync.WaitGroup
 }
 
 func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
@@ -77,12 +80,15 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		return nil, err
 	}
 
-	var anlfBackend anlf.AnlfBackendAPI
+	var anlfBackend coordinator.BackendRuntimeClient
+	var observationBackend coordinator.ObservationSender
 	if cfg.Configuration != nil &&
 		cfg.Configuration.AnlfBackend != nil &&
 		cfg.Configuration.AnlfBackend.Enabled &&
 		cfg.Configuration.AnlfBackend.Endpoint != "" {
-		anlfBackend = anlfclient.NewClient(cfg.Configuration.AnlfBackend.Endpoint)
+		client := anlfclient.NewClient(cfg.Configuration.AnlfBackend.Endpoint)
+		anlfBackend = client
+		observationBackend = client
 	}
 
 	var daisyClient mtlf.DaisyAPI
@@ -93,14 +99,34 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		daisyClient = mtlfclient.NewClient(cfg.Configuration.Mtlf.Endpoint)
 	}
 
-	anlfService := anlf.NewAnlfService(nwdaf, anlfBackend)
+	accuracyMonitor := accuracy.NewMonitor(nwdaf)
+	var observationConfig *factory.ObservationDeliveryConfig
+	if cfg.Configuration != nil && cfg.Configuration.AnlfBackend != nil {
+		observationConfig = cfg.Configuration.AnlfBackend.ObservationDelivery
+	}
+	observationDelivery := coordinator.NewObservationDelivery(
+		nwdaf.ctx,
+		observationBackend,
+		observationConfig,
+	)
+	nwdaf.anlfCoordinator = coordinator.New(nwdaf, anlfBackend, accuracyMonitor, observationDelivery)
 	mtlfService := mtlf.NewMtlfService(nwdaf, daisyClient, nwdaf.consumer.AdrfClient())
-	reportDispatcher := notifier.NewReportDispatcher(nwdaf.ctx, anlfService)
-	anlfProcessor := anlfprocessor.NewProcessor(anlfService, reportDispatcher)
+	accuracyMonitor.SetOnAccuracyReports(func(
+		modelURL string,
+		reports []accuracy.Report,
+		store *nwdaf_context.ModelAccuracyStore,
+	) {
+		mtlfService.HandleAccuracyReports(modelURL, reports, store)
+	})
+	mtlfService.SetOnModelProvisionUpdated(func(oldModelReference, newModelReference string) error {
+		return nwdaf.anlfCoordinator.ApplyRetrainedModel(oldModelReference, newModelReference)
+	})
+	reportDispatcher := notifier.NewReportDispatcher(nwdaf.ctx, accuracyMonitor)
+	anlfProcessor := anlfprocessor.NewProcessor(nwdaf.anlfCoordinator, reportDispatcher)
 	mtlfProcessor := mtlfprocessor.NewProcessor(mtlfService)
 
 	// Initialize processor
-	nwdaf.processor = processor.NewProcessor(nwdaf, anlfService, mtlfService)
+	nwdaf.processor = processor.NewProcessor(nwdaf, nwdaf.anlfCoordinator, mtlfService)
 
 	// Initialize SBI server
 	nwdaf.sbiServer, err = sbi.NewServer(nwdaf, "")
@@ -209,11 +235,12 @@ func (a *NwdafApp) Start() {
 
 	// Set WaitGroup for processor goroutine lifecycle management
 	a.processor.SetWaitGroup(&a.wg)
+	a.anlfCoordinator.SetWaitGroup(&a.wg)
 
 	if err := a.startOwnedServers(); err != nil {
 		logger.InitLog.Fatalf("Run NWDAF servers failed: %+v", err)
 	}
-	a.processor.StartObservationDelivery()
+	a.anlfCoordinator.StartObservationDelivery()
 
 	// Start MTLF training scheduler only after the owned listeners are ready.
 	a.processor.StartMtlfTrainingScheduler(&a.wg)
@@ -268,7 +295,7 @@ func (a *NwdafApp) stopOwnedServers() {
 func (a *NwdafApp) terminateProcedure() {
 	logger.MainLog.Infof("Terminating NWDAF...")
 
-	a.processor.StopObservationDelivery()
+	a.anlfCoordinator.StopObservationDelivery()
 
 	a.stopOwnedServers()
 

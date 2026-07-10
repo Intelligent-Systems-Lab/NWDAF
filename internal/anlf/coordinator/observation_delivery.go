@@ -1,4 +1,4 @@
-package anlf
+package coordinator
 
 import (
 	"context"
@@ -7,19 +7,20 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
 type queuedObservationBatch struct {
 	sourceID string
-	batch    ObservationBatch
+	batch    contract.ObservationBatch
 }
 
 type ObservationDelivery struct {
 	baseCtx        context.Context
 	cancel         context.CancelFunc
-	backend        AnlfBackendAPI
+	backend        ObservationSender
 	queue          chan queuedObservationBatch
 	requestTimeout time.Duration
 	maxRetries     int
@@ -31,7 +32,7 @@ type ObservationDelivery struct {
 
 func NewObservationDelivery(
 	baseCtx context.Context,
-	backend AnlfBackendAPI,
+	backend ObservationSender,
 	cfg *factory.ObservationDeliveryConfig,
 ) *ObservationDelivery {
 	if baseCtx == nil {
@@ -69,13 +70,13 @@ func (d *ObservationDelivery) Stop() {
 	})
 }
 
-func (d *ObservationDelivery) Enqueue(sourceID string, observations []SourceObservation) bool {
+func (d *ObservationDelivery) Enqueue(sourceID string, observations []contract.SourceObservation) bool {
 	if d == nil || d.backend == nil || sourceID == "" || len(observations) == 0 {
 		return false
 	}
 	item := queuedObservationBatch{
 		sourceID: sourceID,
-		batch: ObservationBatch{
+		batch: contract.ObservationBatch{
 			BatchID:      uuid.NewString(),
 			Observations: observations,
 		},

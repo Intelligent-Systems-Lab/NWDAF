@@ -12,21 +12,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/free5gc/nwdaf/internal/anlf"
+	anlfserver "github.com/free5gc/nwdaf/internal/anlf"
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
+	"github.com/free5gc/nwdaf/internal/anlf/coordinator"
 	anlfprocessor "github.com/free5gc/nwdaf/internal/anlf/processor"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
-	"github.com/free5gc/nwdaf/internal/notifier"
+	"github.com/free5gc/nwdaf/internal/sbi/notifier"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
 
 type liveModelWorkflow struct{}
 
-func (*liveModelWorkflow) PlanModelProvisionActions(*models.NwdafMlModelProvNotif) []anlf.ModelProvisionAction {
+func (*liveModelWorkflow) PlanModelProvisionActions(
+	*models.NwdafMlModelProvNotif,
+) []coordinator.ModelProvisionAction {
 	return nil
 }
 
-func (*liveModelWorkflow) StartModelProvisionActions([]anlf.ModelProvisionAction) {}
+func (*liveModelWorkflow) StartModelProvisionActions([]coordinator.ModelProvisionAction) {}
 
 func TestLivePyAnLFContract(t *testing.T) {
 	endpoint := os.Getenv("PYANLF_LIVE_ENDPOINT")
@@ -78,7 +82,7 @@ func TestLivePyAnLFContract(t *testing.T) {
 	nwdaf_context.GetSelf().AddSubscription(subscription)
 	dispatcher := notifier.NewReportDispatcher(context.Background(), nil)
 	processor := anlfprocessor.NewProcessor(&liveModelWorkflow{}, dispatcher)
-	callbackServer, err := anlf.NewServer(serverConfig, processor)
+	callbackServer, err := anlfserver.NewServer(serverConfig, processor)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
@@ -92,8 +96,8 @@ func TestLivePyAnLFContract(t *testing.T) {
 	}()
 
 	client := NewClient(endpoint)
-	request := anlf.ApplySubscriptionRuntimeRequest{
-		Subscription: anlf.SubscriptionRuntimeContext{
+	request := contract.ApplySubscriptionRuntimeRequest{
+		Subscription: contract.SubscriptionRuntimeContext{
 			SubscriptionID: subscriptionID,
 			EvtReq: &models.ReportingInformation{
 				NotifMethod:  models.SmfEventExposureNotificationMethod_PERIODIC,
@@ -129,25 +133,25 @@ func TestLivePyAnLFContract(t *testing.T) {
 		nil,
 	)
 
-	binding := anlf.ObservationBinding{
+	binding := contract.ObservationBinding{
 		ObservationSourceID: "live-source",
-		Source:              anlf.ObservationSource{SourceType: "SMF_UPF", Supi: "imsi-live"},
+		Source:              contract.ObservationSource{SourceType: "SMF_UPF", Supi: "imsi-live"},
 		CollectionProfile:   response.CollectionRequirements,
 	}
 	if err = client.SyncObservationBindings(
 		context.Background(),
 		subscriptionID,
-		anlf.SyncObservationBindingsRequest{
+		contract.SyncObservationBindingsRequest{
 			RuntimeRevision: response.RuntimeRevision,
-			Bindings:        []anlf.ObservationBinding{binding},
+			Bindings:        []contract.ObservationBinding{binding},
 		},
 	); err != nil {
 		t.Fatalf("SyncObservationBindings() error = %v", err)
 	}
 
-	if err = client.SendObservations(context.Background(), "live-source", anlf.ObservationBatch{
+	if err = client.SendObservations(context.Background(), "live-source", contract.ObservationBatch{
 		BatchID: "live-batch",
-		Observations: []anlf.SourceObservation{{
+		Observations: []contract.SourceObservation{{
 			ObservedAt: time.Now().UTC(),
 			Supi:       "imsi-live",
 			Dnn:        "internet",
