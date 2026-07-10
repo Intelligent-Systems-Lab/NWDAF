@@ -6,14 +6,6 @@ import (
 	"github.com/free5gc/openapi/models"
 )
 
-type stubScheduler struct {
-	stopCalls int
-}
-
-func (s *stubScheduler) Stop() {
-	s.stopCalls++
-}
-
 func TestNewSubscriptionId(t *testing.T) {
 	id1 := NewSubscriptionId()
 	id2 := NewSubscriptionId()
@@ -105,42 +97,5 @@ func TestGetAllSubscriptions(t *testing.T) {
 	subs := ctx.GetAllSubscriptions()
 	if len(subs) != 3 {
 		t.Errorf("GetAllSubscriptions() returned %v subscriptions, want 3", len(subs))
-	}
-}
-
-func TestStopAllSubscriptionSchedulers(t *testing.T) {
-	Init()
-	ctx := GetSelf()
-
-	schedulerA := &stubScheduler{}
-	schedulerB := &stubScheduler{}
-
-	ctx.AddSubscription(&Subscription{
-		ID:        "sub-1",
-		Scheduler: schedulerA,
-	})
-	ctx.AddSubscription(&Subscription{
-		ID:        "sub-2",
-		Scheduler: schedulerB,
-	})
-	ctx.AddSubscription(&Subscription{
-		ID: "sub-3",
-	})
-
-	stopped := ctx.StopAllSubscriptionSchedulers()
-	if stopped != 2 {
-		t.Fatalf("StopAllSubscriptionSchedulers() = %d, want 2", stopped)
-	}
-
-	if schedulerA.stopCalls != 1 || schedulerB.stopCalls != 1 {
-		t.Fatalf("expected each scheduler to be stopped once, got %d and %d",
-			schedulerA.stopCalls, schedulerB.stopCalls)
-	}
-
-	if sub := ctx.GetSubscription("sub-1"); sub == nil || sub.Scheduler != nil {
-		t.Fatalf("subscription sub-1 scheduler should be cleared")
-	}
-	if sub := ctx.GetSubscription("sub-2"); sub == nil || sub.Scheduler != nil {
-		t.Fatalf("subscription sub-2 scheduler should be cleared")
 	}
 }

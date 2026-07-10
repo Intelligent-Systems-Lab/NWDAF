@@ -9,9 +9,12 @@ import (
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/pkg/app"
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
+
+var anlfLog = logger.AnlfLog
 
 // NwdafApp defines the app-level dependencies needed by AnLF.
 type NwdafApp interface {
@@ -21,13 +24,14 @@ type NwdafApp interface {
 
 // AnlfService is the AnLF entry point.
 type AnlfService struct {
-	nwdaf             NwdafApp
-	anlfBackend       AnlfBackendAPI
-	onDeviationReport func(modelUrl string, deviation float64, store *nwdaf_context.ModelAccuracyStore)
-	onAccuracyReports func(modelUrl string, reports []AccuracyReport, store *nwdaf_context.ModelAccuracyStore)
-	warmupMu          sync.Mutex
-	startupWarmupDone bool
-	wg                *sync.WaitGroup
+	nwdaf               NwdafApp
+	anlfBackend         AnlfBackendAPI
+	onDeviationReport   func(modelUrl string, deviation float64, store *nwdaf_context.ModelAccuracyStore)
+	onAccuracyReports   func(modelUrl string, reports []AccuracyReport, store *nwdaf_context.ModelAccuracyStore)
+	warmupMu            sync.Mutex
+	startupWarmupDone   bool
+	wg                  *sync.WaitGroup
+	observationDelivery *ObservationDelivery
 }
 
 // AccuracyReport is the internal AnLF output for one monitor round and one scope.
@@ -48,10 +52,16 @@ type AccuracyReport struct {
 
 // NewAnlfService creates a new AnlfService instance.
 func NewAnlfService(nwdaf NwdafApp, anlfBackend AnlfBackendAPI) *AnlfService {
-	return &AnlfService{
+	service := &AnlfService{
 		nwdaf:       nwdaf,
 		anlfBackend: anlfBackend,
 	}
+	var deliveryConfig *factory.ObservationDeliveryConfig
+	if cfg := nwdaf.Config(); cfg != nil && cfg.Configuration != nil && cfg.Configuration.AnlfBackend != nil {
+		deliveryConfig = cfg.Configuration.AnlfBackend.ObservationDelivery
+	}
+	service.observationDelivery = NewObservationDelivery(nwdaf.CancelContext(), anlfBackend, deliveryConfig)
+	return service
 }
 
 func (a *AnlfService) config() *factory.Config {
@@ -61,13 +71,17 @@ func (a *AnlfService) config() *factory.Config {
 	return a.nwdaf.Config()
 }
 
-func ueCommunicationModelParams(cfg *factory.Config) *factory.ModelParams {
-	if cfg != nil && cfg.Configuration != nil &&
-		cfg.Configuration.Analytics != nil &&
-		cfg.Configuration.Analytics.UeCommunication != nil {
-		return cfg.Configuration.Analytics.UeCommunication
+func activeSamplingInterval(subscriptionID string) int {
+	ctx := nwdaf_context.GetSelf()
+	if ctx != nil {
+		if subscription := ctx.GetSubscription(subscriptionID); subscription != nil {
+			_, requirements, _, _ := subscription.RuntimeSnapshot()
+			if requirements.SamplingIntervalSeconds > 0 {
+				return requirements.SamplingIntervalSeconds
+			}
+		}
 	}
-	return &factory.ModelParams{}
+	return 10
 }
 
 func accuracyMonitorConfig(cfg *factory.Config) *factory.AccuracyMonitorConfig {
@@ -123,12 +137,32 @@ func (a *AnlfService) AnlfBackend() AnlfBackendAPI {
 	return a.anlfBackend
 }
 
+func (a *AnlfService) StartObservationDelivery() {
+	a.observationDelivery.Start()
+}
+
+func (a *AnlfService) StopObservationDelivery() {
+	a.observationDelivery.Stop()
+}
+
+func (a *AnlfService) EnqueueObservations(sourceID string, observations []SourceObservation) bool {
+	return a.observationDelivery.Enqueue(sourceID, observations)
+}
+
 func (a *AnlfService) BuildProvisionNotificationURI() string {
 	cfg := a.config()
 	if cfg == nil {
 		return ""
 	}
 	return cfg.GetAnlfServerURI() + "/mlmodel-notify"
+}
+
+func (a *AnlfService) BuildAnalyticsReportCallbackURI(subscriptionID string) string {
+	cfg := a.config()
+	if cfg == nil {
+		return ""
+	}
+	return cfg.GetAnlfServerURI() + "/subscriptions/" + subscriptionID + "/analytics-reports"
 }
 
 func (a *AnlfService) acquireStartupWarmupDuration(accCfg *factory.AccuracyMonitorConfig) int {

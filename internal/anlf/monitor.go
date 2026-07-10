@@ -130,11 +130,11 @@ func (a *AnlfService) checkModelAccuracy(
 ) {
 	nwdafCtx := nwdaf_context.GetSelf()
 
-	samplingInterval := ueCommunicationModelParams(a.config()).SamplingIntervalOrDefault()
 	pending := store.SnapshotPredictions()
 	if len(pending) == 0 {
 		return
 	}
+	samplingInterval := activeSamplingInterval(pending[0].NwdafSubId)
 	maxMissCount := predictionMaxMissCount(samplingInterval, accCfg.CheckInterval)
 
 	var pairs []matchedPair
@@ -261,7 +261,7 @@ func (a *AnlfService) lookupGroundTruth(
 	pred nwdaf_context.PredictionRecord,
 ) *groundTruth {
 	cfg := a.config()
-	samplingInterval := ueCommunicationModelParams(cfg).SamplingIntervalOrDefault()
+	samplingInterval := activeSamplingInterval(pred.NwdafSubId)
 	si := time.Duration(samplingInterval) * time.Second
 
 	corrIds := ctx.GetCorrelationIdsByNwdafSubId(pred.NwdafSubId)

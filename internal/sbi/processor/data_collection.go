@@ -1,6 +1,9 @@
 package processor
 
 import (
+	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
@@ -14,25 +17,24 @@ import (
 func (p *Processor) TriggerDataCollection(
 	eventSubs []models.NwdafEventsSubscriptionEventSubscription,
 	subscriptionId string,
-) {
+) error {
 	if cancelCtx := p.nwdaf.CancelContext(); cancelCtx != nil && cancelCtx.Err() != nil {
 		logger.ProcLog.Infof("TriggerDataCollection: skipped sub=%s reason=shutdown", subscriptionId)
-		return
+		return fmt.Errorf("NWDAF is shutting down")
 	}
 
 	// Guard: subscription may have been deleted during async execution
 	ctx := nwdaf_context.GetSelf()
 	if ctx.GetSubscription(subscriptionId) == nil {
 		logger.ProcLog.Debugf("TriggerDataCollection: skipped sub=%s reason=deleted", subscriptionId)
-		return
+		return fmt.Errorf("subscription %s no longer exists", subscriptionId)
 	}
 
 	for i := range eventSubs {
 		eventSub := &eventSubs[i]
 		switch eventSub.Event {
 		case models.NwdafEvent_UE_COMMUNICATION:
-			// Trigger ML Model provisioning (async - starts first for parallel init)
-			go p.triggerMlModelProvisioning(eventSub, subscriptionId)
+			p.triggerMlModelProvisioning(eventSub, subscriptionId)
 			// Trigger SMF data collection (sync)
 			p.triggerUeCommunicationCollection(eventSub, subscriptionId)
 		case models.NwdafEvent_ABNORMAL_BEHAVIOUR:
@@ -42,6 +44,73 @@ func (p *Processor) TriggerDataCollection(
 			logger.ProcLog.Debugf("Data collection not implemented for event: %s", eventSub.Event)
 		}
 	}
+	staleResources := p.reconcileDataCollectionResources(subscriptionId)
+	if err := p.syncObservationBindings(subscriptionId); err != nil {
+		logger.ProcLog.Errorf("SyncObservationBindings failed: sub=%s err=%v", subscriptionId, err)
+		for _, resource := range staleResources {
+			nwdaf_context.GetSelf().AddNwdafSubResource(subscriptionId, resource)
+		}
+		return err
+	}
+	for _, resource := range staleResources {
+		p.releaseDataCollectionResource(subscriptionId, resource)
+	}
+	return nil
+}
+
+func (p *Processor) reconcileDataCollectionResources(
+	subscriptionID string,
+) []nwdaf_context.NwdafSubResource {
+	ctx := nwdaf_context.GetSelf()
+	subscription := ctx.GetSubscription(subscriptionID)
+	if subscription == nil {
+		return nil
+	}
+	requirements := subscription.CollectionRequirementsSnapshot()
+	profileKey := canonicalCollectionProfileKey(
+		int32(requirements.SamplingIntervalSeconds),
+		requirements.RequiredMeasurements,
+	)
+	targets := make(map[string]struct{})
+	for i := range subscription.EventSubs {
+		event := &subscription.EventSubs[i]
+		if event.Event != models.NwdafEvent_UE_COMMUNICATION || event.TgtUe == nil {
+			continue
+		}
+		for _, supi := range event.TgtUe.Supis {
+			targets[supi] = struct{}{}
+		}
+		if resolver := ctx.GetGroupResolver(); resolver != nil {
+			for _, groupID := range event.TgtUe.IntGroupIds {
+				if supis, err := resolver.ResolveGroupId(groupID); err == nil {
+					for _, supi := range supis {
+						targets[supi] = struct{}{}
+					}
+				}
+			}
+		}
+	}
+	endpoints := make(map[string]struct{})
+	if cfg := p.config(); cfg != nil && cfg.Configuration != nil && cfg.Configuration.Smf != nil {
+		for _, endpoint := range cfg.Configuration.Smf.Endpoints {
+			endpoints[endpoint] = struct{}{}
+		}
+	}
+	resources := ctx.GetNwdafSubResources(subscriptionID)
+	kept := make([]nwdaf_context.NwdafSubResource, 0, len(resources))
+	stale := make([]nwdaf_context.NwdafSubResource, 0)
+	for _, resource := range resources {
+		smfSubscription := ctx.GetSmfSubscription(resource.CorrelationId)
+		_, targetOK := targets[resource.Supi]
+		_, endpointOK := endpoints[resource.SmfEndpoint]
+		if targetOK && endpointOK && smfSubscription != nil && smfSubscription.ProfileKey == profileKey {
+			kept = append(kept, resource)
+			continue
+		}
+		stale = append(stale, resource)
+	}
+	ctx.SetNwdafSubResources(subscriptionID, kept)
+	return stale
 }
 
 // triggerUeCommunicationCollection subscribes to SMF for UE communication data
@@ -90,16 +159,17 @@ func (p *Processor) triggerUeCommunicationCollection(
 		}
 	}
 
-	// SMF report period: driven by analytics model config (default: 10s)
-	smfRepPeriod := int32(10)
-	if cfg.Configuration.Analytics != nil &&
-		cfg.Configuration.Analytics.UeCommunication != nil {
-		smfRepPeriod = int32(
-			cfg.Configuration.Analytics.UeCommunication.SamplingIntervalOrDefault(),
-		)
-	}
-
 	ctx := nwdaf_context.GetSelf()
+	subscription := ctx.GetSubscription(subscriptionId)
+	if subscription == nil {
+		return
+	}
+	requirements := subscription.CollectionRequirementsSnapshot()
+	smfRepPeriod := int32(requirements.SamplingIntervalSeconds)
+	if smfRepPeriod <= 0 {
+		logger.ProcLog.Errorf("Collection requirements missing: sub=%s", subscriptionId)
+		return
+	}
 
 	// Build targets from TgtUe
 	var targets []DataCollectionTarget
@@ -165,15 +235,26 @@ func (p *Processor) triggerTargetDataCollection(
 	smfNotifUri, upfNotifUri string,
 	smfRepPeriod int32,
 ) {
+	requirements := nwdaf_context.CollectionRequirements{
+		SamplingIntervalSeconds: int(smfRepPeriod),
+		RequiredMeasurements:    []string{"TOTAL_VOLUME", "UL_VOLUME", "DL_VOLUME"},
+	}
+	if subscription := ctx.GetSubscription(subscriptionId); subscription != nil {
+		candidate := subscription.CollectionRequirementsSnapshot()
+		if candidate.SamplingIntervalSeconds > 0 && len(candidate.RequiredMeasurements) > 0 {
+			requirements = candidate
+		}
+	}
+	profileKey := canonicalCollectionProfileKey(smfRepPeriod, requirements.RequiredMeasurements)
 	for _, smfEndpoint := range endpoints {
 		for _, target := range targets {
 			targetId := target.Identifier()
-			correlationId, found := ctx.GetSmfCorrelationId(targetId, smfEndpoint)
+			correlationId, found := ctx.GetSmfCorrelationIdForProfile(targetId, smfEndpoint, profileKey)
 
 			if !found {
 				correlationId = ctx.NewCorrelationId()
 				// Store mapping optimistically so other threads might use it
-				ctx.StoreSmfCorrelationId(targetId, smfEndpoint, correlationId)
+				ctx.StoreSmfCorrelationIdForProfile(targetId, smfEndpoint, profileKey, correlationId)
 			}
 
 			// Get or create SMF subscription (with reference counting)
@@ -184,6 +265,12 @@ func (p *Processor) triggerTargetDataCollection(
 				logger.ProcLog.Infof("CreateSmfSubscription: reused corr=%s refCount=%d",
 					correlationId, refCount)
 			} else {
+				sub.Lock()
+				sub.TargetType = nwdaf_context.TargetType_SUPI
+				sub.Supi = target.Supi
+				sub.SmfEndpoint = smfEndpoint
+				sub.ProfileKey = profileKey
+				sub.Unlock()
 				// Build SMF subscription options (always SUPI-based)
 				eventSubs := consumer.BuildUpfEventSubs(upfNotifUri, true, true)
 				opts := consumer.SmfSubscriptionOptions{
@@ -205,9 +292,6 @@ func (p *Processor) triggerTargetDataCollection(
 
 				// Update subscription with details
 				sub.Lock()
-				sub.TargetType = nwdaf_context.TargetType_SUPI
-				sub.Supi = target.Supi
-				sub.SmfEndpoint = smfEndpoint
 				sub.SmfSubId = subId
 				sub.Unlock()
 
@@ -238,6 +322,19 @@ func (p *Processor) triggerTargetDataCollection(
 	}
 }
 
+func canonicalCollectionProfileKey(samplingInterval int32, measurements []string) string {
+	normalized := append([]string(nil), measurements...)
+	for i := range normalized {
+		normalized[i] = strings.ToUpper(strings.TrimSpace(normalized[i]))
+	}
+	sort.Strings(normalized)
+	return fmt.Sprintf("periodic:%d:%s", samplingInterval, strings.Join(normalized, ","))
+}
+
+func (p *Processor) syncObservationBindings(subscriptionID string) error {
+	return p.anlf.SyncCurrentObservationBindings(subscriptionID)
+}
+
 // triggerMlModelProvisioning subscribes to MTLF for ML model provisioning
 // Per TS 23.288 §6.2A: NWDAF(AnLF) subscribes to NWDAF(MTLF) for ML models
 func (p *Processor) triggerMlModelProvisioning(
@@ -261,15 +358,13 @@ func (p *Processor) triggerMlModelProvisioning(
 	if externalMtlf != nil && len(externalMtlf.Endpoints) > 0 {
 		mtlfEndpoint = externalMtlf.Endpoints[0]
 	}
-	mlInfo := nwdaf_context.NewMlModelInfo(eventSub.Event, mtlfEndpoint)
-	ctx.SetMlModelInfo(subscriptionId, mlInfo)
+	mlInfo := ctx.GetMlModelInfo(subscriptionId)
+	if mlInfo == nil {
+		mlInfo = nwdaf_context.NewMlModelInfo(eventSub.Event, mtlfEndpoint)
+		ctx.SetMlModelInfo(subscriptionId, mlInfo)
+	}
 
 	if externalMtlf == nil || !externalMtlf.Enabled {
-		if cfg.Configuration.AnlfBackend != nil && cfg.Configuration.AnlfBackend.Enabled {
-			if err := p.anlf.ApplySubscriptionRegistration(subscriptionId); err != nil {
-				logger.ProcLog.Errorf("ApplyAnlfRuntime failed: sub=%s err=%v", subscriptionId, err)
-			}
-		}
 		return
 	}
 

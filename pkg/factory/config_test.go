@@ -107,15 +107,13 @@ configuration:
 			wantErr: "sbi.port",
 		},
 		{
-			name: "input window larger than ring buffer",
+			name: "invalid ground truth ring buffer",
 			yaml: `
 configuration:
-  analytics:
-    ueCommunication:
-      inputWindow: 64
-      ringBufferSize: 32
+  groundTruthRetention:
+    ringBufferSize: -1
 `,
-			wantErr: "analytics.ueCommunication.inputWindow",
+			wantErr: "groundTruthRetention.ringBufferSize",
 		},
 		{
 			name: "smf enabled requires endpoints and callback uris",

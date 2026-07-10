@@ -35,15 +35,9 @@ configuration:
       smf: http://127.0.0.1:8080/collector/notify
       upf: http://127.0.0.1:8080/collector/upf-notify
 
-  # Analytics model parameters per event type
-  analytics:
-    ueCommunication:
-      samplingInterval: 30  # UPF report period (seconds); governs smf repPeriod
-      inputWindow: 30       # data points fed to ML model (30 × 30s = 15 min history)
-      outputWindow: 1       # Inference engine predicts 1 step ahead
-      lookbackBuffer: 15    # extra seconds added to query window to absorb jitter (default: 2×samplingInterval)
-      # queryLookback = samplingInterval × inputWindow + lookbackBuffer (auto-computed)
-      ringBufferSize: 50    # in-memory ring buffer size per UE session; must be >= inputWindow
+  # Transitional Go-side retention used by the Phase 4 accuracy workflow.
+  groundTruthRetention:
+    ringBufferSize: 50
 
   # External MTLF Integration
   externalMtlf:
@@ -55,6 +49,11 @@ configuration:
   anlfBackend:
     enabled: true
     endpoint: http://127.0.0.1:9090  # Local AnLF backend
+    observationDelivery:
+      queueCapacity: 1024
+      requestTimeout: 5
+      maxRetries: 3
+      retryInterval: 1
 
   # Group ID to SUPI mapping (substitute for UDM per TS 23.502 §4.15.4.5.2)
   groupMembership:

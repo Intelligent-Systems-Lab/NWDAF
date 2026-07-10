@@ -45,6 +45,7 @@ func applyRoutes(group *gin.RouterGroup, routes []Route) {
 
 type processorAPI interface {
 	HandleMlModelProvisionNotify(notifications []models.NwdafMlModelProvNotif)
+	HandleAnalyticsReport(subscriptionID string, report *AnalyticsReport) error
 }
 
 type Server struct {
@@ -85,6 +86,12 @@ func (s *Server) getRoutes() []Route {
 			Method:  http.MethodPost,
 			Pattern: "/mlmodel-notify",
 			APIFunc: s.HandleMlModelProvisionNotify,
+		},
+		{
+			Name:    "HandleAnalyticsReport",
+			Method:  http.MethodPost,
+			Pattern: "/subscriptions/:subscriptionId/analytics-reports",
+			APIFunc: s.HandleAnalyticsReport,
 		},
 	}
 }

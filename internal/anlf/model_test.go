@@ -11,15 +11,16 @@ import (
 )
 
 type fakeAnlfBackendClient struct {
-	applyCalls      int
-	applyRequests   []ApplySubscriptionRuntimeRequest
-	applyResponse   *ApplySubscriptionRuntimeResponse
-	applyErr        error
-	releaseCalls    []string
-	releaseErr      error
-	predictSubID    string
-	predictResponse *PredictResponse
-	predictErr      error
+	applyCalls    int
+	applyRequests []ApplySubscriptionRuntimeRequest
+	applyResponse *ApplySubscriptionRuntimeResponse
+	applyErr      error
+	releaseCalls  []string
+	releaseErr    error
+	syncCalls     int
+	sendCalls     int
+	sendErrors    []error
+	sentBatches   []ObservationBatch
 }
 
 func (f *fakeAnlfBackendClient) ApplySubscriptionRuntime(
@@ -28,6 +29,17 @@ func (f *fakeAnlfBackendClient) ApplySubscriptionRuntime(
 ) (*ApplySubscriptionRuntimeResponse, error) {
 	f.applyCalls++
 	f.applyRequests = append(f.applyRequests, request)
+	if f.applyResponse != nil {
+		if f.applyResponse.RuntimeRevision == 0 {
+			f.applyResponse.RuntimeRevision = 1
+		}
+		if f.applyResponse.CollectionRequirements.SamplingIntervalSeconds == 0 {
+			f.applyResponse.CollectionRequirements = CollectionRequirements{
+				SamplingIntervalSeconds: 30,
+				RequiredMeasurements:    []string{"UL_VOLUME"},
+			}
+		}
+	}
 	return f.applyResponse, f.applyErr
 }
 
@@ -36,13 +48,26 @@ func (f *fakeAnlfBackendClient) ReleaseSubscriptionRuntime(_ context.Context, su
 	return f.releaseErr
 }
 
-func (f *fakeAnlfBackendClient) Predict(
+func (f *fakeAnlfBackendClient) SyncObservationBindings(
 	_ context.Context,
-	subscriptionID string,
-	_ []TrafficObservation,
-) (*PredictResponse, error) {
-	f.predictSubID = subscriptionID
-	return f.predictResponse, f.predictErr
+	_ string,
+	_ SyncObservationBindingsRequest,
+) error {
+	f.syncCalls++
+	return nil
+}
+
+func (f *fakeAnlfBackendClient) SendObservations(
+	_ context.Context,
+	_ string,
+	batch ObservationBatch,
+) error {
+	f.sendCalls++
+	f.sentBatches = append(f.sentBatches, batch)
+	if len(f.sendErrors) >= f.sendCalls {
+		return f.sendErrors[f.sendCalls-1]
+	}
+	return nil
 }
 
 func (f *fakeAnlfBackendClient) HTTPClient() *http.Client { return &http.Client{} }
@@ -50,6 +75,7 @@ func (f *fakeAnlfBackendClient) HTTPClient() *http.Client { return &http.Client{
 func addTestSubscription(subscriptionID string) {
 	nwdaf_context.GetSelf().AddSubscription(&nwdaf_context.Subscription{
 		ID:          subscriptionID,
+		IsActive:    true,
 		NotifCorrId: "corr-" + subscriptionID,
 		EventSubs: []models.NwdafEventsSubscriptionEventSubscription{
 			{Event: models.NwdafEvent_UE_COMMUNICATION},

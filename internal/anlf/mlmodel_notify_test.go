@@ -27,6 +27,10 @@ func (f *fakeMlModelNotifyProcessor) HandleMlModelProvisionNotify(notifications 
 	f.notifications = notifications
 }
 
+func (f *fakeMlModelNotifyProcessor) HandleAnalyticsReport(string, *AnalyticsReport) error {
+	return nil
+}
+
 func newJSONRequestContext(method, target string, body []byte) (*gin.Context, *httptest.ResponseRecorder) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)

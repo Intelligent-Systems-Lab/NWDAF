@@ -86,6 +86,14 @@ func (p *Processor) StartMtlfTrainingScheduler(wg *sync.WaitGroup) {
 	p.mtlf.StartTrainingScheduler(wg)
 }
 
+func (p *Processor) StartObservationDelivery() {
+	p.anlf.StartObservationDelivery()
+}
+
+func (p *Processor) StopObservationDelivery() {
+	p.anlf.StopObservationDelivery()
+}
+
 // HandleAdrfRetrievalNotify delegates an ADRF retrieval callback to MtlfService.
 func (p *Processor) HandleAdrfRetrievalNotify(notifCorrId string, fetchCorrIds []string, terminationReq bool) {
 	p.mtlf.HandleAdrfRetrievalNotify(notifCorrId, fetchCorrIds, terminationReq)

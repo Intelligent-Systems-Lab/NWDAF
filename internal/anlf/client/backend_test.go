@@ -96,55 +96,30 @@ func TestClientReleaseSubscriptionRuntime(t *testing.T) {
 	}
 }
 
-func TestClientPredictUsesSubscriptionID(t *testing.T) {
+func TestClientSyncObservationBindings(t *testing.T) {
 	client := newInterceptedAnlfBackendClient(t)
-	trafficData := []anlf.TrafficObservation{{
-		Ts:          "2025-06-20T10:00:00Z",
-		TotalVol:    1000,
-		UlVol:       400,
-		DlVol:       600,
-		TotalNbPkts: 100,
-		UlNbPkts:    40,
-		DlNbPkts:    60,
-		UlThr:       1.2,
-		DlThr:       2.3,
-		UlPktThr:    0.8,
-		DlPktThr:    1.1,
-	}}
+	request := anlf.SyncObservationBindingsRequest{RuntimeRevision: 1}
 
 	gock.New(testAnlfBackendEndpoint).
-		Post("/subscriptions/sub-123/predict").
-		JSON(anlf.PredictRequest{HistoricalData: trafficData}).
-		Reply(http.StatusOK).
-		JSON(anlf.PredictResponse{
-			PredictedData: []anlf.UeCommunicationPrediction{{
-				Ts: "2025-06-20T10:05:00Z",
-				TrafChar: anlf.TrafficCharacterization{
-					UlVol: 500,
-					DlVol: 700,
-				},
-				Confidence: 80,
-			}},
-		})
+		Put("/subscriptions/sub-123/observation-bindings").
+		JSON(request).
+		Reply(http.StatusNoContent)
 
-	response, err := client.Predict(context.Background(), "sub-123", trafficData)
-	if err != nil {
-		t.Fatalf("Predict() error = %v", err)
-	}
-	if len(response.PredictedData) != 1 {
-		t.Fatalf("prediction count = %d, want 1", len(response.PredictedData))
+	if err := client.SyncObservationBindings(context.Background(), "sub-123", request); err != nil {
+		t.Fatalf("SyncObservationBindings() error = %v", err)
 	}
 }
 
-func TestClientPredictReturnsDecodeError(t *testing.T) {
+func TestClientSendObservationsUsesSourceID(t *testing.T) {
 	client := newInterceptedAnlfBackendClient(t)
+	batch := anlf.ObservationBatch{BatchID: "batch-1", Observations: []anlf.SourceObservation{{}}}
 
 	gock.New(testAnlfBackendEndpoint).
-		Post("/subscriptions/sub-123/predict").
-		Reply(http.StatusOK).
-		BodyString("{not-json")
+		Post("/observation-sources/corr-1/observations").
+		JSON(batch).
+		Reply(http.StatusNoContent)
 
-	if _, err := client.Predict(context.Background(), "sub-123", nil); err == nil {
-		t.Fatal("expected Predict to fail on invalid JSON response")
+	if err := client.SendObservations(context.Background(), "corr-1", batch); err != nil {
+		t.Fatalf("SendObservations() error = %v", err)
 	}
 }

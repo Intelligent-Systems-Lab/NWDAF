@@ -56,6 +56,7 @@ type SmfSubscription struct {
 	// SMF subscription info
 	SmfEndpoint string
 	SmfSubId    string
+	ProfileKey  string
 
 	// Reference counting: multiple NWDAF subscriptions can share one SMF subscription
 	RefCount    int32
@@ -309,30 +310,28 @@ func (c *NWDAFContext) DeleteAdrfSmfInfo(correlationId string) {
 
 // --- NWDAFContext methods for SmfSubscription management ---
 
-// getSmfTargetKey generating unique key for target on specific SMF
-func (c *NWDAFContext) getSmfTargetKey(targetId, smfEndpoint string) string {
-	return targetId + "@" + smfEndpoint
+func (c *NWDAFContext) getSmfTargetProfileKey(targetId, smfEndpoint, profileKey string) string {
+	return targetId + "@" + smfEndpoint + "@" + profileKey
 }
 
-// GetSmfCorrelationId retrieves existing correlation ID for target/endpoint pair
-func (c *NWDAFContext) GetSmfCorrelationId(targetId, smfEndpoint string) (string, bool) {
-	key := c.getSmfTargetKey(targetId, smfEndpoint)
+func (c *NWDAFContext) GetSmfCorrelationIdForProfile(
+	targetId, smfEndpoint, profileKey string,
+) (string, bool) {
+	key := c.getSmfTargetProfileKey(targetId, smfEndpoint, profileKey)
 	if val, ok := c.smfTargetMap.Load(key); ok {
 		return val.(string), true
 	}
 	return "", false
 }
 
-// StoreSmfCorrelationId saves mapping for target/endpoint pair
-func (c *NWDAFContext) StoreSmfCorrelationId(targetId, smfEndpoint, correlationId string) {
-	key := c.getSmfTargetKey(targetId, smfEndpoint)
-	c.smfTargetMap.Store(key, correlationId)
+func (c *NWDAFContext) StoreSmfCorrelationIdForProfile(
+	targetId, smfEndpoint, profileKey, correlationId string,
+) {
+	c.smfTargetMap.Store(c.getSmfTargetProfileKey(targetId, smfEndpoint, profileKey), correlationId)
 }
 
-// RemoveSmfCorrelationId removes mapping for target/endpoint pair
-func (c *NWDAFContext) RemoveSmfCorrelationId(targetId, smfEndpoint string) {
-	key := c.getSmfTargetKey(targetId, smfEndpoint)
-	c.smfTargetMap.Delete(key)
+func (c *NWDAFContext) RemoveSmfCorrelationIdForProfile(targetId, smfEndpoint, profileKey string) {
+	c.smfTargetMap.Delete(c.getSmfTargetProfileKey(targetId, smfEndpoint, profileKey))
 }
 
 // GetOrCreateSmfSubscription gets or creates an SMF subscription
@@ -399,7 +398,7 @@ func (c *NWDAFContext) ReleaseSmfSubscription(
 		// Also cleanup the target mapping
 		// We need to reconstruct the target identifier and endpoint
 		targetId := sub.Identifier()
-		c.RemoveSmfCorrelationId(targetId, sub.SmfEndpoint)
+		c.RemoveSmfCorrelationIdForProfile(targetId, sub.SmfEndpoint, sub.ProfileKey)
 
 		logger.CtxLog.Debugf("DeleteSmfSubscription: corr=%s target=%s", correlationId, targetId)
 		return true, sub
@@ -541,10 +540,20 @@ func (c *NWDAFContext) AddNwdafSubResource(nwdafSubId string, resource NwdafSubR
 	if val, ok := c.nwdafSubResourcesMap.Load(nwdafSubId); ok {
 		resources = val.([]NwdafSubResource)
 	}
+	for _, existing := range resources {
+		if existing.CorrelationId == resource.CorrelationId &&
+			existing.OriginalGroupId == resource.OriginalGroupId {
+			return
+		}
+	}
 	resources = append(resources, resource)
 	c.nwdafSubResourcesMap.Store(nwdafSubId, resources)
 
 	logger.CtxLog.Debugf("AddNwdafSubResource: sub=%s resources=%d", nwdafSubId, len(resources))
+}
+
+func (c *NWDAFContext) SetNwdafSubResources(nwdafSubId string, resources []NwdafSubResource) {
+	c.nwdafSubResourcesMap.Store(nwdafSubId, append([]NwdafSubResource(nil), resources...))
 }
 
 // GetNwdafSubResources retrieves all resources for an NWDAF subscription

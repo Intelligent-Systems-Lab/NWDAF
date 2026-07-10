@@ -2,6 +2,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 	"testing"
@@ -63,6 +64,46 @@ type subscriptionTestApp struct {
 	consumer consumer.ConsumerAPI
 }
 
+type subscriptionTestBackend struct{ applyErr error }
+
+func (b *subscriptionTestBackend) ApplySubscriptionRuntime(
+	_ context.Context,
+	request anlf.ApplySubscriptionRuntimeRequest,
+) (*anlf.ApplySubscriptionRuntimeResponse, error) {
+	if b.applyErr != nil {
+		return nil, b.applyErr
+	}
+	return &anlf.ApplySubscriptionRuntimeResponse{
+		SubscriptionID:       request.Subscription.SubscriptionID,
+		RuntimeState:         "READY",
+		Result:               anlf.ApplyResultActivated,
+		ActiveModelReference: "file:///models/old-model",
+		RuntimeRevision:      2,
+		CollectionRequirements: anlf.CollectionRequirements{
+			SamplingIntervalSeconds: 10,
+			RequiredMeasurements:    []string{"UL_VOLUME", "DL_VOLUME"},
+		},
+	}, nil
+}
+
+func (*subscriptionTestBackend) ReleaseSubscriptionRuntime(context.Context, string) error {
+	return nil
+}
+
+func (*subscriptionTestBackend) SyncObservationBindings(
+	context.Context,
+	string,
+	anlf.SyncObservationBindingsRequest,
+) error {
+	return nil
+}
+
+func (*subscriptionTestBackend) SendObservations(context.Context, string, anlf.ObservationBatch) error {
+	return nil
+}
+
+func (*subscriptionTestBackend) HTTPClient() *http.Client { return http.DefaultClient }
+
 func (a *subscriptionTestApp) SetLogEnable(bool) {}
 
 func (a *subscriptionTestApp) SetLogLevel(string) {}
@@ -109,6 +150,37 @@ func TestNewProcessorUsesInjectedDomainServices(t *testing.T) {
 	}
 	if p.mtlf != mtlfService {
 		t.Fatal("processor should use the injected MTLF service")
+	}
+}
+
+func TestHandleCreateSubscriptionRejectsUnavailableAnalyticsRuntime(t *testing.T) {
+	ctx := setupTestContext()
+	app := &subscriptionTestApp{ctx: context.Background()}
+	backend := &subscriptionTestBackend{applyErr: errors.New("unavailable")}
+	processor := NewProcessor(
+		app,
+		anlf.NewAnlfService(app, backend),
+		mtlf.NewMtlfService(app, nil, nil),
+	)
+	request := &models.NnwdafEventsSubscription{
+		NotificationURI: "http://consumer.example/callback",
+		EvtReq: &models.ReportingInformation{
+			NotifMethod: models.SmfEventExposureNotificationMethod_PERIODIC,
+			RepPeriod:   30,
+		},
+		EventSubscriptions: []models.NwdafEventsSubscriptionEventSubscription{{
+			Event: models.NwdafEvent_UE_COMMUNICATION,
+			TgtUe: &models.TargetUeInformation{Supis: []string{"imsi-1"}},
+		}},
+	}
+
+	response, _, problem := processor.HandleCreateSubscription(request)
+
+	if response != nil || problem == nil || problem.Status != http.StatusServiceUnavailable {
+		t.Fatalf("response=%+v problem=%+v", response, problem)
+	}
+	if ctx.SubscriptionCount() != 0 {
+		t.Fatalf("subscription count = %d, want 0", ctx.SubscriptionCount())
 	}
 }
 
@@ -882,7 +954,11 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 		cfg:      cfg,
 		consumer: consumerClient,
 	}
-	p := NewProcessor(app, anlf.NewAnlfService(app, nil), mtlf.NewMtlfService(app, nil, nil))
+	p := NewProcessor(
+		app,
+		anlf.NewAnlfService(app, &subscriptionTestBackend{}),
+		mtlf.NewMtlfService(app, nil, nil),
+	)
 
 	subscriptionID := "sub-reconcile"
 	ctx.AddSubscription(&nwdaf_context.Subscription{
@@ -908,7 +984,12 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 		10,
 	)
 
-	oldCorrelationID, found := ctx.GetSmfCorrelationId("supi=imsi-old", "http://smf.example")
+	oldProfile := canonicalCollectionProfileKey(10, []string{"TOTAL_VOLUME", "UL_VOLUME", "DL_VOLUME"})
+	oldCorrelationID, found := ctx.GetSmfCorrelationIdForProfile(
+		"supi=imsi-old",
+		"http://smf.example",
+		oldProfile,
+	)
 	if !found {
 		t.Fatal("expected initial SMF correlation for old target")
 	}
@@ -949,22 +1030,19 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 		t.Fatal("expected update response")
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, ok := ctx.GetSmfCorrelationId("supi=imsi-new", "http://smf.example"); ok {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	if _, ok := ctx.GetSmfCorrelationId("supi=imsi-old", "http://smf.example"); ok {
+	newProfile := canonicalCollectionProfileKey(10, []string{"UL_VOLUME", "DL_VOLUME"})
+	if _, ok := ctx.GetSmfCorrelationIdForProfile("supi=imsi-old", "http://smf.example", oldProfile); ok {
 		t.Fatal("old SMF correlation should be removed after update")
 	}
 	if ctx.GetSmfSubscription(oldCorrelationID) != nil {
 		t.Fatal("old SMF subscription should be deleted after update")
 	}
 
-	newCorrelationID, ok := ctx.GetSmfCorrelationId("supi=imsi-new", "http://smf.example")
+	newCorrelationID, ok := ctx.GetSmfCorrelationIdForProfile(
+		"supi=imsi-new",
+		"http://smf.example",
+		newProfile,
+	)
 	if !ok {
 		t.Fatal("new SMF correlation should exist after update")
 	}
@@ -980,11 +1058,11 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 		t.Fatalf("resource supi = %s, want imsi-new", resources[0].Supi)
 	}
 
-	if ctx.GetMlModelInfo(subscriptionID) != nil {
-		t.Fatal("stale ML model info should be cleared during update")
+	if ctx.GetMlModelInfo(subscriptionID) == nil {
+		t.Fatal("model correlation should remain available across runtime reconcile")
 	}
-	if ctx.GetSharedModel("file:///models/old-model") != nil {
-		t.Fatal("stale shared model should be removed during update")
+	if ctx.GetSharedModel("file:///models/old-model") == nil {
+		t.Fatal("active shared model correlation should remain after update")
 	}
 	if subscribeCount != 2 {
 		t.Fatalf("expected two SMF subscribe calls, got %d", subscribeCount)

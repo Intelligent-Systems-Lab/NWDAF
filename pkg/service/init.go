@@ -19,6 +19,7 @@ import (
 	"github.com/free5gc/nwdaf/internal/mtlf"
 	mtlfclient "github.com/free5gc/nwdaf/internal/mtlf/client"
 	mtlfprocessor "github.com/free5gc/nwdaf/internal/mtlf/processor"
+	"github.com/free5gc/nwdaf/internal/notifier"
 	"github.com/free5gc/nwdaf/internal/sbi"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/internal/sbi/processor"
@@ -94,7 +95,8 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 
 	anlfService := anlf.NewAnlfService(nwdaf, anlfBackend)
 	mtlfService := mtlf.NewMtlfService(nwdaf, daisyClient, nwdaf.consumer.AdrfClient())
-	anlfProcessor := anlfprocessor.NewProcessor(anlfService)
+	reportDispatcher := notifier.NewReportDispatcher(nwdaf.ctx, anlfService)
+	anlfProcessor := anlfprocessor.NewProcessor(anlfService, reportDispatcher)
 	mtlfProcessor := mtlfprocessor.NewProcessor(mtlfService)
 
 	// Initialize processor
@@ -211,6 +213,7 @@ func (a *NwdafApp) Start() {
 	if err := a.startOwnedServers(); err != nil {
 		logger.InitLog.Fatalf("Run NWDAF servers failed: %+v", err)
 	}
+	a.processor.StartObservationDelivery()
 
 	// Start MTLF training scheduler only after the owned listeners are ready.
 	a.processor.StartMtlfTrainingScheduler(&a.wg)
@@ -265,9 +268,7 @@ func (a *NwdafApp) stopOwnedServers() {
 func (a *NwdafApp) terminateProcedure() {
 	logger.MainLog.Infof("Terminating NWDAF...")
 
-	if a.nwdafCtx != nil {
-		a.nwdafCtx.StopAllSubscriptionSchedulers()
-	}
+	a.processor.StopObservationDelivery()
 
 	a.stopOwnedServers()
 

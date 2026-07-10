@@ -7,7 +7,6 @@ import (
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
-	"github.com/free5gc/nwdaf/internal/notifier"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -50,6 +49,9 @@ func (p *Processor) HandleCreateSubscription(
 		EvtReq:          req.EvtReq,
 		IsActive:        true,
 	}
+	if problemDetails := p.prepareInitialAnalyticsRuntime(subscription); problemDetails != nil {
+		return nil, "", problemDetails
+	}
 
 	// Populate notification control fields from EvtReq
 	if req.EvtReq != nil {
@@ -66,20 +68,14 @@ func (p *Processor) HandleCreateSubscription(
 	ctx := nwdaf_context.GetSelf()
 	ctx.AddSubscription(subscription)
 
-	// Start notification scheduler for PERIODIC notifications
-	p.startSubscriptionScheduler(subscription)
-
-	// Trigger data collection from source NFs using consumer
-	// Per 3GPP TS 23.288 §6.2: NWDAF invokes Nnf_EventExposure_Subscribe to collect data
-	// Execute asynchronously to avoid blocking the consumer's subscription request
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.ProcLog.Errorf("TriggerDataCollection panic: sub=%s err=%v", subscriptionId, r)
-			}
-		}()
-		p.TriggerDataCollection(req.EventSubscriptions, subscriptionId)
-	}()
+	// Complete source reconciliation and binding sync before accepting the subscription.
+	if collectionErr := p.TriggerDataCollection(req.EventSubscriptions, subscriptionId); collectionErr != nil {
+		subscription.SetActive(false)
+		p.cleanupMlModelState(subscriptionId)
+		p.cleanupDataCollection(subscriptionId)
+		ctx.DeleteSubscription(subscriptionId)
+		return nil, "", analyticsRuntimeUnavailableProblem()
+	}
 
 	// Prepare response
 	response := buildSubscriptionResponse(req, failEventReports)
@@ -128,30 +124,36 @@ func (p *Processor) HandleUpdateSubscription(
 		}
 	}
 
-	// Stop existing scheduler before updating
-	stopSubscriptionScheduler(existing)
-
-	// Reconcile external collection and ML state before storing the replacement.
-	p.cleanupDataCollection(subscriptionId)
-	p.cleanupMlModelState(subscriptionId)
-
 	// Update subscription
 	subscription := buildSubscription(subscriptionId, req)
 	subscription.CreatedAt = existing.CreatedAt
+	existing.SetActive(false)
+	runtimeResponse, err := p.anlf.ApplyInitialSubscriptionRuntime(subscription)
+	if err != nil {
+		existing.SetActive(true)
+		return nil, analyticsRuntimeUnavailableProblem()
+	}
+	subscription.SetRuntime(
+		runtimeResponse.RuntimeRevision,
+		nwdaf_context.CollectionRequirements{
+			SamplingIntervalSeconds: runtimeResponse.CollectionRequirements.SamplingIntervalSeconds,
+			RequiredMeasurements:    runtimeResponse.CollectionRequirements.RequiredMeasurements,
+		},
+		nil,
+	)
 
 	ctx.UpdateSubscription(subscription)
 
-	// Start new scheduler if PERIODIC notification requested
-	p.startSubscriptionScheduler(subscription)
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.ProcLog.Errorf("TriggerDataCollection panic: sub=%s err=%v", subscriptionId, r)
-			}
-		}()
-		p.TriggerDataCollection(req.EventSubscriptions, subscriptionId)
-	}()
+	if collectionErr := p.TriggerDataCollection(req.EventSubscriptions, subscriptionId); collectionErr != nil {
+		if rollbackErr := p.rollbackSubscriptionUpdate(existing); rollbackErr != nil {
+			logger.ProcLog.Errorf(
+				"Subscription update rollback failed: sub=%s err=%v",
+				subscriptionId,
+				rollbackErr,
+			)
+		}
+		return nil, analyticsRuntimeUnavailableProblem()
+	}
 
 	// Prepare response
 	response := buildSubscriptionResponse(req, failEventReports)
@@ -159,6 +161,29 @@ func (p *Processor) HandleUpdateSubscription(
 		subscriptionId, len(failEventReports))
 
 	return response, nil
+}
+
+func (p *Processor) rollbackSubscriptionUpdate(
+	previous *nwdaf_context.Subscription,
+) error {
+	if previous == nil {
+		return fmt.Errorf("previous subscription is required")
+	}
+	response, err := p.anlf.ApplyInitialSubscriptionRuntime(previous)
+	if err != nil {
+		return err
+	}
+	previous.SetRuntime(
+		response.RuntimeRevision,
+		nwdaf_context.CollectionRequirements{
+			SamplingIntervalSeconds: response.CollectionRequirements.SamplingIntervalSeconds,
+			RequiredMeasurements:    response.CollectionRequirements.RequiredMeasurements,
+		},
+		nil,
+	)
+	previous.SetActive(true)
+	nwdaf_context.GetSelf().UpdateSubscription(previous)
+	return p.TriggerDataCollection(previous.EventSubs, previous.ID)
 }
 
 // HandleDeleteSubscription processes subscription deletion requests
@@ -175,13 +200,12 @@ func (p *Processor) HandleDeleteSubscription(subscriptionId string) *models.Prob
 		}
 	}
 
-	// Stop scheduler if running
-	stopSubscriptionScheduler(subscription)
-
-	// Cleanup SMF subscriptions and data collection resources
-	p.cleanupDataCollection(subscriptionId)
+	subscription.SetActive(false)
 
 	p.cleanupMlModelState(subscriptionId)
+
+	// Cleanup SMF subscriptions only after the backend reporting runtime stops.
+	p.cleanupDataCollection(subscriptionId)
 
 	ctx.DeleteSubscription(subscriptionId)
 	logger.ProcLog.Infof("DeleteSubscription: deleted sub=%s", subscriptionId)
@@ -232,48 +256,63 @@ func buildSubscriptionResponse(
 	return response
 }
 
-func stopSubscriptionScheduler(subscription *nwdaf_context.Subscription) {
-	if subscription == nil || subscription.Scheduler == nil {
-		return
-	}
-
-	subscription.Scheduler.Stop()
-	subscription.Scheduler = nil
-}
-
-func (p *Processor) startSubscriptionScheduler(subscription *nwdaf_context.Subscription) {
-	isPeriodic := subscription.NotifMethod == string(models.NwdafEventsSubscriptionNotificationMethod_PERIODIC)
-	if !isPeriodic || subscription.RepPeriod <= 0 {
-		return
-	}
-
-	onComplete := func(subId string, reason string) {
-		if sub := nwdaf_context.GetSelf().GetSubscription(subId); sub != nil {
-			sub.IsActive = false
-		}
-		p.cleanupMlModelState(subId)
-	}
-
-	scheduler := notifier.NewNotificationScheduler(
-		p.nwdaf.CancelContext(),
-		p.config(),
-		p.anlf.AnlfBackend(),
-		subscription.ID,
-		subscription.NotificationURI,
-		subscription.RepPeriod,
-		subscription.EventSubs,
-		subscription.NotifCorrId,
-		subscription.MaxReportNbr,
-		subscription.MonDur,
-		onComplete,
-	)
-	scheduler.Start()
-	subscription.Scheduler = scheduler
-}
-
 func (p *Processor) cleanupMlModelState(subscriptionId string) {
 	if err := p.anlf.ReleaseSubscriptionRuntime(subscriptionId); err != nil {
 		logger.ProcLog.Warnf("ReleaseAnlfRuntime failed: sub=%s err=%v", subscriptionId, err)
+	}
+}
+
+func (p *Processor) prepareInitialAnalyticsRuntime(
+	subscription *nwdaf_context.Subscription,
+) *models.ProblemDetails {
+	var event models.NwdafEvent
+	for i := range subscription.EventSubs {
+		eventSubscription := &subscription.EventSubs[i]
+		if eventSubscription.Event == models.NwdafEvent_UE_COMMUNICATION {
+			event = eventSubscription.Event
+			break
+		}
+	}
+	if event == "" {
+		return nil
+	}
+	cfg := p.config()
+	mtlfEndpoint := ""
+	if cfg != nil && cfg.Configuration != nil && cfg.Configuration.ExternalMtlf != nil &&
+		len(cfg.Configuration.ExternalMtlf.Endpoints) > 0 {
+		mtlfEndpoint = cfg.Configuration.ExternalMtlf.Endpoints[0]
+	}
+	nwdaf_context.GetSelf().SetMlModelInfo(
+		subscription.ID,
+		nwdaf_context.NewMlModelInfo(event, mtlfEndpoint),
+	)
+	response, err := p.anlf.ApplyInitialSubscriptionRuntime(subscription)
+	if err != nil {
+		if releaseErr := p.anlf.ReleaseSubscriptionRuntime(subscription.ID); releaseErr != nil {
+			logger.ProcLog.Warnf(
+				"Release failed backend runtime after initial apply error: sub=%s err=%v",
+				subscription.ID,
+				releaseErr,
+			)
+		}
+		return analyticsRuntimeUnavailableProblem()
+	}
+	subscription.SetRuntime(
+		response.RuntimeRevision,
+		nwdaf_context.CollectionRequirements{
+			SamplingIntervalSeconds: response.CollectionRequirements.SamplingIntervalSeconds,
+			RequiredMeasurements:    response.CollectionRequirements.RequiredMeasurements,
+		},
+		nil,
+	)
+	return nil
+}
+
+func analyticsRuntimeUnavailableProblem() *models.ProblemDetails {
+	return &models.ProblemDetails{
+		Status: http.StatusServiceUnavailable,
+		Title:  http.StatusText(http.StatusServiceUnavailable),
+		Detail: "UE_COMMUNICATION analytics runtime is unavailable",
 	}
 }
 
@@ -781,7 +820,6 @@ func (p *Processor) isCommunRelated(eventSub *models.NwdafEventsSubscriptionEven
 // This method is called when a NWDAF subscription is deleted
 func (p *Processor) cleanupDataCollection(subscriptionId string) {
 	ctx := nwdaf_context.GetSelf()
-	consumer := p.nwdaf.Consumer()
 
 	// Get all resources tracked for this NWDAF subscription
 	resources := ctx.GetNwdafSubResources(subscriptionId)
@@ -793,26 +831,7 @@ func (p *Processor) cleanupDataCollection(subscriptionId string) {
 
 	// Release each SMF subscription
 	for _, res := range resources {
-		shouldDelete, smfSub := ctx.ReleaseSmfSubscription(res.CorrelationId, subscriptionId)
-
-		if shouldDelete && smfSub != nil {
-			// Last reference - clean up traffic data bucket and ADRF info
-			ctx.DeleteTrafficBucket(res.CorrelationId)
-			ctx.DeleteAdrfSmfInfo(res.CorrelationId)
-
-			// Unsubscribe from SMF
-			if consumer != nil {
-				_, smfSubId, _ := smfSub.GetInfo()
-				err := consumer.UnsubscribeFromSmf(p.nwdaf.CancelContext(), res.SmfEndpoint, smfSubId)
-				if err != nil {
-					logger.ProcLog.Errorf("DeleteSmfSubscription failed: corr=%s sub=%s err=%v",
-						res.CorrelationId, smfSubId, err)
-				} else {
-					logger.ProcLog.Infof("DeleteSmfSubscription: deleted corr=%s sub=%s",
-						res.CorrelationId, smfSubId)
-				}
-			}
-		}
+		p.releaseDataCollectionResource(subscriptionId, res)
 	}
 
 	// Delete cleanup tracking for this subscription
@@ -820,4 +839,40 @@ func (p *Processor) cleanupDataCollection(subscriptionId string) {
 
 	logger.ProcLog.Infof("CleanupDataCollection: completed sub=%s resources=%d",
 		subscriptionId, len(resources))
+}
+
+func (p *Processor) releaseDataCollectionResource(
+	subscriptionID string,
+	resource nwdaf_context.NwdafSubResource,
+) {
+	ctx := nwdaf_context.GetSelf()
+	shouldDelete, smfSubscription := ctx.ReleaseSmfSubscription(resource.CorrelationId, subscriptionID)
+	if !shouldDelete || smfSubscription == nil {
+		return
+	}
+	ctx.DeleteTrafficBucket(resource.CorrelationId)
+	ctx.DeleteAdrfSmfInfo(resource.CorrelationId)
+	consumer := p.nwdaf.Consumer()
+	if consumer == nil {
+		return
+	}
+	_, smfSubscriptionID, _ := smfSubscription.GetInfo()
+	if err := consumer.UnsubscribeFromSmf(
+		p.nwdaf.CancelContext(),
+		resource.SmfEndpoint,
+		smfSubscriptionID,
+	); err != nil {
+		logger.ProcLog.Errorf(
+			"DeleteSmfSubscription failed: corr=%s sub=%s err=%v",
+			resource.CorrelationId,
+			smfSubscriptionID,
+			err,
+		)
+		return
+	}
+	logger.ProcLog.Infof(
+		"DeleteSmfSubscription: deleted corr=%s sub=%s",
+		resource.CorrelationId,
+		smfSubscriptionID,
+	)
 }

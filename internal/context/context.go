@@ -87,6 +87,8 @@ type NWDAFContext struct {
 
 // Subscription represents an individual event subscription
 type Subscription struct {
+	runtimeMu sync.Mutex
+
 	ID              string
 	NotificationURI string
 	NotifCorrId     string
@@ -105,8 +107,98 @@ type Subscription struct {
 	// Status
 	IsActive bool // Whether subscription is active
 
-	// Scheduler reference (managed externally to avoid import cycle)
-	Scheduler interface{ Stop() }
+	RuntimeRevision        int64
+	CollectionRequirements CollectionRequirements
+	ObservationSourceIDs   []string
+	deliveredReportIDs     map[string]struct{}
+	inFlightReportIDs      map[string]struct{}
+	lastReportSequence     int64
+}
+
+type CollectionRequirements struct {
+	SamplingIntervalSeconds int
+	RequiredMeasurements    []string
+}
+
+func (s *Subscription) SetRuntime(
+	revision int64,
+	requirements CollectionRequirements,
+	sourceIDs []string,
+) {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	s.RuntimeRevision = revision
+	s.CollectionRequirements = requirements
+	s.ObservationSourceIDs = append([]string(nil), sourceIDs...)
+}
+
+func (s *Subscription) RuntimeSnapshot() (int64, CollectionRequirements, []string, bool) {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	return s.RuntimeRevision, CollectionRequirements{
+		SamplingIntervalSeconds: s.CollectionRequirements.SamplingIntervalSeconds,
+		RequiredMeasurements:    append([]string(nil), s.CollectionRequirements.RequiredMeasurements...),
+	}, append([]string(nil), s.ObservationSourceIDs...), s.IsActive
+}
+
+func (s *Subscription) CollectionRequirementsSnapshot() CollectionRequirements {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	return CollectionRequirements{
+		SamplingIntervalSeconds: s.CollectionRequirements.SamplingIntervalSeconds,
+		RequiredMeasurements:    append([]string(nil), s.CollectionRequirements.RequiredMeasurements...),
+	}
+}
+
+func (s *Subscription) SetActive(active bool) {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	s.IsActive = active
+}
+
+func (s *Subscription) BeginReport(
+	reportID string,
+	revision, sequence int64,
+) (delivered, inFlight, stale bool) {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	if !s.IsActive || revision != s.RuntimeRevision || sequence <= 0 {
+		return false, false, true
+	}
+	if s.deliveredReportIDs == nil {
+		s.deliveredReportIDs = make(map[string]struct{})
+		s.inFlightReportIDs = make(map[string]struct{})
+	}
+	if _, ok := s.deliveredReportIDs[reportID]; ok {
+		return true, false, false
+	}
+	if _, ok := s.inFlightReportIDs[reportID]; ok {
+		return false, true, false
+	}
+	if sequence <= s.lastReportSequence {
+		return false, false, true
+	}
+	s.inFlightReportIDs[reportID] = struct{}{}
+	return false, false, false
+}
+
+func (s *Subscription) CompleteReport(reportID string, sequence int64, delivered bool) {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+	delete(s.inFlightReportIDs, reportID)
+	if !delivered {
+		return
+	}
+	s.deliveredReportIDs[reportID] = struct{}{}
+	if sequence > s.lastReportSequence {
+		s.lastReportSequence = sequence
+	}
+	const completedReportWindow = 256
+	if len(s.deliveredReportIDs) > completedReportWindow {
+		// IDs are deterministic and old retries are bounded by PyAnLF, so clearing
+		// the bounded process-local cache is preferable to unbounded growth.
+		s.deliveredReportIDs = map[string]struct{}{reportID: {}}
+	}
 }
 
 // NewSubscriptionId generates a new unique subscription ID
@@ -174,33 +266,6 @@ func (c *NWDAFContext) GetAllSubscriptions() []*Subscription {
 		subs = append(subs, sub)
 	}
 	return subs
-}
-
-// StopAllSubscriptionSchedulers stops every active subscription scheduler.
-// The stop calls run outside the context lock so scheduler shutdown can block
-// without stalling subscription reads or updates.
-func (c *NWDAFContext) StopAllSubscriptionSchedulers() int {
-	c.mu.Lock()
-	schedulers := make([]interface{ Stop() }, 0, len(c.subscriptions))
-	for _, sub := range c.subscriptions {
-		if sub.Scheduler == nil {
-			continue
-		}
-
-		schedulers = append(schedulers, sub.Scheduler)
-		sub.Scheduler = nil
-	}
-	c.mu.Unlock()
-
-	for _, scheduler := range schedulers {
-		scheduler.Stop()
-	}
-
-	if len(schedulers) > 0 {
-		logger.CtxLog.Infof("Stopped %d subscription schedulers", len(schedulers))
-	}
-
-	return len(schedulers)
 }
 
 // SubscriptionCount returns the number of active subscriptions

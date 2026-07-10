@@ -45,19 +45,19 @@ type Info struct {
 }
 
 type Configuration struct {
-	Mongodb            *Mongodb               `yaml:"mongodb,omitempty"`
-	NwdafName          string                 `yaml:"nwdafName,omitempty"`
-	Sbi                *Sbi                   `yaml:"sbi,omitempty"`
-	NrfUri             string                 `yaml:"nrfUri,omitempty"`
-	SupportedAnalytics []string               `yaml:"supportedAnalytics,omitempty"`
-	Smf                *SmfConfig             `yaml:"smf,omitempty"`
-	Anlf               *AnlfConfig            `yaml:"anlf,omitempty"`
-	ExternalMtlf       *ExternalMtlfConfig    `yaml:"externalMtlf,omitempty"`
-	AnlfBackend        *AnlfBackendConfig     `yaml:"anlfBackend,omitempty"`
-	GroupMembership    *GroupMembershipConfig `yaml:"groupMembership,omitempty"`
-	Mtlf               *MtlfConfig            `yaml:"mtlf,omitempty"`
-	Analytics          *AnalyticsConfig       `yaml:"analytics,omitempty"`
-	Adrf               *AdrfConfig            `yaml:"adrf,omitempty"`
+	Mongodb              *Mongodb                    `yaml:"mongodb,omitempty"`
+	NwdafName            string                      `yaml:"nwdafName,omitempty"`
+	Sbi                  *Sbi                        `yaml:"sbi,omitempty"`
+	NrfUri               string                      `yaml:"nrfUri,omitempty"`
+	SupportedAnalytics   []string                    `yaml:"supportedAnalytics,omitempty"`
+	Smf                  *SmfConfig                  `yaml:"smf,omitempty"`
+	Anlf                 *AnlfConfig                 `yaml:"anlf,omitempty"`
+	ExternalMtlf         *ExternalMtlfConfig         `yaml:"externalMtlf,omitempty"`
+	AnlfBackend          *AnlfBackendConfig          `yaml:"anlfBackend,omitempty"`
+	GroupMembership      *GroupMembershipConfig      `yaml:"groupMembership,omitempty"`
+	Mtlf                 *MtlfConfig                 `yaml:"mtlf,omitempty"`
+	GroundTruthRetention *GroundTruthRetentionConfig `yaml:"groundTruthRetention,omitempty"`
+	Adrf                 *AdrfConfig                 `yaml:"adrf,omitempty"`
 }
 
 // GroupMembershipConfig maps Group IDs to SUPI lists (substitute for UDM)
@@ -167,8 +167,55 @@ func (m *ModelParams) RingBufferSizeOrDefault() int {
 
 // AnlfBackendConfig configures the downstream AnLF backend used by NWDAF.
 type AnlfBackendConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	Endpoint string `yaml:"endpoint,omitempty"`
+	Enabled             bool                       `yaml:"enabled"`
+	Endpoint            string                     `yaml:"endpoint,omitempty"`
+	ObservationDelivery *ObservationDeliveryConfig `yaml:"observationDelivery,omitempty"`
+}
+
+type GroundTruthRetentionConfig struct {
+	RingBufferSize int `yaml:"ringBufferSize,omitempty"`
+}
+
+func (c *GroundTruthRetentionConfig) RingBufferSizeOrDefault() int {
+	if c != nil && c.RingBufferSize > 0 {
+		return c.RingBufferSize
+	}
+	return 50
+}
+
+type ObservationDeliveryConfig struct {
+	QueueCapacity  int `yaml:"queueCapacity,omitempty"`
+	RequestTimeout int `yaml:"requestTimeout,omitempty"`
+	MaxRetries     int `yaml:"maxRetries,omitempty"`
+	RetryInterval  int `yaml:"retryInterval,omitempty"`
+}
+
+func (c *ObservationDeliveryConfig) QueueCapacityOrDefault() int {
+	if c != nil && c.QueueCapacity > 0 {
+		return c.QueueCapacity
+	}
+	return 1024
+}
+
+func (c *ObservationDeliveryConfig) RequestTimeoutOrDefault() int {
+	if c != nil && c.RequestTimeout > 0 {
+		return c.RequestTimeout
+	}
+	return 5
+}
+
+func (c *ObservationDeliveryConfig) MaxRetriesOrDefault() int {
+	if c != nil && c.MaxRetries > 0 {
+		return c.MaxRetries
+	}
+	return 3
+}
+
+func (c *ObservationDeliveryConfig) RetryIntervalOrDefault() int {
+	if c != nil && c.RetryInterval > 0 {
+		return c.RetryInterval
+	}
+	return 1
 }
 
 // MtlfConfig configuration for 1st-party MTLF / Daisy FL framework integration
@@ -610,9 +657,6 @@ func (c *Configuration) validate() error {
 	} else {
 		c.SupportedAnalytics = normalizedAnalytics
 	}
-	if validateErr := validateAnalyticsConfig(c.Analytics); validateErr != nil {
-		errs = append(errs, validateErr)
-	}
 	if c.Smf != nil && c.Smf.Enabled {
 		if validateErr := c.Smf.validate(); validateErr != nil {
 			errs = append(errs, validateErr)
@@ -637,6 +681,9 @@ func (c *Configuration) validate() error {
 		if validateErr := c.AnlfBackend.validate(); validateErr != nil {
 			errs = append(errs, validateErr)
 		}
+	}
+	if c.GroundTruthRetention != nil && c.GroundTruthRetention.RingBufferSize < 0 {
+		errs = append(errs, errors.New("groundTruthRetention.ringBufferSize must be zero or positive"))
 	}
 	if c.ExternalMtlf != nil && c.ExternalMtlf.Enabled {
 		if validateErr := c.ExternalMtlf.validate(); validateErr != nil {
@@ -784,7 +831,25 @@ func (s *SmfConfig) validate() error {
 }
 
 func (m *AnlfBackendConfig) validate() error {
-	return validateHTTPURL("anlfBackend.endpoint", m.Endpoint)
+	var errs []error
+	if err := validateHTTPURL("anlfBackend.endpoint", m.Endpoint); err != nil {
+		errs = append(errs, err)
+	}
+	if delivery := m.ObservationDelivery; delivery != nil {
+		if delivery.QueueCapacity < 0 {
+			errs = append(errs, errors.New("anlfBackend.observationDelivery.queueCapacity must be positive"))
+		}
+		if delivery.RequestTimeout < 0 {
+			errs = append(errs, errors.New("anlfBackend.observationDelivery.requestTimeout must be positive"))
+		}
+		if delivery.MaxRetries < 0 {
+			errs = append(errs, errors.New("anlfBackend.observationDelivery.maxRetries must be zero or positive"))
+		}
+		if delivery.RetryInterval < 0 {
+			errs = append(errs, errors.New("anlfBackend.observationDelivery.retryInterval must be positive"))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (m *ExternalMtlfConfig) validate() error {
@@ -869,24 +934,6 @@ func normalizeSupportedAnalytics(values []string) ([]string, error) {
 	}
 
 	return normalized, nil
-}
-
-func validateAnalyticsConfig(cfg *AnalyticsConfig) error {
-	if cfg == nil || cfg.UeCommunication == nil {
-		return nil
-	}
-
-	inputWindow := cfg.UeCommunication.InputWindowOrDefault()
-	ringBufferSize := cfg.UeCommunication.RingBufferSizeOrDefault()
-	if inputWindow > ringBufferSize {
-		return fmt.Errorf(
-			"analytics.ueCommunication.inputWindow (%d) must be less than or equal to ringBufferSize (%d)",
-			inputWindow,
-			ringBufferSize,
-		)
-	}
-
-	return nil
 }
 
 func validateHTTPURL(fieldName string, raw string) error {
@@ -1138,26 +1185,12 @@ func (c *Config) GetMtlfServerPort() int {
 	return c.Configuration.Mtlf.Server.Port
 }
 
-// GetSamplingInterval returns the configured UE communication sampling interval,
-// or 0 if not configured (caller should skip snapping).
-func (c *Config) GetSamplingInterval() int {
-	if c == nil || c.Configuration == nil ||
-		c.Configuration.Analytics == nil ||
-		c.Configuration.Analytics.UeCommunication == nil {
-		return 0
-	}
-	return c.Configuration.Analytics.UeCommunication.SamplingIntervalOrDefault()
-}
-
-// GetRingBufferSize returns the configured in-memory ring buffer size for UE communication,
-// or the default (50) if not configured.
+// GetRingBufferSize returns transitional Go-side ground-truth retention capacity.
 func (c *Config) GetRingBufferSize() int {
-	if c == nil || c.Configuration == nil ||
-		c.Configuration.Analytics == nil ||
-		c.Configuration.Analytics.UeCommunication == nil {
+	if c == nil || c.Configuration == nil {
 		return 50
 	}
-	return c.Configuration.Analytics.UeCommunication.RingBufferSizeOrDefault()
+	return c.Configuration.GroundTruthRetention.RingBufferSizeOrDefault()
 }
 
 func (c *Config) GetNwdafName() string {

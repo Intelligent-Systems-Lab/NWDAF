@@ -10,6 +10,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/mongo"
 
+	"github.com/free5gc/nwdaf/internal/anlf"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/openapi/models"
@@ -158,15 +159,20 @@ func (p *Processor) HandleUpfNotification(notif *UpfNotificationData) error {
 
 	processed := 0
 	malformed := 0
+	observations := make([]anlf.SourceObservation, 0)
 
 	// Process each notification item into unified storage
 	for i := range notif.NotificationItems {
 		item := &notif.NotificationItems[i]
-		itemProcessed, itemMalformed := p.processUpfNotificationItemUnified(ctx, bucket, item)
+		itemProcessed, itemMalformed, itemObservations := p.processUpfNotificationItemUnified(ctx, bucket, item)
 		if itemProcessed {
 			processed++
 		}
 		malformed += itemMalformed
+		observations = append(observations, itemObservations...)
+	}
+	if len(observations) > 0 && !p.anlf.EnqueueObservations(correlationId, observations) {
+		logger.ProcLog.Warnf("UpfNotification: observation enqueue failed corr=%s", correlationId)
 	}
 
 	// Forward to ADRF buffer if configured.
@@ -200,7 +206,7 @@ func (p *Processor) processUpfNotificationItemUnified(
 	ctx *nwdaf_context.NWDAFContext,
 	bucket *nwdaf_context.TrafficDataBucket,
 	item *UpfNotificationItem,
-) (bool, int) {
+) (bool, int, []anlf.SourceObservation) {
 	cfg := p.config()
 
 	// Get IP address (required field per TS 29.564)
@@ -210,7 +216,7 @@ func (p *Processor) processUpfNotificationItemUnified(
 	}
 	if ipAddr == "" {
 		logger.ProcLog.Warnf("UpfNotificationItem: missing ip corr=%s", bucket.CorrelationId)
-		return false, 0
+		return false, 0, nil
 	}
 
 	// Get or create TrafficData for this IP
@@ -249,6 +255,7 @@ func (p *Processor) processUpfNotificationItemUnified(
 
 	// Process Measurements and save to MongoDB
 	malformed := 0
+	observations := make([]anlf.SourceObservation, 0, len(item.UserDataUsageMeasurements))
 	for _, usage := range item.UserDataUsageMeasurements {
 		dataPoint := nwdaf_context.UpfDataPoint{
 			Timestamp: measurementTs,
@@ -339,10 +346,30 @@ func (p *Processor) processUpfNotificationItemUnified(
 			drop := len(data.RawUpfData) - ringBufferSize
 			data.RawUpfData = data.RawUpfData[drop:]
 		}
+		observation := anlf.SourceObservation{
+			ObservedAt:               measurementTs,
+			IPv4Address:              ipAddr,
+			Supi:                     item.Supi,
+			Dnn:                      item.Dnn,
+			TotalVolume:              float64(dataPoint.TotalVolume),
+			UplinkVolume:             float64(dataPoint.UlVolume),
+			DownlinkVolume:           float64(dataPoint.DlVolume),
+			TotalPacketCount:         float64(dataPoint.TotalNbOfPackets),
+			UplinkPacketCount:        float64(dataPoint.UlNbOfPackets),
+			DownlinkPacketCount:      float64(dataPoint.DlNbOfPackets),
+			UplinkThroughput:         dataPoint.UlThroughput,
+			DownlinkThroughput:       dataPoint.DlThroughput,
+			UplinkPacketThroughput:   dataPoint.UlPacketThroughput,
+			DownlinkPacketThroughput: dataPoint.DlPacketThroughput,
+		}
+		if item.Snssai != nil {
+			observation.Snssai = &anlf.ObservationSnssai{Sst: item.Snssai.Sst, Sd: item.Snssai.Sd}
+		}
+		observations = append(observations, observation)
 	}
 
 	data.LastUpdate = measurementTs
-	return true, malformed
+	return true, malformed, observations
 }
 
 func (p *Processor) insertUpfTrafficRecord(

@@ -79,6 +79,39 @@ func (c *Client) ApplySubscriptionRuntime(
 	return &response, nil
 }
 
+func (c *Client) SyncObservationBindings(
+	ctx context.Context,
+	subscriptionID string,
+	request anlf.SyncObservationBindingsRequest,
+) error {
+	return c.sendJSON(
+		ctx,
+		http.MethodPut,
+		c.subscriptionURL(subscriptionID, "/observation-bindings"),
+		request,
+		http.StatusNoContent,
+		10*time.Second,
+		"sync AnLF observation bindings",
+	)
+}
+
+func (c *Client) SendObservations(
+	ctx context.Context,
+	sourceID string,
+	batch anlf.ObservationBatch,
+) error {
+	requestURL := c.endpoint + "/observation-sources/" + url.PathEscape(sourceID) + "/observations"
+	return c.sendJSON(
+		ctx,
+		http.MethodPost,
+		requestURL,
+		batch,
+		http.StatusNoContent,
+		10*time.Second,
+		"send AnLF observations",
+	)
+}
+
 func (c *Client) ReleaseSubscriptionRuntime(ctx context.Context, subscriptionID string) error {
 	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "AnLF backend runtime release")
 	if err != nil {
@@ -113,59 +146,42 @@ func (c *Client) ReleaseSubscriptionRuntime(ctx context.Context, subscriptionID 
 	return nil
 }
 
-// Predict calls the AnLF backend to get traffic predictions.
-func (c *Client) Predict(
-	ctx context.Context,
-	subscriptionID string,
-	trafficData []anlf.TrafficObservation,
-) (*anlf.PredictResponse, error) {
-	logger.AnlfLog.Debugf("Calling AnLF backend: subscription=%s dataPoints=%d",
-		subscriptionID, len(trafficData))
-
-	request := anlf.PredictRequest{
-		HistoricalData: trafficData,
-	}
-
-	jsonData, err := json.Marshal(request)
+func (c *Client) sendJSON(
+	parent context.Context,
+	method string,
+	requestURL string,
+	body any,
+	expectedStatus int,
+	timeout time.Duration,
+	operation string,
+) error {
+	jsonData, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return fmt.Errorf("%s: marshal request: %w", operation, err)
 	}
-
-	requestURL := c.subscriptionURL(subscriptionID, "/predict")
-
-	ctx, cancel, err := timeoutContextFromParent(ctx, 10*time.Second, "AnLF backend prediction")
+	ctx, cancel, err := timeoutContextFromParent(parent, timeout, operation)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, method, requestURL, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return fmt.Errorf("%s: create request: %w", operation, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request to AnLF backend: %w", err)
+		return fmt.Errorf("%s: %w", operation, err)
 	}
 	defer func() {
 		if closeErr := resp.Body.Close(); closeErr != nil {
 			logger.AnlfLog.Debugf("failed to close response body: %v", closeErr)
 		}
 	}()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("AnLF backend prediction failed: status=%d", resp.StatusCode)
+	if resp.StatusCode != expectedStatus {
+		return fmt.Errorf("%s: status=%d", operation, resp.StatusCode)
 	}
-
-	var response anlf.PredictResponse
-	if decodeErr := json.NewDecoder(resp.Body).Decode(&response); decodeErr != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", decodeErr)
-	}
-
-	logger.AnlfLog.Debugf("AnLF backend returned %d predictions", len(response.PredictedData))
-	return &response, nil
+	return nil
 }
 
 func (c *Client) subscriptionURL(subscriptionID, suffix string) string {

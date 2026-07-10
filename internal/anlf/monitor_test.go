@@ -53,15 +53,27 @@ func setTestMonitorConfig(
 					Enabled: true,
 				},
 			},
-			Analytics: &factory.AnalyticsConfig{
-				UeCommunication: &factory.ModelParams{
-					SamplingInterval: samplingInterval,
-				},
-			},
 		},
 	}
+	_ = samplingInterval
 
 	return cfg, cfg.Configuration.Mtlf.AccuracyMonitor
+}
+
+func setRuntimeSampling(
+	ctx *nwdaf_context.NWDAFContext,
+	subscriptionID string,
+	samplingInterval int,
+) {
+	subscription := ctx.GetSubscription(subscriptionID)
+	if subscription == nil {
+		subscription = &nwdaf_context.Subscription{ID: subscriptionID, IsActive: true}
+		ctx.AddSubscription(subscription)
+	}
+	subscription.SetRuntime(1, nwdaf_context.CollectionRequirements{
+		SamplingIntervalSeconds: samplingInterval,
+		RequiredMeasurements:    []string{"UL_VOLUME", "DL_VOLUME"},
+	}, nil)
 }
 
 func addGroundTruthRecord(
@@ -365,6 +377,8 @@ func TestRecordScopedPair_TracksWindowAndSubID(t *testing.T) {
 
 func TestCheckModelAccuracy_LegacyDeviationUsesAllMatchedPairs(t *testing.T) {
 	ctx := setupCtx(t)
+	setRuntimeSampling(ctx, "sub-1", 5)
+	setRuntimeSampling(ctx, "sub-2", 5)
 	cfg, accCfg := setTestMonitorConfig(t, 5)
 	accCfg.MinSamples = 1
 
@@ -440,6 +454,7 @@ func TestCheckModelAccuracy_LegacyDeviationUsesAllMatchedPairs(t *testing.T) {
 
 func TestCheckModelAccuracy_MinSamplesSkipsCallbacks(t *testing.T) {
 	ctx := setupCtx(t)
+	setRuntimeSampling(ctx, "sub-1", 5)
 	cfg, accCfg := setTestMonitorConfig(t, 5)
 	accCfg.MinSamples = 2
 
@@ -482,6 +497,9 @@ func TestCheckModelAccuracy_MinSamplesSkipsCallbacks(t *testing.T) {
 
 func TestCheckModelAccuracy_MinSamplesAppliesPerScope(t *testing.T) {
 	ctx := setupCtx(t)
+	setRuntimeSampling(ctx, "sub-a1", 5)
+	setRuntimeSampling(ctx, "sub-a2", 5)
+	setRuntimeSampling(ctx, "sub-b1", 5)
 	cfg, accCfg := setTestMonitorConfig(t, 5)
 	accCfg.MinSamples = 2
 
@@ -557,6 +575,7 @@ func TestCheckModelAccuracy_MinSamplesAppliesPerScope(t *testing.T) {
 
 func TestCheckModelAccuracy_LegacyDeviationIndependentOfPersistence(t *testing.T) {
 	ctx := setupCtx(t)
+	setRuntimeSampling(ctx, "sub-1", 5)
 	cfg, accCfg := setTestMonitorConfig(t, 5)
 	accCfg.MinSamples = 1
 
@@ -667,6 +686,7 @@ func TestRunModelAccuracyLoop_ZeroWarmupKeepsPredictionsUntilTicker(t *testing.T
 
 func TestLookupGroundTruth_RejectsAdjacentSlotWithinLegacyNearestWindow(t *testing.T) {
 	ctx := setupCtx(t)
+	setRuntimeSampling(ctx, "sub-1", 10)
 	cfg, _ := setTestMonitorConfig(t, 10)
 
 	service := NewAnlfService(testNwdafApp{ctx: context.Background(), cfg: cfg}, nil)
@@ -686,7 +706,8 @@ func TestLookupGroundTruth_RejectsAdjacentSlotWithinLegacyNearestWindow(t *testi
 }
 
 func TestCheckModelAccuracy_RetriesPendingPredictionBeforeDiscard(t *testing.T) {
-	setupCtx(t)
+	ctx := setupCtx(t)
+	setRuntimeSampling(ctx, "sub-1", 5)
 	cfg, accCfg := setTestMonitorConfig(t, 5)
 	accCfg.CheckInterval = 20
 	accCfg.MinSamples = 1
@@ -722,6 +743,7 @@ func TestCheckModelAccuracy_RetriesPendingPredictionBeforeDiscard(t *testing.T) 
 
 func TestCheckModelAccuracy_LateGroundTruthMatchesOnLaterRound(t *testing.T) {
 	ctx := setupCtx(t)
+	setRuntimeSampling(ctx, "sub-1", 5)
 	cfg, accCfg := setTestMonitorConfig(t, 5)
 	accCfg.CheckInterval = 20
 	accCfg.MinSamples = 1

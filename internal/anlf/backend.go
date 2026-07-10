@@ -2,9 +2,19 @@ package anlf
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"time"
 
 	"github.com/free5gc/openapi/models"
+)
+
+var (
+	ErrSubscriptionNotFound    = errors.New("subscription not found")
+	ErrStaleAnalyticsReport    = errors.New("stale analytics report")
+	ErrInvalidAnalyticsReport  = errors.New("invalid analytics report")
+	ErrExternalDelivery        = errors.New("external analytics delivery failed")
+	ErrAnalyticsReportInFlight = errors.New("analytics report delivery in progress")
 )
 
 // AnlfBackendAPI defines the downstream AnLF backend integration seam owned by AnLF.
@@ -14,7 +24,12 @@ type AnlfBackendAPI interface {
 		request ApplySubscriptionRuntimeRequest,
 	) (*ApplySubscriptionRuntimeResponse, error)
 	ReleaseSubscriptionRuntime(ctx context.Context, subscriptionID string) error
-	Predict(ctx context.Context, subscriptionID string, trafficData []TrafficObservation) (*PredictResponse, error)
+	SyncObservationBindings(
+		ctx context.Context,
+		subscriptionID string,
+		request SyncObservationBindingsRequest,
+	) error
+	SendObservations(ctx context.Context, sourceID string, batch ObservationBatch) error
 	HTTPClient() *http.Client
 }
 
@@ -40,8 +55,9 @@ type MLEventNotification struct {
 }
 
 type ApplySubscriptionRuntimeRequest struct {
-	Subscription     SubscriptionRuntimeContext `json:"subscription"`
-	ProvisionContext *ProvisionContext          `json:"provision_context,omitempty"`
+	Subscription      SubscriptionRuntimeContext `json:"subscription"`
+	ProvisionContext  *ProvisionContext          `json:"provision_context,omitempty"`
+	ReportCallbackURI string                     `json:"report_callback_uri"`
 }
 
 type ApplyResult string
@@ -56,49 +72,92 @@ const (
 )
 
 type ApplySubscriptionRuntimeResponse struct {
-	SubscriptionID       string      `json:"subscription_id"`
-	RuntimeState         string      `json:"runtime_state"`
-	Result               ApplyResult `json:"result"`
-	FallbackApplied      bool        `json:"fallback_applied"`
-	ActiveModelReference string      `json:"active_model_reference,omitempty"`
-	Message              string      `json:"message,omitempty"`
+	SubscriptionID         string                 `json:"subscription_id"`
+	RuntimeState           string                 `json:"runtime_state"`
+	Result                 ApplyResult            `json:"result"`
+	FallbackApplied        bool                   `json:"fallback_applied"`
+	ActiveModelReference   string                 `json:"active_model_reference,omitempty"`
+	Message                string                 `json:"message,omitempty"`
+	RuntimeRevision        int64                  `json:"runtime_revision"`
+	CollectionRequirements CollectionRequirements `json:"collection_requirements"`
 }
 
-// TrafficCharacterization represents predicted traffic volume data.
-type TrafficCharacterization struct {
-	UlVol int64 `json:"ul_vol"`
-	DlVol int64 `json:"dl_vol"`
+type CollectionRequirements struct {
+	SamplingIntervalSeconds int      `json:"sampling_interval_seconds"`
+	RequiredMeasurements    []string `json:"required_measurements"`
 }
 
-// TrafficObservation represents a single traffic observation point for ML prediction.
-// Fields match the backend feature extraction order (10 features).
-type TrafficObservation struct {
-	Ts          string  `json:"ts"`
-	TotalVol    float64 `json:"total_vol"`
-	UlVol       float64 `json:"ul_vol"`
-	DlVol       float64 `json:"dl_vol"`
-	TotalNbPkts float64 `json:"total_nb_pkts"`
-	UlNbPkts    float64 `json:"ul_nb_pkts"`
-	DlNbPkts    float64 `json:"dl_nb_pkts"`
-	UlThr       float64 `json:"ul_thr"`
-	DlThr       float64 `json:"dl_thr"`
-	UlPktThr    float64 `json:"ul_pkt_thr"`
-	DlPktThr    float64 `json:"dl_pkt_thr"`
+type ObservationSource struct {
+	SourceType string `json:"source_type"`
+	Supi       string `json:"supi,omitempty"`
 }
 
-// PredictRequest represents the prediction request.
-type PredictRequest struct {
-	HistoricalData []TrafficObservation `json:"historical_data"`
+type SubscriptionScope struct {
+	OriginalGroupID string `json:"original_group_id,omitempty"`
 }
 
-// UeCommunicationPrediction represents predicted UE communication data.
-type UeCommunicationPrediction struct {
-	Ts         string                  `json:"ts"`
-	TrafChar   TrafficCharacterization `json:"traf_char"`
-	Confidence int32                   `json:"confidence"`
+type ObservationBinding struct {
+	ObservationSourceID string                 `json:"observation_source_id"`
+	Source              ObservationSource      `json:"source"`
+	SubscriptionScope   SubscriptionScope      `json:"subscription_scope"`
+	CollectionProfile   CollectionRequirements `json:"collection_profile"`
 }
 
-// PredictResponse represents the prediction response.
-type PredictResponse struct {
-	PredictedData []UeCommunicationPrediction `json:"predicted_data"`
+type SyncObservationBindingsRequest struct {
+	RuntimeRevision int64                `json:"runtime_revision"`
+	Bindings        []ObservationBinding `json:"bindings"`
+}
+
+type ObservationSnssai struct {
+	Sst int32  `json:"sst"`
+	Sd  string `json:"sd,omitempty"`
+}
+
+type SourceObservation struct {
+	ObservedAt               time.Time          `json:"observed_at"`
+	IPv4Address              string             `json:"ipv4_address,omitempty"`
+	Supi                     string             `json:"supi,omitempty"`
+	Dnn                      string             `json:"dnn,omitempty"`
+	Snssai                   *ObservationSnssai `json:"snssai,omitempty"`
+	TotalVolume              float64            `json:"total_volume"`
+	UplinkVolume             float64            `json:"uplink_volume"`
+	DownlinkVolume           float64            `json:"downlink_volume"`
+	TotalPacketCount         float64            `json:"total_packet_count"`
+	UplinkPacketCount        float64            `json:"uplink_packet_count"`
+	DownlinkPacketCount      float64            `json:"downlink_packet_count"`
+	UplinkThroughput         float64            `json:"uplink_throughput"`
+	DownlinkThroughput       float64            `json:"downlink_throughput"`
+	UplinkPacketThroughput   float64            `json:"uplink_packet_throughput"`
+	DownlinkPacketThroughput float64            `json:"downlink_packet_throughput"`
+}
+
+type ObservationBatch struct {
+	BatchID      string              `json:"batch_id"`
+	Observations []SourceObservation `json:"observations"`
+}
+
+type AnalyticsTrafficCharacterization struct {
+	Dnn            string `json:"dnn,omitempty"`
+	UplinkVolume   int64  `json:"uplink_volume"`
+	DownlinkVolume int64  `json:"downlink_volume"`
+}
+
+type AnalyticsUeCommunication struct {
+	CommunicationDuration   int32                            `json:"communication_duration"`
+	Timestamp               time.Time                        `json:"timestamp"`
+	TrafficCharacterization AnalyticsTrafficCharacterization `json:"traffic_characterization"`
+	Confidence              int32                            `json:"confidence"`
+}
+
+type AnalyticsEventNotification struct {
+	Event            string                     `json:"event"`
+	UeCommunications []AnalyticsUeCommunication `json:"ue_communications"`
+}
+
+type AnalyticsReport struct {
+	ReportID           string                       `json:"report_id"`
+	ReportSequence     int64                        `json:"report_sequence"`
+	RuntimeRevision    int64                        `json:"runtime_revision"`
+	GeneratedAt        time.Time                    `json:"generated_at"`
+	EventNotifications []AnalyticsEventNotification `json:"event_notifications"`
 }

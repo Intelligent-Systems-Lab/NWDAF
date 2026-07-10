@@ -45,6 +45,7 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	nwdafSubId1 := "nwdaf-sub-01"
 	smfEndpoint := "http://smf.example"
 	smfEndpoints := []string{smfEndpoint}
+	profileKey := canonicalCollectionProfileKey(10, []string{"TOTAL_VOLUME", "UL_VOLUME", "DL_VOLUME"})
 
 	// Access unexported method via reflection? No, I am in package processor!
 	// But triggerTargetDataCollection is in data_collection.go which belongs to package processor.
@@ -62,7 +63,7 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 
 	// 5. Verify First Subscription
 	targetKey := targetSupi + "@" + smfEndpoint
-	correlationId1, found := ctx.GetSmfCorrelationId("supi="+targetSupi, smfEndpoint)
+	correlationId1, found := ctx.GetSmfCorrelationIdForProfile("supi="+targetSupi, smfEndpoint, profileKey)
 	if !found {
 		t.Fatalf("Expected SMF mapping for key %s", targetKey)
 	}
@@ -88,7 +89,7 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	)
 
 	// 7. Verify Reuse
-	correlationId2, found2 := ctx.GetSmfCorrelationId("supi="+targetSupi, smfEndpoint)
+	correlationId2, found2 := ctx.GetSmfCorrelationIdForProfile("supi="+targetSupi, smfEndpoint, profileKey)
 	if !found2 {
 		t.Fatal("Expected SMF mapping to exist")
 	}
@@ -111,7 +112,7 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	}
 
 	// Mapping should still exist
-	_, found3 := ctx.GetSmfCorrelationId("supi="+targetSupi, smfEndpoint)
+	_, found3 := ctx.GetSmfCorrelationIdForProfile("supi="+targetSupi, smfEndpoint, profileKey)
 	if !found3 {
 		t.Error("Mapping should persist until last reference removed")
 	}
@@ -123,9 +124,49 @@ func TestTriggerTargetDataCollection_ResourceReuse(t *testing.T) {
 	}
 
 	// Mapping should be gone
-	_, found4 := ctx.GetSmfCorrelationId("supi="+targetSupi, smfEndpoint)
+	_, found4 := ctx.GetSmfCorrelationIdForProfile("supi="+targetSupi, smfEndpoint, profileKey)
 	if found4 {
 		t.Error("Mapping should be removed after last reference removed")
+	}
+}
+
+func TestTriggerTargetDataCollection_DifferentProfilesDoNotReuse(t *testing.T) {
+	ctx := setupTestContext()
+	p := newTestProcessor(t)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	smfConsumer := NewMockConsumerAPI(ctrl)
+	smfConsumer.EXPECT().
+		SubscribeToSmf(gomock.Any(), "http://smf.example", gomock.Any()).
+		Return("smf-sub", nil).
+		Times(2)
+	targets := []DataCollectionTarget{{Supi: "imsi-1"}}
+	for _, profile := range []struct {
+		subscriptionID string
+		period         int32
+	}{
+		{subscriptionID: "sub-10", period: 10},
+		{subscriptionID: "sub-20", period: 20},
+	} {
+		p.triggerTargetDataCollection(
+			ctx,
+			smfConsumer,
+			[]string{"http://smf.example"},
+			targets,
+			profile.subscriptionID,
+			"http://nwdaf/notify",
+			"http://nwdaf/upf-notify",
+			profile.period,
+		)
+	}
+
+	profile10 := canonicalCollectionProfileKey(10, []string{"TOTAL_VOLUME", "UL_VOLUME", "DL_VOLUME"})
+	profile20 := canonicalCollectionProfileKey(20, []string{"TOTAL_VOLUME", "UL_VOLUME", "DL_VOLUME"})
+	corr10, ok10 := ctx.GetSmfCorrelationIdForProfile("supi=imsi-1", "http://smf.example", profile10)
+	corr20, ok20 := ctx.GetSmfCorrelationIdForProfile("supi=imsi-1", "http://smf.example", profile20)
+	if !ok10 || !ok20 || corr10 == corr20 {
+		t.Fatalf("profile correlations: period10=%q period20=%q", corr10, corr20)
 	}
 }
 
@@ -227,10 +268,15 @@ func TestTriggerTargetDataCollection_WithOriginalGroupId(t *testing.T) {
 		"http://nwdaf/upf-notify",
 		10,
 	)
+	profileKey := canonicalCollectionProfileKey(10, []string{"TOTAL_VOLUME", "UL_VOLUME", "DL_VOLUME"})
 
 	// Verify: Each SUPI should have its own SMF subscription
 	for _, target := range targets {
-		correlationId, found := ctx.GetSmfCorrelationId("supi="+target.Supi, "http://smf.example")
+		correlationId, found := ctx.GetSmfCorrelationIdForProfile(
+			"supi="+target.Supi,
+			"http://smf.example",
+			profileKey,
+		)
 		if !found {
 			t.Errorf("Expected SMF mapping for supi=%s", target.Supi)
 			continue
