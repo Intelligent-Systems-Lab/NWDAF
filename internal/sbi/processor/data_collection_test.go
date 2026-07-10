@@ -7,6 +7,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/free5gc/nwdaf/internal/anlf"
+	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/mtlf"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/factory"
@@ -328,76 +329,32 @@ func TestTriggerTargetDataCollection_MixedSupiAndGroup(t *testing.T) {
 }
 
 // =============================================================================
-// Static ML Model URL Tests
+// AnLF runtime registration tests
 // =============================================================================
 
-func TestTriggerMlModelProvisioning_StaticUrl(t *testing.T) {
+func TestTriggerMlModelProvisioningCreatesPendingRuntimeCorrelation(t *testing.T) {
 	ctx := setupTestContext()
 
-	// 1. Setup Config with Static Model URL
-	// Create minimal config structure
 	cfg := &factory.Config{
 		Configuration: &factory.Configuration{
-			Mtlf: &factory.MtlfConfig{
-				Enabled:        false, // MTLF Disabled
-				StaticModelUrl: "file:///test/model.pth",
-			},
-			AnlfBackend: &factory.AnlfBackendConfig{
-				Enabled:  true,
-				Endpoint: "http://anlf-backend-mock",
-			},
+			Mtlf: &factory.MtlfConfig{Enabled: false},
 		},
 	}
 	p := newTestProcessorWithConfig(t, cfg)
 
-	// 2. Setup Subscription
-	subId := "test-sub-static-url"
+	subId := "test-sub-pending-runtime"
 	eventSub := models.NwdafEventsSubscriptionEventSubscription{
 		Event: models.NwdafEvent_UE_COMMUNICATION,
 	}
 
-	// 3. Trigger
 	p.triggerMlModelProvisioning(&eventSub, subId)
-
-	// 4. Verify logic path
-	// Check if MlModelInfo was created
-	// Since triggerMlModelProvisioning is async (goroutine), we need to wait briefly
-	// However, the creation of MlModelInfo happens synchronously before the goroutine starts
-	// in our implementation of triggerMlModelProvisioning.
 
 	mlInfo := ctx.GetMlModelInfo(subId)
 	if mlInfo == nil {
-		t.Fatal("Expected MlModelInfo to be created")
-	} else if mlInfo.ModelUrl != "file:///test/model.pth" {
-		t.Errorf("Expected ModelUrl to be %s, got %s", "file:///test/model.pth", mlInfo.ModelUrl)
+		t.Fatal("expected pending ML runtime correlation to be created")
 	}
-}
-
-func TestTriggerMlModelProvisioning_MtlfDisabledNoStaticUrl(t *testing.T) {
-	ctx := setupTestContext()
-
-	// Setup Config: MTLF disabled, no static URL
-	cfg := &factory.Config{
-		Configuration: &factory.Configuration{
-			Mtlf: &factory.MtlfConfig{
-				Enabled:        false,
-				StaticModelUrl: "", // Empty
-			},
-		},
-	}
-	p := newTestProcessorWithConfig(t, cfg)
-
-	subId := "test-sub-no-action"
-	eventSub := models.NwdafEventsSubscriptionEventSubscription{
-		Event: models.NwdafEvent_UE_COMMUNICATION,
-	}
-
-	p.triggerMlModelProvisioning(&eventSub, subId)
-
-	// Verify no MlModelInfo created
-	mlInfo := ctx.GetMlModelInfo(subId)
-	if mlInfo != nil {
-		t.Error("Expected no MlModelInfo to be created")
+	if mlInfo.GetStatus() != nwdaf_context.MlModelStatus_PENDING {
+		t.Fatalf("status = %q, want PENDING", mlInfo.GetStatus())
 	}
 }
 

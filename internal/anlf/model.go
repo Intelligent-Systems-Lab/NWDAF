@@ -1,100 +1,199 @@
 package anlf
 
 import (
+	"errors"
 	"fmt"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
+	"github.com/free5gc/openapi/models"
 )
 
-// SwapModel loads a new model and unloads the old one via the AnLF backend.
-// Called by MTLF (via processor callback) during model hot-swap after retraining.
-// Returns the new model ID assigned by the AnLF backend.
-func (a *AnlfService) SwapModel(newModelUrl, oldModelId string) (string, error) {
-	cfg := a.config()
-	endpoint := anlfBackendEndpoint(cfg)
-	if endpoint == "" {
-		return "", fmt.Errorf("AnLF backend not configured")
+const provisionSourceMTLF = "MTLF_PROVISION"
+
+func (a *AnlfService) BuildSubscriptionRuntimeRequest(
+	subscriptionID string,
+	provisionContext *ProvisionContext,
+) (ApplySubscriptionRuntimeRequest, error) {
+	ctx := nwdaf_context.GetSelf()
+	if ctx == nil {
+		return ApplySubscriptionRuntimeRequest{}, fmt.Errorf("NWDAF context not initialized")
 	}
 
-	if a.anlfBackend == nil {
-		return "", fmt.Errorf("AnLF backend client not initialized")
+	subscription := ctx.GetSubscription(subscriptionID)
+	if subscription == nil {
+		return ApplySubscriptionRuntimeRequest{}, fmt.Errorf("subscription %s not found", subscriptionID)
 	}
 
-	newModelId, err := a.anlfBackend.LoadModel(a.nwdaf.CancelContext(), newModelUrl)
-	if err != nil {
-		return "", fmt.Errorf("failed to load new model %s: %w", newModelUrl, err)
-	}
-	logger.AnlfLog.Infof("SwapModel: loaded modelId=%s", newModelId)
-
-	if oldModelId != "" {
-		if unloadErr := a.anlfBackend.UnloadModel(a.nwdaf.CancelContext(), oldModelId); unloadErr != nil {
-			logger.AnlfLog.Warnf("SwapModel: unload failed modelId=%s err=%v", oldModelId, unloadErr)
-		} else {
-			logger.AnlfLog.Infof("SwapModel: unloaded modelId=%s", oldModelId)
-		}
-	}
-
-	return newModelId, nil
+	return ApplySubscriptionRuntimeRequest{
+		Subscription: SubscriptionRuntimeContext{
+			SubscriptionID:     subscription.ID,
+			NotifCorrID:        subscription.NotifCorrId,
+			EvtReq:             subscription.EvtReq,
+			EventSubscriptions: subscription.EventSubs,
+		},
+		ProvisionContext: provisionContext,
+	}, nil
 }
 
-// InitializeMlModel initializes the model directly using the AnLF backend.
-// Deduplicates model loading: if modelUrl is already loaded by another
-// subscription, reuses the existing modelId from SharedModelRegistry.
-func (a *AnlfService) InitializeMlModel(
-	nwdafSubId string, mlInfo *nwdaf_context.MlModelInfo, modelUrl string,
-) {
-	logger.AnlfLog.Infof("LoadMlModel: start sub=%s", nwdafSubId)
-
-	// Get AnLF backend configuration
-	cfg := a.config()
-	endpoint := anlfBackendEndpoint(cfg)
-	if endpoint == "" {
-		logger.AnlfLog.Warnf("AnLF backend not configured, cannot initialize model")
-		mlInfo.SetModelFailed(nil)
-		return
-	}
-
-	ctx := nwdaf_context.GetSelf()
-
-	// Layer 1: Registry — check if model already loaded
-	shared, isNew := ctx.GetOrCreateSharedModel(modelUrl, mlInfo.Event)
-	shared.AddSubscriber(nwdafSubId)
-
-	if !isNew {
-		// Another goroutine is loading or has already loaded; wait for completion.
-		shared.WaitLoaded()
-		existingModelId := shared.GetModelId()
-		if existingModelId != "" {
-			mlInfo.SetModelReady(existingModelId)
-			logger.AnlfLog.Infof("LoadMlModel: reused sub=%s modelId=%s",
-				nwdafSubId, existingModelId)
-		} else {
-			mlInfo.SetModelFailed(fmt.Errorf("shared model load failed for url=%s", modelUrl))
-			logger.AnlfLog.Errorf("LoadMlModel: shared-load-failed sub=%s", nwdafSubId)
-		}
-		return
-	}
-
-	// isNew=true: this goroutine is responsible for loading
+func (a *AnlfService) ApplySubscriptionRuntime(
+	request ApplySubscriptionRuntimeRequest,
+) (*ApplySubscriptionRuntimeResponse, error) {
 	if a.anlfBackend == nil {
-		err := fmt.Errorf("AnLF backend client not initialized")
-		logger.AnlfLog.Errorf("Failed to initialize ML model: %v", err)
-		shared.LoadDone()
-		mlInfo.SetModelFailed(err)
-		return
+		return nil, fmt.Errorf("AnLF backend client not initialized")
 	}
 
-	modelId, err := a.anlfBackend.LoadModel(a.nwdaf.CancelContext(), modelUrl)
+	response, err := a.anlfBackend.ApplySubscriptionRuntime(a.nwdaf.CancelContext(), request)
 	if err != nil {
-		logger.AnlfLog.Errorf("LoadMlModel failed: sub=%s err=%v", nwdafSubId, err)
-		shared.LoadDone()
-		mlInfo.SetModelFailed(err)
+		return nil, err
+	}
+
+	subscriptionID := request.Subscription.SubscriptionID
+	switch response.Result {
+	case ApplyResultPendingProvision:
+		logger.AnlfLog.Debugf("AnLF runtime pending provision: sub=%s", subscriptionID)
+		return response, nil
+	case ApplyResultActivated, ApplyResultReused, ApplyResultReplaced:
+		if response.ActiveModelReference == "" {
+			return response, fmt.Errorf("AnLF backend returned %s without active model reference", response.Result)
+		}
+		a.applyModelReferenceCorrelation(subscriptionID, response.ActiveModelReference)
+		logger.AnlfLog.Infof("AnLF runtime applied: sub=%s result=%s", subscriptionID, response.Result)
+		return response, nil
+	case ApplyResultFailedUsingPrevious:
+		return response, fmt.Errorf("runtime replacement failed for subscription %s: %s", subscriptionID, response.Message)
+	case ApplyResultFailedNoPrevious:
+		if mlInfo := nwdaf_context.GetSelf().GetMlModelInfo(subscriptionID); mlInfo != nil {
+			mlInfo.SetModelFailed(errors.New(response.Message))
+		}
+		return response, fmt.Errorf("runtime activation failed for subscription %s: %s", subscriptionID, response.Message)
+	default:
+		return response, fmt.Errorf("AnLF backend returned unknown apply result %q", response.Result)
+	}
+}
+
+func (a *AnlfService) ApplySubscriptionRegistration(subscriptionID string) error {
+	request, err := a.BuildSubscriptionRuntimeRequest(subscriptionID, nil)
+	if err != nil {
+		return err
+	}
+	_, err = a.ApplySubscriptionRuntime(request)
+	return err
+}
+
+func (a *AnlfService) ReleaseSubscriptionRuntime(subscriptionID string) error {
+	defer a.removeModelReferenceCorrelation(subscriptionID)
+
+	if a.anlfBackend == nil {
+		return nil
+	}
+	if err := a.anlfBackend.ReleaseSubscriptionRuntime(a.nwdaf.CancelContext(), subscriptionID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a *AnlfService) ApplyRetrainedModel(oldModelReference, newModelReference string) error {
+	ctx := nwdaf_context.GetSelf()
+	if ctx == nil {
+		return fmt.Errorf("NWDAF context not initialized")
+	}
+
+	var subscriptionIDs []string
+	if oldModelReference != "" {
+		if shared := ctx.GetSharedModel(oldModelReference); shared != nil {
+			subscriptionIDs = shared.GetSubscriberIDs()
+		}
+	} else {
+		for _, subscription := range ctx.GetAllSubscriptions() {
+			mlInfo := ctx.GetMlModelInfo(subscription.ID)
+			if mlInfo != nil && mlInfo.GetModelURL() == "" {
+				subscriptionIDs = append(subscriptionIDs, subscription.ID)
+			}
+		}
+	}
+
+	if len(subscriptionIDs) == 0 {
+		return fmt.Errorf("no subscriptions use model reference %q", oldModelReference)
+	}
+
+	var applyErrors []error
+	for _, subscriptionID := range subscriptionIDs {
+		mlInfo := ctx.GetMlModelInfo(subscriptionID)
+		if mlInfo == nil {
+			continue
+		}
+		mlInfo.RLock()
+		event := mlInfo.Event
+		mtlfSubscriptionID := mlInfo.MtlfSubId
+		mlInfo.RUnlock()
+
+		request, err := a.BuildSubscriptionRuntimeRequest(subscriptionID, &ProvisionContext{
+			Source:              provisionSourceMTLF,
+			MtlfSubscriptionID:  mtlfSubscriptionID,
+			NotifSubscriptionID: mtlfSubscriptionID,
+			MLEventNotification: MLEventNotification{
+				MlEventNotif: models.MlEventNotif{
+					Event:        event,
+					NotifCorreId: subscriptionID,
+					MLFileAddr:   &models.MlModelAddr{MLModelUrl: newModelReference},
+				},
+				ModelUpdateInd: true,
+			},
+		})
+		if err == nil {
+			_, err = a.ApplySubscriptionRuntime(request)
+		}
+		if err != nil {
+			applyErrors = append(applyErrors, err)
+		}
+	}
+	return errors.Join(applyErrors...)
+}
+
+func (a *AnlfService) applyModelReferenceCorrelation(subscriptionID, modelReference string) {
+	ctx := nwdaf_context.GetSelf()
+	mlInfo := ctx.GetMlModelInfo(subscriptionID)
+	if mlInfo == nil {
+		logger.AnlfLog.Warnf("No ML model info found for subscription %s", subscriptionID)
 		return
 	}
 
-	shared.SetModelId(modelId)
-	mlInfo.SetModelReady(modelId)
-	logger.AnlfLog.Infof("LoadMlModel: ready sub=%s modelId=%s", nwdafSubId, modelId)
-	// Note: accuracy monitor is started by the provision workflow after this returns.
+	oldModelReference := mlInfo.GetModelURL()
+	if oldModelReference != "" && oldModelReference != modelReference {
+		if oldShared := ctx.GetSharedModel(oldModelReference); oldShared != nil {
+			if remaining := oldShared.RemoveSubscriber(subscriptionID); remaining == 0 {
+				ctx.DeleteSharedModel(oldModelReference)
+			}
+		}
+		a.StopAccuracyMonitorForModel(oldModelReference)
+	}
+
+	mlInfo.SetModelUrl(modelReference)
+	mlInfo.SetModelReady()
+	shared, _ := ctx.GetOrCreateSharedModel(modelReference, mlInfo.Event)
+	shared.AddSubscriber(subscriptionID)
+	a.StartOwnedAccuracyMonitorForModel(modelReference)
+}
+
+func (a *AnlfService) removeModelReferenceCorrelation(subscriptionID string) {
+	ctx := nwdaf_context.GetSelf()
+	if ctx == nil {
+		return
+	}
+	mlInfo := ctx.GetMlModelInfo(subscriptionID)
+	if mlInfo == nil {
+		return
+	}
+
+	modelReference := mlInfo.GetModelURL()
+	if modelReference != "" {
+		if shared := ctx.GetSharedModel(modelReference); shared != nil {
+			if remaining := shared.RemoveSubscriber(subscriptionID); remaining == 0 {
+				ctx.DeleteSharedModel(modelReference)
+			}
+		}
+		a.StopAccuracyMonitorForModel(modelReference)
+	}
+	ctx.DeleteMlModelInfo(subscriptionID)
 }

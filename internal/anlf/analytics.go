@@ -142,8 +142,7 @@ func generateMlBasedUeCommunication(
 		baseTargetTime.Format(time.RFC3339), baseTargetTimeFallback)
 
 	// Call the AnLF backend for prediction.
-	modelId := mlInfo.GetModelId()
-	resp, err := anlfBackend.Predict(parentCtx, modelId, historicalData)
+	resp, err := anlfBackend.Predict(parentCtx, nwdafSubId, historicalData)
 	if err != nil {
 		return models.UeCommunication{}, err
 	}

@@ -21,16 +21,12 @@ type NwdafApp interface {
 
 // MtlfService is the MTLF entry point.
 type MtlfService struct {
-	nwdaf          NwdafApp
-	daisyClient    DaisyAPI
-	adrfClient     consumer.AdrfServiceAPI
-	wg             *sync.WaitGroup
-	stateStore     *MonitorStateStore
-	onModelSwapped func(modelUrl string, wg *sync.WaitGroup)
-	// onModelSwapReady is called by swapModelAfterRetrain to delegate AnLF backend
-	// operations (load new model, unload old model) to AnLF.
-	// Returns the new model ID assigned by the backend, or an error.
-	onModelSwapReady func(newModelUrl, oldModelId string) (string, error)
+	nwdaf                   NwdafApp
+	daisyClient             DaisyAPI
+	adrfClient              consumer.AdrfServiceAPI
+	wg                      *sync.WaitGroup
+	stateStore              *MonitorStateStore
+	onModelProvisionUpdated func(oldModelReference, newModelReference string) error
 	// inFlight tracks async training tasks: taskId → *inFlightEntry.
 	// Populated when an async training request is accepted by Daisy;
 	// cleared when the training-complete processor consumes the callback.
@@ -89,17 +85,10 @@ func (m *MtlfService) SetWaitGroup(wg *sync.WaitGroup) {
 	m.wg = wg
 }
 
-// SetOnModelSwapped registers a callback invoked after a successful model hot-swap.
-// Used by the processor to wire MTLF → accuracy monitor restart (AnLF side).
-func (m *MtlfService) SetOnModelSwapped(fn func(modelUrl string, wg *sync.WaitGroup)) {
-	m.onModelSwapped = fn
-}
-
-// SetOnModelSwapReady registers a callback that MTLF calls to delegate backend
-// operations to AnLF during a hot-swap. AnLF loads the new model, unloads the old
-// one, and returns the new model ID.
-func (m *MtlfService) SetOnModelSwapReady(fn func(newModelUrl, oldModelId string) (string, error)) {
-	m.onModelSwapReady = fn
+func (m *MtlfService) SetOnModelProvisionUpdated(
+	fn func(oldModelReference, newModelReference string) error,
+) {
+	m.onModelProvisionUpdated = fn
 }
 
 func (m *MtlfService) launchOwnedTask(fn func()) {

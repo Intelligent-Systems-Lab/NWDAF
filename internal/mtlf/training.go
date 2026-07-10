@@ -9,7 +9,6 @@ import (
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/pkg/factory"
-	"github.com/free5gc/openapi/models"
 )
 
 var mtlfLog = logger.MtlfLog
@@ -64,7 +63,7 @@ func (m *MtlfService) runDelayedTraining(delaySec int, mtlfCfg *factory.MtlfConf
 	}
 
 	mtlfLog.Info("StartTraining: trigger")
-	m.submitDaisyTask(mtlfCfg, "", mtlfCfg.StaticModelUrl, nil)
+	m.submitDaisyTask(mtlfCfg, "", "", nil)
 }
 
 // startRetrainWorkflow decides the retrain path and dispatches accordingly.
@@ -186,77 +185,24 @@ func (m *MtlfService) HandleSuccessfulTrainingCompletion(
 	modelURL string,
 ) {
 	mtlfLog.Infof("TrainingCompletion: complete task=%s", taskID)
-	m.swapModelAfterRetrain(completion.OldModelURL, modelURL)
+	if err := m.applyModelAfterRetrain(completion.OldModelURL, modelURL); err != nil {
+		mtlfLog.Errorf("TrainingCompletion apply failed: task=%s err=%v", taskID, err)
+		if completion.Store != nil {
+			completion.Store.SetRetraining(false)
+		}
+	}
 }
 
-// swapModelAfterRetrain handles the hot-swap of models after a successful retraining.
-func (m *MtlfService) swapModelAfterRetrain(oldModelUrl, newModelUrl string) {
-	cfg := m.config()
-	if cfg == nil || cfg.Configuration == nil {
-		mtlfLog.Error("config not initialized; cannot perform model swap")
-		return
+func (m *MtlfService) applyModelAfterRetrain(oldModelReference, newModelReference string) error {
+	if m.onModelProvisionUpdated == nil {
+		return fmt.Errorf("model provision update callback not set")
 	}
-
-	nwdafCtx := nwdaf_context.GetSelf()
-
-	mtlfLog.Info("SwapModel: start")
-
-	// 1. Look up old model ID before modifying the registry
-	oldModelId := ""
-	oldShared := nwdafCtx.GetSharedModel(oldModelUrl)
-	if oldShared != nil {
-		oldModelId = oldShared.GetModelId()
+	if err := m.onModelProvisionUpdated(oldModelReference, newModelReference); err != nil {
+		return err
 	}
-
-	// 2. Delegate backend model operations to AnLF via callback:
-	//    load new model → unload old model → return new model ID
-	if m.onModelSwapReady == nil {
-		mtlfLog.Error("onModelSwapReady callback not set; cannot perform model swap")
-		return
+	if m.stateStore != nil && oldModelReference != "" {
+		m.stateStore.DeleteModel(oldModelReference)
 	}
-	newModelId, err := m.onModelSwapReady(newModelUrl, oldModelId)
-	if err != nil {
-		mtlfLog.Errorf("Hot-swap failed: AnLF could not load new model %s: %v", newModelUrl, err)
-		return
-	}
-
-	// 3. Update SharedModelRegistry
-	nwdafCtx.DeleteSharedModel(oldModelUrl)
-	newShared, _ := nwdafCtx.GetOrCreateSharedModel(newModelUrl, models.NwdafEvent_UE_COMMUNICATION)
-	newShared.SetModelId(newModelId)
-
-	// 4. Update all subscriptions currently using the old model
-	subs := nwdafCtx.GetAllSubscriptions()
-	for _, sub := range subs {
-		mlInfo := nwdafCtx.GetMlModelInfo(sub.ID)
-		if mlInfo == nil {
-			continue
-		}
-		mlInfo.RLock()
-		currentUrl := mlInfo.ModelUrl
-		mlInfo.RUnlock()
-
-		switch currentUrl {
-		case oldModelUrl:
-			mlInfo.SetModelUrl(newModelUrl)
-			mlInfo.SetModelReady(newModelId)
-			newShared.AddSubscriber(sub.ID)
-			mtlfLog.Debugf("SwapModel: updated sub=%s modelId=%s", sub.ID, newModelId)
-		case newModelUrl:
-			mlInfo.SetModelReady(newModelId)
-			newShared.AddSubscriber(sub.ID)
-		}
-	}
-
-	// 5. Restart accuracy monitor for the new model (wired via callback by processor)
-	nwdafCtx.DeleteModelAccuracyStore(oldModelUrl)
-	if m.stateStore != nil {
-		m.stateStore.DeleteModel(oldModelUrl)
-	}
-
-	if m.onModelSwapped != nil {
-		m.onModelSwapped(newModelUrl, m.wg)
-	}
-
-	mtlfLog.Infof("SwapModel: completed modelId=%s", newModelId)
+	mtlfLog.Infof("Model provision update applied: previous=%s", oldModelReference)
+	return nil
 }

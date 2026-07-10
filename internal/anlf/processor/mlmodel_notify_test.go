@@ -36,8 +36,12 @@ func (f *fakeMlModelProvisionWorkflow) StartModelProvisionActions(actions []anlf
 func TestHandleMlModelProvisionNotify_PlansAndStartsActions(t *testing.T) {
 	workflow := &fakeMlModelProvisionWorkflow{
 		plannedActions: []anlf.ModelProvisionAction{
-			{NwdafSubID: "sub-1", ModelURL: "model-a"},
-			{NwdafSubID: "sub-1", ModelURL: "model-b"},
+			{Request: anlf.ApplySubscriptionRuntimeRequest{
+				Subscription: anlf.SubscriptionRuntimeContext{SubscriptionID: "sub-1"},
+			}},
+			{Request: anlf.ApplySubscriptionRuntimeRequest{
+				Subscription: anlf.SubscriptionRuntimeContext{SubscriptionID: "sub-2"},
+			}},
 		},
 	}
 	p := NewProcessor(workflow)
@@ -56,9 +60,11 @@ func TestHandleMlModelProvisionNotify_PlansAndStartsActions(t *testing.T) {
 	if len(workflow.startedBatches[0]) != 4 {
 		t.Fatalf("flattened batch size = %d, want 4", len(workflow.startedBatches[0]))
 	}
-	if workflow.startedBatches[0][0].ModelURL != "model-a" || workflow.startedBatches[0][3].ModelURL != "model-b" {
+	firstID := workflow.startedBatches[0][0].Request.Subscription.SubscriptionID
+	lastID := workflow.startedBatches[0][3].Request.Subscription.SubscriptionID
+	if firstID != "sub-1" || lastID != "sub-2" {
 		t.Fatalf("flattened batch order was not preserved: first=%q last=%q",
-			workflow.startedBatches[0][0].ModelURL, workflow.startedBatches[0][3].ModelURL)
+			firstID, lastID)
 	}
 }
 

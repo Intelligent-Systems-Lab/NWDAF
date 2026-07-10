@@ -52,15 +52,10 @@ func NewProcessor(nwdaf NwdafApp, anlfService *anlf.AnlfService, mtlfService *mt
 		p.mtlf.HandleAccuracyReports(modelUrl, reports, store)
 	})
 
-	// Wire 2: MTLF requests backend model operations during hot-swap → AnLF executes them.
-	// AnLF loads the new model, unloads the old one, and returns the new model ID.
-	p.mtlf.SetOnModelSwapReady(func(newModelUrl, oldModelId string) (string, error) {
-		return p.anlf.SwapModel(newModelUrl, oldModelId)
-	})
-
-	// Wire 3: MTLF hot-swap completes → AnLF restarts accuracy monitor for new model.
-	p.mtlf.SetOnModelSwapped(func(modelUrl string, wg *sync.WaitGroup) {
-		p.anlf.StartAccuracyMonitorForModel(modelUrl, wg)
+	// Retrain completion is translated into the same provision-style apply path
+	// used by external MTLF notifications.
+	p.mtlf.SetOnModelProvisionUpdated(func(oldModelReference, newModelReference string) error {
+		return p.anlf.ApplyRetrainedModel(oldModelReference, newModelReference)
 	})
 
 	// ADRF buffer: forward UPF notifications to ADRF for retrain dataset.

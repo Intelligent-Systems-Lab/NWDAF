@@ -251,6 +251,7 @@ func (p *Processor) startSubscriptionScheduler(subscription *nwdaf_context.Subsc
 		if sub := nwdaf_context.GetSelf().GetSubscription(subId); sub != nil {
 			sub.IsActive = false
 		}
+		p.cleanupMlModelState(subId)
 	}
 
 	scheduler := notifier.NewNotificationScheduler(
@@ -271,25 +272,9 @@ func (p *Processor) startSubscriptionScheduler(subscription *nwdaf_context.Subsc
 }
 
 func (p *Processor) cleanupMlModelState(subscriptionId string) {
-	ctx := nwdaf_context.GetSelf()
-	mlInfo := ctx.GetMlModelInfo(subscriptionId)
-	if mlInfo == nil {
-		return
+	if err := p.anlf.ReleaseSubscriptionRuntime(subscriptionId); err != nil {
+		logger.ProcLog.Warnf("ReleaseAnlfRuntime failed: sub=%s err=%v", subscriptionId, err)
 	}
-
-	modelUrl := mlInfo.ModelUrl
-	if modelUrl != "" {
-		if shared := ctx.GetSharedModel(modelUrl); shared != nil {
-			remaining := shared.RemoveSubscriber(subscriptionId)
-			if remaining == 0 {
-				ctx.DeleteSharedModel(modelUrl)
-			}
-		}
-
-		p.anlf.StopAccuracyMonitorForModel(modelUrl)
-	}
-
-	ctx.DeleteMlModelInfo(subscriptionId)
 }
 
 // validateSubscriptionRequest is the unified validation entry point for Create/Update

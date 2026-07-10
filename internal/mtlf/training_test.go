@@ -10,7 +10,6 @@ import (
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/pkg/factory"
-	"github.com/free5gc/openapi/models"
 )
 
 type fakeDaisyClient struct {
@@ -113,8 +112,8 @@ func TestHandleTrainingComplete_Failure_NilStore(t *testing.T) {
 }
 
 // TestHandleTrainingComplete_Success_ClearsInFlight verifies that a successful
-// callback removes the in-flight entry. swapModelAfterRetrain will return early
-// because no app config is provided in this unit test.
+// callback removes the in-flight entry. The provision callback is intentionally
+// absent in this unit test.
 func TestHandleTrainingComplete_Success_ClearsInFlight(t *testing.T) {
 	m := &MtlfService{}
 
@@ -159,31 +158,24 @@ func TestHandleTrainingComplete_DuplicateCallback(t *testing.T) {
 	}
 }
 
-func TestSwapModelAfterRetrain_DeletesOldMonitorState(t *testing.T) {
+func TestApplyModelAfterRetrainUsesProvisionUpdatePath(t *testing.T) {
 	cfg := &factory.Config{
 		Configuration: &factory.Configuration{},
 	}
 
-	nwdaf_context.Init()
-	ctx := nwdaf_context.GetSelf()
-
 	oldModelURL := "file:///old-model.pth"
 	newModelURL := "file:///new-model.pth"
 
-	oldShared, _ := ctx.GetOrCreateSharedModel(oldModelURL, models.NwdafEvent_UE_COMMUNICATION)
-	oldShared.SetModelId("old-model-id")
-
 	m := newTestMtlfService(cfg)
-	m.onModelSwapReady = func(newModelUrl, oldModelId string) (string, error) {
-		if newModelUrl != newModelURL {
-			t.Fatalf("newModelUrl = %s, want %s", newModelUrl, newModelURL)
+	m.onModelProvisionUpdated = func(oldModelReference, newModelReference string) error {
+		if oldModelReference != oldModelURL {
+			t.Fatalf("old model reference = %s, want %s", oldModelReference, oldModelURL)
 		}
-		if oldModelId != "old-model-id" {
-			t.Fatalf("oldModelId = %s, want old-model-id", oldModelId)
+		if newModelReference != newModelURL {
+			t.Fatalf("new model reference = %s, want %s", newModelReference, newModelURL)
 		}
-		return "new-model-id", nil
+		return nil
 	}
-	m.onModelSwapped = func(modelUrl string, wg *sync.WaitGroup) {}
 
 	scope := m.stateStore.GetOrCreateScope(oldModelURL, "group:test", 3, 3)
 	scope.RecordObservation(ScopeObservation{
@@ -195,16 +187,12 @@ func TestSwapModelAfterRetrain_DeletesOldMonitorState(t *testing.T) {
 		},
 	})
 
-	m.swapModelAfterRetrain(oldModelURL, newModelURL)
+	if err := m.applyModelAfterRetrain(oldModelURL, newModelURL); err != nil {
+		t.Fatalf("applyModelAfterRetrain() error = %v", err)
+	}
 
 	if m.stateStore.ModelExists(oldModelURL) {
 		t.Fatal("old model state should be deleted after successful swap")
-	}
-	if ctx.GetSharedModel(oldModelURL) != nil {
-		t.Fatal("old shared model should be deleted after successful swap")
-	}
-	if ctx.GetSharedModel(newModelURL) == nil {
-		t.Fatal("new shared model should be created after successful swap")
 	}
 }
 
@@ -223,8 +211,7 @@ func TestSubmitDaisyTaskUsesInjectedClient(t *testing.T) {
 					RegisterIPv4: "127.0.0.1",
 					Port:         9001,
 				},
-				Endpoint:       "http://daisy.example",
-				StaticModelUrl: "file:///old-model.onnx",
+				Endpoint: "http://daisy.example",
 				Task: map[string]any{
 					"NUM_ROUNDS": 2,
 				},
@@ -238,7 +225,7 @@ func TestSubmitDaisyTaskUsesInjectedClient(t *testing.T) {
 		cfg: cfg,
 	}, client, nil)
 
-	service.submitDaisyTask(cfg.Configuration.Mtlf, "", cfg.Configuration.Mtlf.StaticModelUrl, nil)
+	service.submitDaisyTask(cfg.Configuration.Mtlf, "", "file:///old-model.onnx", nil)
 
 	if client.triggerCalls != 1 {
 		t.Fatalf("TriggerTrainingAsync called %d times, want 1", client.triggerCalls)

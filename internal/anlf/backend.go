@@ -3,35 +3,65 @@ package anlf
 import (
 	"context"
 	"net/http"
+
+	"github.com/free5gc/openapi/models"
 )
 
 // AnlfBackendAPI defines the downstream AnLF backend integration seam owned by AnLF.
 type AnlfBackendAPI interface {
-	LoadModel(ctx context.Context, modelURL string) (string, error)
-	UnloadModel(ctx context.Context, modelID string) error
-	Predict(ctx context.Context, modelID string, trafficData []TrafficObservation) (*PredictResponse, error)
+	ApplySubscriptionRuntime(
+		ctx context.Context,
+		request ApplySubscriptionRuntimeRequest,
+	) (*ApplySubscriptionRuntimeResponse, error)
+	ReleaseSubscriptionRuntime(ctx context.Context, subscriptionID string) error
+	Predict(ctx context.Context, subscriptionID string, trafficData []TrafficObservation) (*PredictResponse, error)
 	HTTPClient() *http.Client
 }
 
-// LoadModelRequest represents the request to load a model.
-type LoadModelRequest struct {
-	ModelUrl string `json:"model_url"`
+type SubscriptionRuntimeContext struct {
+	SubscriptionID     string                                            `json:"subscription_id"`
+	NotifCorrID        string                                            `json:"notif_corr_id,omitempty"`
+	EvtReq             *models.ReportingInformation                      `json:"evt_req,omitempty"`
+	EventSubscriptions []models.NwdafEventsSubscriptionEventSubscription `json:"event_subscriptions"`
 }
 
-// LoadModelResponse represents the response from model loading.
-type LoadModelResponse struct {
-	ModelId string `json:"model_id"`
+type ProvisionContext struct {
+	Source              string              `json:"source"`
+	MtlfSubscriptionID  string              `json:"mtlf_subscription_id,omitempty"`
+	NotifSubscriptionID string              `json:"notif_subscription_id,omitempty"`
+	MLEventNotification MLEventNotification `json:"ml_event_notif"`
 }
 
-// UnloadModelRequest represents the request to unload a model.
-type UnloadModelRequest struct {
-	ModelId string `json:"model_id"`
+// MLEventNotification extends the generated Release 17 model with lifecycle
+// fields present in the newer local TS 29.520 OpenAPI definition.
+type MLEventNotification struct {
+	models.MlEventNotif
+	ModelUpdateInd bool `json:"modelUpdateInd,omitempty"`
 }
 
-// UnloadModelResponse represents the response from model unloading.
-type UnloadModelResponse struct {
-	ModelId string `json:"model_id"`
-	Status  string `json:"status"`
+type ApplySubscriptionRuntimeRequest struct {
+	Subscription     SubscriptionRuntimeContext `json:"subscription"`
+	ProvisionContext *ProvisionContext          `json:"provision_context,omitempty"`
+}
+
+type ApplyResult string
+
+const (
+	ApplyResultPendingProvision    ApplyResult = "PENDING_PROVISION"
+	ApplyResultActivated           ApplyResult = "ACTIVATED"
+	ApplyResultReused              ApplyResult = "REUSED"
+	ApplyResultReplaced            ApplyResult = "REPLACED"
+	ApplyResultFailedUsingPrevious ApplyResult = "FAILED_USING_PREVIOUS"
+	ApplyResultFailedNoPrevious    ApplyResult = "FAILED_NO_PREVIOUS"
+)
+
+type ApplySubscriptionRuntimeResponse struct {
+	SubscriptionID       string      `json:"subscription_id"`
+	RuntimeState         string      `json:"runtime_state"`
+	Result               ApplyResult `json:"result"`
+	FallbackApplied      bool        `json:"fallback_applied"`
+	ActiveModelReference string      `json:"active_model_reference,omitempty"`
+	Message              string      `json:"message,omitempty"`
 }
 
 // TrafficCharacterization represents predicted traffic volume data.
@@ -58,7 +88,6 @@ type TrafficObservation struct {
 
 // PredictRequest represents the prediction request.
 type PredictRequest struct {
-	ModelId        string               `json:"model_id"`
 	HistoricalData []TrafficObservation `json:"historical_data"`
 }
 

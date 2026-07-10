@@ -19,21 +19,8 @@ func TestSharedModelInfo_New(t *testing.T) {
 	if shared.Event != models.NwdafEvent_UE_COMMUNICATION {
 		t.Errorf("Event = %v, want UE_COMMUNICATION", shared.Event)
 	}
-	if shared.GetModelId() != "" {
-		t.Errorf("GetModelId() = %s, want empty", shared.GetModelId())
-	}
 	if shared.SubscriberCount() != 0 {
 		t.Errorf("SubscriberCount() = %d, want 0", shared.SubscriberCount())
-	}
-}
-
-func TestSharedModelInfo_SetModelId(t *testing.T) {
-	shared := NewSharedModelInfo("file:///model.pth", models.NwdafEvent_UE_COMMUNICATION)
-
-	shared.SetModelId("model-abc-123")
-
-	if id := shared.GetModelId(); id != "model-abc-123" {
-		t.Errorf("GetModelId() = %s, want model-abc-123", id)
 	}
 }
 
@@ -149,14 +136,11 @@ func TestContext_SharedModelRegistry_MultipleModels(t *testing.T) {
 		t.Error("Different modelUrls should create different SharedModelInfo instances")
 	}
 
-	sharedA.SetModelId("id-A")
-	sharedB.SetModelId("id-B")
-
-	if ctx.GetSharedModel("file:///model-A.pth").GetModelId() != "id-A" {
-		t.Error("Model A should have id-A")
+	if ctx.GetSharedModel("file:///model-A.pth") != sharedA {
+		t.Error("Model A correlation should remain addressable")
 	}
-	if ctx.GetSharedModel("file:///model-B.pth").GetModelId() != "id-B" {
-		t.Error("Model B should have id-B")
+	if ctx.GetSharedModel("file:///model-B.pth") != sharedB {
+		t.Error("Model B correlation should remain addressable")
 	}
 }
 

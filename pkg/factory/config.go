@@ -178,7 +178,6 @@ type MtlfConfig struct {
 	Endpoint         string                 `yaml:"endpoint,omitempty"`         // Master REST API
 	TriggerOnStartup bool                   `yaml:"triggerOnStartup,omitempty"` // Trigger training on NWDAF startup
 	TriggerDelay     int                    `yaml:"triggerDelay,omitempty"`     // Startup trigger delay (default: 30)
-	StaticModelUrl   string                 `yaml:"staticModelUrl,omitempty"`   // Static URL for ML model
 	Task             map[string]any         `yaml:"task,omitempty"`             // Task payload (mirrors task.json)
 	AccuracyMonitor  *AccuracyMonitorConfig `yaml:"accuracyMonitor,omitempty"`  // Accuracy monitoring settings
 }

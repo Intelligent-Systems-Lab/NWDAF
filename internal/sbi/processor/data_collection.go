@@ -256,30 +256,20 @@ func (p *Processor) triggerMlModelProvisioning(
 	}
 
 	ctx := nwdaf_context.GetSelf()
-
-	// 1. Static Model URL (Direct Initialization)
-	// StaticModelUrl is under mtlf (Daisy/1st-party MTLF) config
-	mtlfCfg := cfg.Configuration.Mtlf
-	if mtlfCfg != nil && mtlfCfg.StaticModelUrl != "" {
-		logger.ProcLog.Infof("LoadMlModel: use static model sub=%s", subscriptionId)
-
-		mlInfo := nwdaf_context.NewMlModelInfo(eventSub.Event, "static-url")
-		mlInfo.SetModelUrl(mtlfCfg.StaticModelUrl)
-		ctx.SetMlModelInfo(subscriptionId, mlInfo)
-
-		go func() {
-			p.anlf.InitializeMlModel(subscriptionId, mlInfo, mtlfCfg.StaticModelUrl)
-			if p.wg != nil {
-				p.anlf.StartAccuracyMonitorForModel(mtlfCfg.StaticModelUrl, p.wg)
-			}
-		}()
-		return
-	}
-
-	// 2. Dynamic Model Provisioning (External MTLF Subscription)
 	externalMtlf := cfg.Configuration.ExternalMtlf
+	mtlfEndpoint := ""
+	if externalMtlf != nil && len(externalMtlf.Endpoints) > 0 {
+		mtlfEndpoint = externalMtlf.Endpoints[0]
+	}
+	mlInfo := nwdaf_context.NewMlModelInfo(eventSub.Event, mtlfEndpoint)
+	ctx.SetMlModelInfo(subscriptionId, mlInfo)
+
 	if externalMtlf == nil || !externalMtlf.Enabled {
-		logger.ProcLog.Debugf("External MTLF not configured or disabled, skipping ML model provisioning")
+		if cfg.Configuration.AnlfBackend != nil && cfg.Configuration.AnlfBackend.Enabled {
+			if err := p.anlf.ApplySubscriptionRegistration(subscriptionId); err != nil {
+				logger.ProcLog.Errorf("ApplyAnlfRuntime failed: sub=%s err=%v", subscriptionId, err)
+			}
+		}
 		return
 	}
 
@@ -295,10 +285,6 @@ func (p *Processor) triggerMlModelProvisioning(
 		return
 	}
 
-	// Create MlModelInfo to track the model provisioning state
-	mlInfo := nwdaf_context.NewMlModelInfo(eventSub.Event, externalMtlf.Endpoints[0])
-	ctx.SetMlModelInfo(subscriptionId, mlInfo)
-
 	notifUri := p.anlf.BuildProvisionNotificationURI()
 	if notifUri == "" {
 		logger.ProcLog.Warnf("External MTLF subscription skipped: AnLF provision notification URI is empty")
@@ -306,7 +292,6 @@ func (p *Processor) triggerMlModelProvisioning(
 	}
 
 	// Subscribe to first External MTLF endpoint
-	mtlfEndpoint := externalMtlf.Endpoints[0]
 	opts := consumer.MtlfSubscriptionOptions{
 		NotifUri: notifUri,
 		NotifId:  subscriptionId, // Use NWDAF subscription ID as correlation

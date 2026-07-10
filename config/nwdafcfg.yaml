@@ -80,7 +80,6 @@ configuration:
     endpoint: http://127.0.0.1:9887
     triggerOnStartup: false      # Trigger training once after NWDAF startup
     triggerDelay: 10            # seconds to wait before startup trigger
-    staticModelUrl: http://placeholder/download/initial  # Initial model bundle (pre-cached in AnLF backend artifacts/initial/)
     accuracyMonitor:
       enabled: true            # Trigger retraining on accuracy degradation
       checkInterval: 90         # seconds between accuracy checks

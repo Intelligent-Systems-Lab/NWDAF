@@ -27,7 +27,6 @@ type MlModelInfo struct {
 
 	// Model details (populated after MTLF notification)
 	ModelUrl string            // ML model file URL from MTLF
-	ModelId  string            // Model ID from ML inference service
 	Status   MlModelStatus     // Current status
 	Event    models.NwdafEvent // Analytics event type
 
@@ -59,11 +58,10 @@ func (m *MlModelInfo) SetModelUrl(modelUrl string) {
 	m.Status = MlModelStatus_LOADING
 }
 
-// SetModelReady marks the model as ready for inference
-func (m *MlModelInfo) SetModelReady(modelId string) {
+// SetModelReady marks the subscription runtime as ready for inference.
+func (m *MlModelInfo) SetModelReady() {
 	m.Lock()
 	defer m.Unlock()
-	m.ModelId = modelId
 	m.Status = MlModelStatus_READY
 	m.LastError = nil
 }
@@ -83,11 +81,10 @@ func (m *MlModelInfo) IsReady() bool {
 	return m.Status == MlModelStatus_READY
 }
 
-// GetModelId returns the model ID used for backend prediction calls.
-func (m *MlModelInfo) GetModelId() string {
+func (m *MlModelInfo) GetModelURL() string {
 	m.RLock()
 	defer m.RUnlock()
-	return m.ModelId
+	return m.ModelUrl
 }
 
 // GetStatus returns the current status
@@ -101,17 +98,13 @@ func (m *MlModelInfo) GetStatus() MlModelStatus {
 // SharedModelInfo — per-modelUrl shared model state
 // ============================================================================
 
-// SharedModelInfo tracks a loaded ML model shared across subscriptions.
-// One SharedModelInfo per unique modelUrl. Multiple subscriptions can share
-// the same model, avoiding duplicate backend model loading.
+// SharedModelInfo retains model-reference correlation for the Go-owned
+// accuracy workflow. PyAnLF owns model loading and runtime usage tracking.
 type SharedModelInfo struct {
 	sync.RWMutex
 	ModelUrl    string
-	ModelId     string              // From the AnLF backend (set once on first load)
 	Event       models.NwdafEvent   // Analytics event type
 	Subscribers map[string]struct{} // nwdafSubId set
-	loadOnce    sync.Once
-	loaded      chan struct{} // closed when loading completes (success or failure)
 }
 
 // NewSharedModelInfo creates a new SharedModelInfo
@@ -120,19 +113,7 @@ func NewSharedModelInfo(modelUrl string, event models.NwdafEvent) *SharedModelIn
 		ModelUrl:    modelUrl,
 		Event:       event,
 		Subscribers: make(map[string]struct{}),
-		loaded:      make(chan struct{}),
 	}
-}
-
-// LoadDone signals that model loading has completed (success or failure).
-// Safe to call multiple times; only the first call takes effect.
-func (s *SharedModelInfo) LoadDone() {
-	s.loadOnce.Do(func() { close(s.loaded) })
-}
-
-// WaitLoaded blocks until loading is complete.
-func (s *SharedModelInfo) WaitLoaded() {
-	<-s.loaded
 }
 
 // AddSubscriber adds a subscriber, returns current count
@@ -156,21 +137,6 @@ func (s *SharedModelInfo) SubscriberCount() int {
 	s.RLock()
 	defer s.RUnlock()
 	return len(s.Subscribers)
-}
-
-// GetModelId returns the shared model ID
-func (s *SharedModelInfo) GetModelId() string {
-	s.RLock()
-	defer s.RUnlock()
-	return s.ModelId
-}
-
-// SetModelId stores the backend model ID and signals load completion.
-func (s *SharedModelInfo) SetModelId(modelId string) {
-	s.Lock()
-	s.ModelId = modelId
-	s.Unlock()
-	s.LoadDone()
 }
 
 // GetSubscriberIDs returns a snapshot of all subscriber IDs for this model.

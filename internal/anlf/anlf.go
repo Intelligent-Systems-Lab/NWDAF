@@ -61,14 +61,6 @@ func (a *AnlfService) config() *factory.Config {
 	return a.nwdaf.Config()
 }
 
-func anlfBackendEndpoint(cfg *factory.Config) string {
-	if cfg == nil || cfg.Configuration == nil ||
-		cfg.Configuration.AnlfBackend == nil || !cfg.Configuration.AnlfBackend.Enabled {
-		return ""
-	}
-	return cfg.Configuration.AnlfBackend.Endpoint
-}
-
 func ueCommunicationModelParams(cfg *factory.Config) *factory.ModelParams {
 	if cfg != nil && cfg.Configuration != nil &&
 		cfg.Configuration.Analytics != nil &&
