@@ -1002,8 +1002,6 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 	mlInfo := nwdaf_context.NewMlModelInfo(models.NwdafEvent_UE_COMMUNICATION, "mtlf-old")
 	mlInfo.SetModelUrl("file:///models/old-model")
 	ctx.SetMlModelInfo(subscriptionID, mlInfo)
-	shared, _ := ctx.GetOrCreateSharedModel("file:///models/old-model", models.NwdafEvent_UE_COMMUNICATION)
-	shared.AddSubscriber(subscriptionID)
 
 	past := time.Now().Add(-time.Second)
 	req := &models.NnwdafEventsSubscription{
@@ -1060,9 +1058,6 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 
 	if ctx.GetMlModelInfo(subscriptionID) == nil {
 		t.Fatal("model correlation should remain available across runtime reconcile")
-	}
-	if ctx.GetSharedModel("file:///models/old-model") == nil {
-		t.Fatal("active shared model correlation should remain after update")
 	}
 	if subscribeCount != 2 {
 		t.Fatalf("expected two SMF subscribe calls, got %d", subscribeCount)

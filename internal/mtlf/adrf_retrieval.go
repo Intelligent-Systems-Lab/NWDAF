@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/factory"
@@ -19,7 +20,7 @@ const adrfCleanupUnsubscribeTimeout = 5 * time.Second
 type retrainJob struct {
 	tid         string
 	oldModelUrl string
-	store       *nwdaf_context.ModelAccuracyStore
+	store       retrainingState
 
 	totalSubs        int               // expected terminationReq count
 	watchdogDuration time.Duration     // computed once at creation; used for Reset calls
@@ -82,35 +83,28 @@ func (m *MtlfService) runAdrfRetrainWorkflow(
 	mtlfCfg *factory.MtlfConfig,
 	adrfCfg *factory.AdrfConfig,
 	oldModelUrl string,
-	store *nwdaf_context.ModelAccuracyStore,
+	store retrainingState,
 ) {
 	tid := uuid.New().String()
 	notifURI := m.buildCollectorRetrievalNotifyURL()
 
-	// Collect AdrfSmfInfos for SUPIs serving this model
 	nwdafCtx := nwdaf_context.GetSelf()
-	sharedModel := nwdafCtx.GetSharedModel(oldModelUrl)
-	if sharedModel == nil {
-		mtlfLog.Warn("AdrfRetrain: fallback reason=no-shared-model")
-		m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
-		return
-	}
-
-	subscriberIds := sharedModel.GetSubscriberIDs()
 	seenSupis := map[string]bool{}
 	var infos []*nwdaf_context.AdrfSmfInfo
-	for _, nwdafSubId := range subscriberIds {
-		for _, resource := range nwdafCtx.GetNwdafSubResources(nwdafSubId) {
-			if seenSupis[resource.Supi] {
+	if value, ok := m.accuracyReportContexts.Load(oldModelUrl); ok {
+		report := value.(contract.ModelAccuracyReport)
+		for _, sourceID := range report.RetrainContext.ObservationSourceIDs {
+			info := nwdafCtx.GetAdrfSmfInfo(sourceID)
+			if info == nil || seenSupis[info.Supi] {
 				continue
 			}
-			info := nwdafCtx.GetAdrfSmfInfo(resource.CorrelationId)
-			if info == nil {
-				continue
-			}
-			seenSupis[resource.Supi] = true
+			seenSupis[info.Supi] = true
 			infos = append(infos, info)
 		}
+	} else {
+		mtlfLog.Warn("AdrfRetrain: fallback reason=no-retrain-context")
+		m.submitDaisyTask(mtlfCfg, "", oldModelUrl, store)
+		return
 	}
 
 	if len(infos) == 0 {

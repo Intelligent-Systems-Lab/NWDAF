@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
@@ -393,11 +394,39 @@ func (p *Processor) triggerMlModelProvisioning(
 		Event:    eventSub.Event,
 		TgtUe:    eventSub.TgtUe,
 	}
+	runtimeRevision, requirements, sourceIDs, active := ctx.GetSubscription(subscriptionId).RuntimeSnapshot()
+	_ = requirements
+	_ = sourceIDs
+	_ = active
+	binding := contract.ModelProvisionBinding{
+		RuntimeRevision:           runtimeRevision,
+		NotificationCorrelationID: subscriptionId,
+		ProviderID:                mtlfEndpoint,
+	}
+	if err := p.anlf.SyncModelProvisionBinding(subscriptionId, binding); err != nil {
+		logger.ProcLog.Errorf("CreateMtlfSubscription pre-sync failed: sub=%s err=%v", subscriptionId, err)
+		mlInfo.SetModelFailed(err)
+		return
+	}
 
 	subId, err := mtlfConsumer.SubscribeToMtlf(p.nwdaf.CancelContext(), mtlfEndpoint, opts)
 	if err != nil {
 		logger.ProcLog.Errorf("CreateMtlfSubscription failed: sub=%s err=%v", subscriptionId, err)
 		mlInfo.SetModelFailed(err)
+		return
+	}
+	binding.MtlfSubscriptionID = subId
+	if syncErr := p.anlf.SyncModelProvisionBinding(subscriptionId, binding); syncErr != nil {
+		logger.ProcLog.Errorf(
+			"CreateMtlfSubscription binding sync failed: sub=%s mtlfSub=%s err=%v",
+			subscriptionId,
+			subId,
+			syncErr,
+		)
+		if rollbackErr := mtlfConsumer.UnsubscribeFromMtlf(p.nwdaf.CancelContext(), mtlfEndpoint, subId); rollbackErr != nil {
+			logger.ProcLog.Errorf("CreateMtlfSubscription rollback failed: mtlfSub=%s err=%v", subId, rollbackErr)
+		}
+		mlInfo.SetModelFailed(syncErr)
 		return
 	}
 

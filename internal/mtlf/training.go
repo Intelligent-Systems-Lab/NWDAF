@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
@@ -19,12 +19,14 @@ type inFlightEntry struct {
 	oldModelUrl string
 	// store is non-nil only for accuracy-triggered retraining; used to clear
 	// the IsRetraining flag if training fails so the monitor can re-trigger.
-	store *nwdaf_context.ModelAccuracyStore
+	store          retrainingState
+	accuracyReport *contract.ModelAccuracyReport
 }
 
 type TrainingCompletion struct {
-	OldModelURL string
-	Store       *nwdaf_context.ModelAccuracyStore
+	OldModelURL    string
+	Store          retrainingState
+	AccuracyReport *contract.ModelAccuracyReport
 }
 
 // StartTrainingScheduler starts background MTLF training scheduler.
@@ -71,11 +73,11 @@ func (m *MtlfService) runDelayedTraining(delaySec int, mtlfCfg *factory.MtlfConf
 // store.SetRetraining(false) is called on failure so the monitor can re-trigger later.
 func (m *MtlfService) startRetrainWorkflow(
 	oldModelUrl string,
-	store *nwdaf_context.ModelAccuracyStore,
+	store retrainingState,
 ) {
 	cfg := m.config()
 	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.Mtlf == nil {
-		store.SetRetraining(false)
+		m.setModelRetraining(oldModelUrl, store, false)
 		return
 	}
 	mtlfCfg := cfg.Configuration.Mtlf
@@ -104,13 +106,11 @@ func (m *MtlfService) submitDaisyTask(
 	mtlfCfg *factory.MtlfConfig,
 	tid string,
 	oldModelUrl string,
-	store *nwdaf_context.ModelAccuracyStore,
+	store retrainingState,
 ) {
 	if m.shutdownStarted() {
 		mtlfLog.Infof("SubmitTrainingTask: skipped reason=shutdown tid=%s", tid)
-		if store != nil {
-			store.SetRetraining(false)
-		}
+		m.setModelRetraining(oldModelUrl, store, false)
 		return
 	}
 
@@ -131,25 +131,36 @@ func (m *MtlfService) submitDaisyTask(
 	if m.daisyClient == nil {
 		err := fmt.Errorf("daisy client not initialized")
 		mtlfLog.Errorf("Failed to send async training request to Daisy: %v", err)
-		if store != nil {
-			store.SetRetraining(false)
-		}
+		m.setModelRetraining(oldModelUrl, store, false)
 		return
 	}
 
 	taskId, err := m.daisyClient.TriggerTrainingAsync(m.nwdaf.CancelContext(), taskCopy, cbURL, tid)
 	if err != nil {
 		mtlfLog.Errorf("SubmitTrainingTask failed: %v", err)
-		if store != nil {
-			store.SetRetraining(false)
-		}
+		m.setModelRetraining(oldModelUrl, store, false)
 		return
 	}
 
-	m.inFlight.Store(taskId, &inFlightEntry{
+	entry := &inFlightEntry{
 		oldModelUrl: oldModelUrl,
 		store:       store,
-	})
+	}
+	if value, ok := m.accuracyReportContexts.Load(oldModelUrl); ok {
+		report := value.(contract.ModelAccuracyReport)
+		entry.accuracyReport = &report
+	} else if oldModelUrl == "" && mtlfCfg.ModelProvider != nil && mtlfCfg.ModelProvider.ProviderID != "" {
+		report := contract.ModelAccuracyReport{
+			ModelIdentity: contract.ModelIdentity{
+				ProviderID:    mtlfCfg.ModelProvider.ProviderID,
+				ModelUniqueID: mtlfCfg.ModelProvider.BootstrapModelUniqueID,
+			},
+			Generation:        1,
+			MonitoringContext: contract.MonitoringContext{AnalyticsEvent: "UE_COMMUNICATION"},
+		}
+		entry.accuracyReport = &report
+	}
+	m.inFlight.Store(taskId, entry)
 	mtlfLog.Infof("SubmitTrainingTask: accepted task=%s", taskId)
 }
 
@@ -163,8 +174,9 @@ func (m *MtlfService) TakeTrainingCompletion(taskID string) (TrainingCompletion,
 	}
 	entry := val.(*inFlightEntry)
 	return TrainingCompletion{
-		OldModelURL: entry.oldModelUrl,
-		Store:       entry.store,
+		OldModelURL:    entry.oldModelUrl,
+		Store:          entry.store,
+		AccuracyReport: entry.accuracyReport,
 	}, true
 }
 
@@ -174,9 +186,7 @@ func (m *MtlfService) HandleFailedTrainingCompletion(
 	errMsg string,
 ) {
 	mtlfLog.Errorf("TrainingCompletion failed: task=%s err=%s", taskID, errMsg)
-	if completion.Store != nil {
-		completion.Store.SetRetraining(false)
-	}
+	m.setModelRetraining(completion.OldModelURL, completion.Store, false)
 }
 
 func (m *MtlfService) HandleSuccessfulTrainingCompletion(
@@ -185,11 +195,29 @@ func (m *MtlfService) HandleSuccessfulTrainingCompletion(
 	modelURL string,
 ) {
 	mtlfLog.Infof("TrainingCompletion: complete task=%s", taskID)
+	if completion.AccuracyReport != nil && m.onModelProvisionEvent != nil {
+		report := completion.AccuracyReport
+		event := contract.ModelProvisionEvent{
+			Source:         "DAISY_RETRAIN",
+			ModelIdentity:  report.ModelIdentity,
+			ModelUpdateInd: true,
+			Artifact:       contract.ModelArtifact{MLModelURL: modelURL},
+			AnalyticsEvent: report.MonitoringContext.AnalyticsEvent,
+			TrainingTaskID: taskID,
+		}
+		if err := m.onModelProvisionEvent(event); err != nil {
+			mtlfLog.Errorf("TrainingCompletion provision event failed: task=%s err=%v", taskID, err)
+			m.setModelRetraining(completion.OldModelURL, completion.Store, false)
+			return
+		}
+		m.stateStore.DeleteModel(report.ModelIdentity.Key())
+		m.accuracyReportContexts.Delete(report.ModelIdentity.Key())
+		m.retrainingModels.Delete(report.ModelIdentity.Key())
+		return
+	}
 	if err := m.applyModelAfterRetrain(completion.OldModelURL, modelURL); err != nil {
 		mtlfLog.Errorf("TrainingCompletion apply failed: task=%s err=%v", taskID, err)
-		if completion.Store != nil {
-			completion.Store.SetRetraining(false)
-		}
+		m.setModelRetraining(completion.OldModelURL, completion.Store, false)
 	}
 }
 

@@ -81,9 +81,6 @@ func (d *ReportDispatcher) DispatchAnalyticsReport(
 		return fmt.Errorf("%w: status=%d", ErrExternalDelivery, resp.StatusCode)
 	}
 	delivered = true
-	if d.recorder != nil {
-		d.recorder.RecordAnalyticsReport(subscriptionID, report)
-	}
 	return nil
 }
 

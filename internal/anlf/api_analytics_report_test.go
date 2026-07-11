@@ -11,15 +11,19 @@ import (
 
 	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/internal/anlf/processor"
-	"github.com/free5gc/openapi/models"
 )
 
 type analyticsReportProcessorStub struct{ err error }
 
-func (*analyticsReportProcessorStub) HandleMlModelProvisionNotify([]models.NwdafMlModelProvNotif) {}
+func (*analyticsReportProcessorStub) HandleMlModelProvisionNotify([]contract.ModelProvisionNotification) {
+}
 
 func (p *analyticsReportProcessorStub) HandleAnalyticsReport(string, *contract.AnalyticsReport) error {
 	return p.err
+}
+
+func (*analyticsReportProcessorStub) HandleModelAccuracyReport(*contract.ModelAccuracyReport) error {
+	return nil
 }
 
 func TestHandleAnalyticsReportStatusMapping(t *testing.T) {

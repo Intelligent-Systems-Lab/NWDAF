@@ -443,11 +443,12 @@ func TestTriggerMlModelProvisioning_UsesAnlfServerNotificationURI(t *testing.T) 
 	mockApp.EXPECT().Consumer().Return(mockConsumer).AnyTimes()
 	mockApp.EXPECT().Config().Return(cfg).AnyTimes()
 
-	anlfService := newTestAnlfCoordinator(mockApp, nil, nil)
+	anlfService := newTestAnlfCoordinator(mockApp, &provisionBindingBackend{}, nil)
 	mtlfService := mtlf.NewMtlfService(mockApp, nil, nil)
 	p := NewProcessor(mockApp, anlfService, mtlfService)
 
 	subId := "test-sub-dynamic"
+	nwdaf_context.GetSelf().AddSubscription(&nwdaf_context.Subscription{ID: subId, IsActive: true, RuntimeRevision: 1})
 	eventSub := models.NwdafEventsSubscriptionEventSubscription{
 		Event: models.NwdafEvent_UE_COMMUNICATION,
 		TgtUe: &models.TargetUeInformation{

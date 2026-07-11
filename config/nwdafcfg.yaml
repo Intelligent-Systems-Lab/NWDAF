@@ -79,17 +79,12 @@ configuration:
     endpoint: http://127.0.0.1:9887
     triggerOnStartup: false      # Trigger training once after NWDAF startup
     triggerDelay: 10            # seconds to wait before startup trigger
-    accuracyMonitor:
+    modelProvider:
+      providerId: local
+      bootstrapModelUniqueId: 1
+    accuracyPolicy:
       enabled: true            # Trigger retraining on accuracy degradation
-      checkInterval: 90         # seconds between accuracy checks
       minSamples: 2             # keep testbed margin; do not require the theoretical max slots per round
-      warmupDuration: 20        # seconds to skip checks after start (model cold-start)
-      metricsToRecord:
-        - sMAPE
-        - MAE
-        - MSE
-        - WAPE
-        - NRMSE
       primaryMetric: WAPE       # decision metric for retrain policy
       recentBufferSize: 12      # per-scope retained report history
       minBufferSamples: 5       # samples required before enabling z-score gate

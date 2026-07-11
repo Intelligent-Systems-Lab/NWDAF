@@ -67,16 +67,6 @@ type NWDAFContext struct {
 	// Per TS 23.502 §4.15.4.5.2
 	groupResolver *GroupResolver
 
-	// --- Accuracy Monitoring ---
-
-	// Shared model registry: modelUrl → *SharedModelInfo
-	// Tracks loaded models to avoid duplicate backend model loading.
-	sharedModelRegistry sync.Map
-
-	// Per-model accuracy stores: modelUrl → *ModelAccuracyStore
-	// Only used when accuracy monitoring is enabled
-	modelAccuracyStores sync.Map
-
 	// ADRF SMF info: correlationId → *AdrfSmfInfo
 	// Captures SMF subscription parameters at subscription time for ADRF storage.
 	adrfSmfInfos sync.Map
@@ -309,66 +299,6 @@ func (c *NWDAFContext) SetGroupResolver(resolver *GroupResolver) {
 // GetGroupResolver returns the GroupResolver
 func (c *NWDAFContext) GetGroupResolver() *GroupResolver {
 	return c.groupResolver
-}
-
-// ============================================================================
-// Shared Model Registry Methods (always active)
-// ============================================================================
-
-// GetOrCreateSharedModel returns existing or creates new SharedModelInfo
-// Returns (model, isNew)
-func (c *NWDAFContext) GetOrCreateSharedModel(
-	modelUrl string, event models.NwdafEvent,
-) (*SharedModelInfo, bool) {
-	newModel := NewSharedModelInfo(modelUrl, event)
-	actual, loaded := c.sharedModelRegistry.LoadOrStore(modelUrl, newModel)
-	return actual.(*SharedModelInfo), !loaded
-}
-
-// GetSharedModel returns SharedModelInfo for modelUrl (nil if not exists)
-func (c *NWDAFContext) GetSharedModel(modelUrl string) *SharedModelInfo {
-	if val, ok := c.sharedModelRegistry.Load(modelUrl); ok {
-		return val.(*SharedModelInfo)
-	}
-	return nil
-}
-
-// DeleteSharedModel removes SharedModelInfo for modelUrl
-func (c *NWDAFContext) DeleteSharedModel(modelUrl string) {
-	c.sharedModelRegistry.Delete(modelUrl)
-	logger.CtxLog.Debugf("Deleted shared model: %s", modelUrl)
-}
-
-// ============================================================================
-// Per-Model Accuracy Store Methods (optional monitoring)
-// ============================================================================
-
-// GetOrCreateModelAccuracyStore returns existing or creates new store
-// Returns (store, isNew)
-func (c *NWDAFContext) GetOrCreateModelAccuracyStore(
-	modelUrl string,
-) (*ModelAccuracyStore, bool) {
-	newStore := NewModelAccuracyStore(modelUrl)
-	actual, loaded := c.modelAccuracyStores.LoadOrStore(modelUrl, newStore)
-	return actual.(*ModelAccuracyStore), !loaded
-}
-
-// GetModelAccuracyStore returns store for modelUrl (nil if not exists)
-func (c *NWDAFContext) GetModelAccuracyStore(
-	modelUrl string,
-) *ModelAccuracyStore {
-	if val, ok := c.modelAccuracyStores.Load(modelUrl); ok {
-		return val.(*ModelAccuracyStore)
-	}
-	return nil
-}
-
-// DeleteModelAccuracyStore removes and stops store for modelUrl
-func (c *NWDAFContext) DeleteModelAccuracyStore(modelUrl string) {
-	if val, ok := c.modelAccuracyStores.LoadAndDelete(modelUrl); ok {
-		val.(*ModelAccuracyStore).StopMonitor()
-	}
-	logger.CtxLog.Debugf("Deleted accuracy store: %s", modelUrl)
 }
 
 // NewCorrelationId returns a sequential, predictable correlation ID (corr-1, corr-2, ...)

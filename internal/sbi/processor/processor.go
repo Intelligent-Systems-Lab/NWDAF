@@ -26,6 +26,7 @@ type anlfCoordinator interface {
 	ReleaseSubscriptionRuntime(subscriptionID string) error
 	SyncCurrentObservationBindings(subscriptionID string) error
 	BuildProvisionNotificationURI() string
+	SyncModelProvisionBinding(subscriptionID string, binding contract.ModelProvisionBinding) error
 	EnqueueObservations(sourceID string, observations []contract.SourceObservation) bool
 }
 

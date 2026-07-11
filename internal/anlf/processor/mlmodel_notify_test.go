@@ -5,7 +5,6 @@ import (
 
 	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/internal/anlf/coordinator"
-	"github.com/free5gc/openapi/models"
 )
 
 type fakeMlModelProvisionWorkflow struct {
@@ -15,10 +14,10 @@ type fakeMlModelProvisionWorkflow struct {
 }
 
 func (f *fakeMlModelProvisionWorkflow) PlanModelProvisionActions(
-	notif *models.NwdafMlModelProvNotif,
+	notif *contract.ModelProvisionNotification,
 ) []coordinator.ModelProvisionAction {
 	if notif != nil {
-		f.plannedNotifications = append(f.plannedNotifications, notif.SubscriptionId)
+		f.plannedNotifications = append(f.plannedNotifications, notif.SubscriptionID)
 	}
 	if len(f.plannedActions) == 0 {
 		return nil
@@ -47,9 +46,9 @@ func TestHandleMlModelProvisionNotify_PlansAndStartsActions(t *testing.T) {
 	}
 	p := NewProcessor(workflow)
 
-	p.HandleMlModelProvisionNotify([]models.NwdafMlModelProvNotif{
-		{SubscriptionId: "notif-1"},
-		{SubscriptionId: "notif-2"},
+	p.HandleMlModelProvisionNotify([]contract.ModelProvisionNotification{
+		{SubscriptionID: "notif-1"},
+		{SubscriptionID: "notif-2"},
 	})
 
 	if len(workflow.plannedNotifications) != 2 {
@@ -71,5 +70,5 @@ func TestHandleMlModelProvisionNotify_PlansAndStartsActions(t *testing.T) {
 
 func TestHandleMlModelProvisionNotify_IgnoresNilWorkflow(t *testing.T) {
 	p := NewProcessor(nil)
-	p.HandleMlModelProvisionNotify([]models.NwdafMlModelProvNotif{{SubscriptionId: "notif-1"}})
+	p.HandleMlModelProvisionNotify([]contract.ModelProvisionNotification{{SubscriptionID: "notif-1"}})
 }

@@ -3,30 +3,51 @@ package coordinator
 import (
 	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
-	"github.com/free5gc/openapi/models"
 )
 
 type ModelProvisionAction struct {
 	Request contract.ApplySubscriptionRuntimeRequest
+	Event   *contract.ModelProvisionEvent
 }
 
 // PlanModelProvisionActions resolves one callback payload into model-activation
 // actions after the HTTP edge has already parsed and validated the body.
 func (a *Coordinator) PlanModelProvisionActions(
-	notif *models.NwdafMlModelProvNotif,
+	notif *contract.ModelProvisionNotification,
 ) []ModelProvisionAction {
 	if notif == nil {
 		return nil
 	}
 
-	actions := make([]ModelProvisionAction, 0, len(notif.EventNotifs))
-	for _, eventNotif := range notif.EventNotifs {
+	actions := make([]ModelProvisionAction, 0, len(notif.EventNotifications))
+	for _, eventNotif := range notif.EventNotifications {
 		if eventNotif.MLFileAddr == nil || eventNotif.MLFileAddr.MLModelUrl == "" {
 			anlfLog.Warnf("No ML model URL in notification for event %s", eventNotif.Event)
 			continue
 		}
 
-		nwdafSubID := a.resolveNwdafSubscriptionID(eventNotif.NotifCorreId, notif.SubscriptionId)
+		if eventNotif.ModelUniqueID != nil {
+			providerID := eventNotif.ModelProviderID
+			if providerID == "" {
+				providerID = "external-mtlf"
+			}
+			actions = append(actions, ModelProvisionAction{Event: &contract.ModelProvisionEvent{
+				Source: "MTLF_PROVISION",
+				ModelIdentity: contract.ModelIdentity{
+					ProviderID: providerID, ModelUniqueID: *eventNotif.ModelUniqueID,
+				},
+				ModelUpdateInd: eventNotif.ModelUpdateInd,
+				Artifact:       contract.ModelArtifact{MLModelURL: eventNotif.MLFileAddr.MLModelUrl},
+				AnalyticsEvent: string(eventNotif.Event),
+				NotificationCorrelation: contract.ProvisionNotificationCorrelation{
+					NotificationCorrelationID: eventNotif.NotifCorreId,
+					ProvisionSubscriptionID:   notif.SubscriptionID,
+				},
+			}})
+			continue
+		}
+
+		nwdafSubID := a.resolveNwdafSubscriptionID(eventNotif.NotifCorreId, notif.SubscriptionID)
 		if nwdafSubID == "" {
 			anlfLog.Warnf("No correlation found for event %s", eventNotif.Event)
 			continue
@@ -45,8 +66,8 @@ func (a *Coordinator) PlanModelProvisionActions(
 		request, err := a.BuildSubscriptionRuntimeRequest(nwdafSubID, &contract.ProvisionContext{
 			Source:              provisionSourceMTLF,
 			MtlfSubscriptionID:  mtlfSubscriptionID,
-			NotifSubscriptionID: notif.SubscriptionId,
-			MLEventNotification: contract.MLEventNotification{MlEventNotif: eventNotif},
+			NotifSubscriptionID: notif.SubscriptionID,
+			MLEventNotification: contract.MLEventNotification{MlEventNotif: eventNotif.MlEventNotif},
 		})
 		if err != nil {
 			anlfLog.Warnf("Cannot build runtime apply request: sub=%s err=%v", nwdafSubID, err)
@@ -76,6 +97,12 @@ func (a *Coordinator) StartModelProvisionActions(actions []ModelProvisionAction)
 // order so shared subscription state stays aligned with the model being loaded.
 func (a *Coordinator) ExecuteModelProvisionActions(actions []ModelProvisionAction) {
 	for _, action := range actions {
+		if action.Event != nil {
+			if _, err := a.ApplyModelProvisionEvent(*action.Event); err != nil {
+				anlfLog.Errorf("Model provision event forwarding failed: err=%v", err)
+			}
+			continue
+		}
 		subscriptionID := action.Request.Subscription.SubscriptionID
 		if subscriptionID == "" {
 			continue

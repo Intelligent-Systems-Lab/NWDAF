@@ -4,8 +4,7 @@ import (
 	"testing"
 	"time"
 
-	anlf "github.com/free5gc/nwdaf/internal/anlf/accuracy"
-	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	anlf "github.com/free5gc/nwdaf/internal/mtlf/contract"
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
@@ -21,8 +20,8 @@ func setTestAccuracyMonitorConfig(t *testing.T, cfg *factory.AccuracyMonitorConf
 	return &factory.Config{
 		Configuration: &factory.Configuration{
 			Mtlf: &factory.MtlfConfig{
-				Enabled:         true,
-				AccuracyMonitor: cfg,
+				Enabled:        true,
+				AccuracyPolicy: cfg,
 			},
 		},
 	}
@@ -109,12 +108,12 @@ func TestHandleAccuracyReports_ColdStartBuildsBaselineWithoutTrigger(t *testing.
 	})
 
 	m := newTestMtlfService(cfg)
-	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	store := newTestRetrainingState()
 	modelURL := testModelURL
 	scopeKey := testScopeKey
 
 	triggered := 0
-	m.onRetrainTriggered = func(modelURL string, store *nwdaf_context.ModelAccuracyStore) {
+	m.onRetrainTriggered = func(modelURL string, store retrainingState) {
 		triggered++
 	}
 
@@ -166,7 +165,7 @@ func TestHandleAccuracyReports_BaselineReadyRequiresRelGate(t *testing.T) {
 	})
 
 	m := newTestMtlfService(cfg)
-	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	store := newTestRetrainingState()
 	modelURL := testModelURL
 	scopeKey := testScopeKey
 
@@ -198,9 +197,9 @@ func TestHandleAccuracyReports_TriggersOnlyAfterBaselineReady(t *testing.T) {
 	})
 
 	m := newTestMtlfService(cfg)
-	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	store := newTestRetrainingState()
 	triggered := 0
-	m.onRetrainTriggered = func(modelURL string, store *nwdaf_context.ModelAccuracyStore) {
+	m.onRetrainTriggered = func(modelURL string, store retrainingState) {
 		triggered++
 	}
 
@@ -261,7 +260,7 @@ func TestHandleAccuracyReports_DecisionWindowRetainsRecentHits(t *testing.T) {
 	})
 
 	m := newTestMtlfService(cfg)
-	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	store := newTestRetrainingState()
 	modelURL := testModelURL
 	scopeKey := testScopeKey
 
@@ -305,7 +304,7 @@ func TestHandleAccuracyReports_DegradationLowTrafficSkipsWindowUpdate(t *testing
 	})
 
 	m := newTestMtlfService(cfg)
-	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	store := newTestRetrainingState()
 	scope := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 3)
 	prefillScope(scope, 150, 150, 150)
 
@@ -338,7 +337,7 @@ func TestHandleAccuracyReports_DegradationSignalDoesNotPolluteReferenceBuffer(t 
 	})
 
 	m := newTestMtlfService(cfg)
-	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	store := newTestRetrainingState()
 	scope := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 3)
 	prefillScope(scope, 150, 150, 150)
 
@@ -367,7 +366,7 @@ func TestHandleAccuracyReports_SkipWhenRetrainingInFlight(t *testing.T) {
 	})
 
 	m := newTestMtlfService(cfg)
-	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	store := newTestRetrainingState()
 	store.SetRetraining(true)
 
 	modelURL := testModelURL
@@ -394,7 +393,7 @@ func TestHandleAccuracyReports_MultiScopeIsolation(t *testing.T) {
 	})
 
 	m := newTestMtlfService(cfg)
-	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	store := newTestRetrainingState()
 
 	scopeA := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 2)
 	scopeB := m.stateStore.GetOrCreateScope(testModelURL, testScopeKeyB, 5, 2)
@@ -430,7 +429,7 @@ func TestHandleAccuracyReports_AnyScopeTriggersRetrain(t *testing.T) {
 	})
 
 	m := newTestMtlfService(cfg)
-	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	store := newTestRetrainingState()
 
 	scopeA := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 1)
 	scopeB := m.stateStore.GetOrCreateScope(testModelURL, testScopeKeyB, 5, 1)
@@ -438,7 +437,7 @@ func TestHandleAccuracyReports_AnyScopeTriggersRetrain(t *testing.T) {
 	prefillScope(scopeB, 150, 150, 150)
 
 	triggered := 0
-	m.onRetrainTriggered = func(modelURL string, store *nwdaf_context.ModelAccuracyStore) {
+	m.onRetrainTriggered = func(modelURL string, store retrainingState) {
 		triggered++
 	}
 
@@ -474,7 +473,7 @@ func TestHandleAccuracyReports_MissingPrimaryMetricSkipsScope(t *testing.T) {
 	})
 
 	m := newTestMtlfService(cfg)
-	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	store := newTestRetrainingState()
 
 	m.HandleAccuracyReports(testModelURL, []anlf.AccuracyReport{{
 		ModelURL:    testModelURL,
@@ -504,7 +503,7 @@ func TestHandleAccuracyReports_ZeroHistoryStillRequiresAbsGate(t *testing.T) {
 	})
 
 	m := newTestMtlfService(cfg)
-	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	store := newTestRetrainingState()
 	scope := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 1)
 	prefillScope(scope, 0, 0, 0)
 
@@ -534,9 +533,9 @@ func TestHandleAccuracyReports_DecisionWindowToleratesMisses(t *testing.T) {
 	})
 
 	m := newTestMtlfService(cfg)
-	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	store := newTestRetrainingState()
 	triggered := 0
-	m.onRetrainTriggered = func(modelURL string, store *nwdaf_context.ModelAccuracyStore) {
+	m.onRetrainTriggered = func(modelURL string, store retrainingState) {
 		triggered++
 	}
 
@@ -585,9 +584,9 @@ func TestHandleAccuracyReports_ChronicPathTriggersWithoutDegradation(t *testing.
 	})
 
 	m := newTestMtlfService(cfg)
-	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	store := newTestRetrainingState()
 	triggered := 0
-	m.onRetrainTriggered = func(modelURL string, store *nwdaf_context.ModelAccuracyStore) {
+	m.onRetrainTriggered = func(modelURL string, store retrainingState) {
 		triggered++
 	}
 
@@ -641,7 +640,7 @@ func TestHandleAccuracyReports_ChronicPathRequiresTrafficScale(t *testing.T) {
 	})
 
 	m := newTestMtlfService(cfg)
-	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	store := newTestRetrainingState()
 	report := testAccuracyReportWithMetrics(testModelURL, testScopeKey, map[string]float64{
 		"MAE":  150,
 		"WAPE": 1.1,
@@ -687,9 +686,9 @@ func TestHandleAccuracyReports_LowTrafficOverpredictionTriggers(t *testing.T) {
 	})
 
 	m := newTestMtlfService(cfg)
-	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	store := newTestRetrainingState()
 	triggered := 0
-	m.onRetrainTriggered = func(modelURL string, store *nwdaf_context.ModelAccuracyStore) {
+	m.onRetrainTriggered = func(modelURL string, store retrainingState) {
 		triggered++
 	}
 
@@ -745,7 +744,7 @@ func TestHandleAccuracyReports_LowTrafficOverpredictionRequiresPredictedFloor(t 
 	})
 
 	m := newTestMtlfService(cfg)
-	store := nwdaf_context.NewModelAccuracyStore(testModelURL)
+	store := newTestRetrainingState()
 	scope := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 5, 3)
 	prefillScope(scope, 150, 150, 150)
 

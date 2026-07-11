@@ -226,7 +226,13 @@ type MtlfConfig struct {
 	TriggerOnStartup bool                   `yaml:"triggerOnStartup,omitempty"` // Trigger training on NWDAF startup
 	TriggerDelay     int                    `yaml:"triggerDelay,omitempty"`     // Startup trigger delay (default: 30)
 	Task             map[string]any         `yaml:"task,omitempty"`             // Task payload (mirrors task.json)
-	AccuracyMonitor  *AccuracyMonitorConfig `yaml:"accuracyMonitor,omitempty"`  // Accuracy monitoring settings
+	AccuracyPolicy   *AccuracyMonitorConfig `yaml:"accuracyPolicy,omitempty"`   // MTLF accuracy decision policy
+	ModelProvider    *ModelProviderConfig   `yaml:"modelProvider,omitempty"`    // Stable local model identity
+}
+
+type ModelProviderConfig struct {
+	ProviderID             string `yaml:"providerId"`
+	BootstrapModelUniqueID int64  `yaml:"bootstrapModelUniqueId"`
 }
 
 // AccuracyMonitorConfig controls accuracy monitoring behavior

@@ -5,9 +5,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/internal/util"
 	"github.com/free5gc/openapi"
-	"github.com/free5gc/openapi/models"
 )
 
 func (s *Server) mlModelNotifyRoutes() []Route {
@@ -22,7 +22,7 @@ func (s *Server) mlModelNotifyRoutes() []Route {
 // HandleMlModelProvisionNotify handles POST /mlmodel-notify.
 // Per TS 29.520 §5.4.5.2: callback body is []NwdafMlModelProvNotif.
 func (s *Server) HandleMlModelProvisionNotify(c *gin.Context) {
-	var notifications []models.NwdafMlModelProvNotif
+	var notifications []contract.ModelProvisionNotification
 	requestBody, err := c.GetRawData()
 	if err != nil {
 		anlfLog.Errorf("Get Request Body error: %+v", err)

@@ -7,7 +7,6 @@ import (
 	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
-	"github.com/free5gc/openapi/models"
 )
 
 const provisionSourceMTLF = "MTLF_PROVISION"
@@ -198,62 +197,25 @@ func (a *Coordinator) SyncObservationBindings(
 	return nil
 }
 
-func (a *Coordinator) ApplyRetrainedModel(oldModelReference, newModelReference string) error {
-	ctx := nwdaf_context.GetSelf()
-	if ctx == nil {
-		return fmt.Errorf("NWDAF context not initialized")
+func (a *Coordinator) SyncModelProvisionBinding(
+	subscriptionID string,
+	binding contract.ModelProvisionBinding,
+) error {
+	client, ok := a.backend.(ModelProvisionClient)
+	if !ok {
+		return fmt.Errorf("AnLF backend model provision client not initialized")
 	}
+	return client.SyncModelProvisionBinding(a.nwdaf.CancelContext(), subscriptionID, binding)
+}
 
-	var subscriptionIDs []string
-	if oldModelReference != "" {
-		if shared := ctx.GetSharedModel(oldModelReference); shared != nil {
-			subscriptionIDs = shared.GetSubscriberIDs()
-		}
-	} else {
-		for _, subscription := range ctx.GetAllSubscriptions() {
-			mlInfo := ctx.GetMlModelInfo(subscription.ID)
-			if mlInfo != nil && mlInfo.GetModelURL() == "" {
-				subscriptionIDs = append(subscriptionIDs, subscription.ID)
-			}
-		}
+func (a *Coordinator) ApplyModelProvisionEvent(
+	event contract.ModelProvisionEvent,
+) (*contract.ModelProvisionEventResponse, error) {
+	client, ok := a.backend.(ModelProvisionClient)
+	if !ok {
+		return nil, fmt.Errorf("AnLF backend model provision client not initialized")
 	}
-
-	if len(subscriptionIDs) == 0 {
-		return fmt.Errorf("no subscriptions use model reference %q", oldModelReference)
-	}
-
-	var applyErrors []error
-	for _, subscriptionID := range subscriptionIDs {
-		mlInfo := ctx.GetMlModelInfo(subscriptionID)
-		if mlInfo == nil {
-			continue
-		}
-		mlInfo.RLock()
-		event := mlInfo.Event
-		mtlfSubscriptionID := mlInfo.MtlfSubId
-		mlInfo.RUnlock()
-
-		request, err := a.BuildSubscriptionRuntimeRequest(subscriptionID, &contract.ProvisionContext{
-			Source:              provisionSourceMTLF,
-			MtlfSubscriptionID:  mtlfSubscriptionID,
-			NotifSubscriptionID: mtlfSubscriptionID,
-			MLEventNotification: contract.MLEventNotification{
-				MlEventNotif: models.MlEventNotif{
-					Event:        event,
-					NotifCorreId: subscriptionID,
-					MLFileAddr:   &models.MlModelAddr{MLModelUrl: newModelReference},
-				},
-				ModelUpdateInd: true,
-			},
-		})
-		if err == nil {
-			_, err = a.ApplySubscriptionRuntime(request)
-		}
-		if err != nil {
-			applyErrors = append(applyErrors, err)
-		}
-	}
-	return errors.Join(applyErrors...)
+	return client.ApplyModelProvisionEvent(a.nwdaf.CancelContext(), event)
 }
 
 func (a *Coordinator) applyModelReferenceCorrelation(subscriptionID, modelReference string) {
@@ -264,41 +226,14 @@ func (a *Coordinator) applyModelReferenceCorrelation(subscriptionID, modelRefere
 		return
 	}
 
-	oldModelReference := mlInfo.GetModelURL()
-	if oldModelReference != "" && oldModelReference != modelReference {
-		if oldShared := ctx.GetSharedModel(oldModelReference); oldShared != nil {
-			if remaining := oldShared.RemoveSubscriber(subscriptionID); remaining == 0 {
-				ctx.DeleteSharedModel(oldModelReference)
-			}
-		}
-		a.accuracy.StopAccuracyMonitorForModel(oldModelReference)
-	}
-
 	mlInfo.SetModelUrl(modelReference)
 	mlInfo.SetModelReady()
-	shared, _ := ctx.GetOrCreateSharedModel(modelReference, mlInfo.Event)
-	shared.AddSubscriber(subscriptionID)
-	a.accuracy.StartOwnedAccuracyMonitorForModel(modelReference)
 }
 
 func (a *Coordinator) removeModelReferenceCorrelation(subscriptionID string) {
 	ctx := nwdaf_context.GetSelf()
 	if ctx == nil {
 		return
-	}
-	mlInfo := ctx.GetMlModelInfo(subscriptionID)
-	if mlInfo == nil {
-		return
-	}
-
-	modelReference := mlInfo.GetModelURL()
-	if modelReference != "" {
-		if shared := ctx.GetSharedModel(modelReference); shared != nil {
-			if remaining := shared.RemoveSubscriber(subscriptionID); remaining == 0 {
-				ctx.DeleteSharedModel(modelReference)
-			}
-		}
-		a.accuracy.StopAccuracyMonitorForModel(modelReference)
 	}
 	ctx.DeleteMlModelInfo(subscriptionID)
 }

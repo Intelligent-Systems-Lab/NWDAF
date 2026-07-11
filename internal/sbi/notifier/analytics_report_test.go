@@ -41,7 +41,7 @@ func TestReportDispatcherMapsDeliversAndDeduplicates(t *testing.T) {
 	}, nil)
 	nwdaf_context.GetSelf().AddSubscription(subscription)
 
-	dispatcher := NewReportDispatcher(context.Background(), nil)
+	dispatcher := NewReportDispatcher(context.Background())
 	report := &contract.AnalyticsReport{
 		ReportID: "report-1", ReportSequence: 1, RuntimeRevision: 3, GeneratedAt: time.Now(),
 		EventNotifications: []contract.AnalyticsEventNotification{{

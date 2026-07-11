@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
@@ -66,7 +66,7 @@ func TestHandleTrainingComplete_UnknownTaskId(t *testing.T) {
 // training callback clears the store's retraining flag and removes the entry.
 func TestHandleTrainingComplete_Failure_ClearsRetraining(t *testing.T) {
 	m := &MtlfService{}
-	store := nwdaf_context.NewModelAccuracyStore("test://old-model")
+	store := newTestRetrainingState()
 	store.SetRetraining(true)
 
 	const taskId = "task-fail-001"
@@ -138,7 +138,7 @@ func TestHandleTrainingComplete_Success_ClearsInFlight(t *testing.T) {
 // for the same taskId is silently ignored (already deleted by LoadAndDelete).
 func TestHandleTrainingComplete_DuplicateCallback(t *testing.T) {
 	m := &MtlfService{}
-	store := nwdaf_context.NewModelAccuracyStore("test://dup")
+	store := newTestRetrainingState()
 	store.SetRetraining(true)
 
 	const taskId = "task-dup-001"
@@ -215,6 +215,9 @@ func TestSubmitDaisyTaskUsesInjectedClient(t *testing.T) {
 				Task: map[string]any{
 					"NUM_ROUNDS": 2,
 				},
+				ModelProvider: &factory.ModelProviderConfig{
+					ProviderID: "local", BootstrapModelUniqueID: 1,
+				},
 			},
 		},
 	}
@@ -225,7 +228,7 @@ func TestSubmitDaisyTaskUsesInjectedClient(t *testing.T) {
 		cfg: cfg,
 	}, client, nil)
 
-	service.submitDaisyTask(cfg.Configuration.Mtlf, "", "file:///old-model.onnx", nil)
+	service.submitDaisyTask(cfg.Configuration.Mtlf, "", "", nil)
 
 	if client.triggerCalls != 1 {
 		t.Fatalf("TriggerTrainingAsync called %d times, want 1", client.triggerCalls)
@@ -240,8 +243,38 @@ func TestSubmitDaisyTaskUsesInjectedClient(t *testing.T) {
 	if _, ok := client.lastModelTask["NUM_ROUNDS"]; !ok {
 		t.Fatal("expected task payload to be forwarded to Daisy client")
 	}
-	if _, ok := service.inFlight.Load("task-123"); !ok {
+	entryValue, ok := service.inFlight.Load("task-123")
+	if !ok {
 		t.Fatal("expected inFlight entry to be stored after successful Daisy submission")
+	}
+	entry := entryValue.(*inFlightEntry)
+	if entry.accuracyReport == nil || entry.accuracyReport.ModelIdentity.ProviderID != "local" {
+		t.Fatalf("bootstrap model identity = %+v", entry.accuracyReport)
+	}
+}
+
+func TestAccuracyRetrainCompletionPreservesModelIdentity(t *testing.T) {
+	service := &MtlfService{stateStore: NewMonitorStateStore()}
+	report := contract.ModelAccuracyReport{
+		ModelIdentity:     contract.ModelIdentity{ProviderID: "mtlf-a", ModelUniqueID: 42},
+		Generation:        3,
+		MonitoringContext: contract.MonitoringContext{AnalyticsEvent: "UE_COMMUNICATION"},
+	}
+	var received contract.ModelProvisionEvent
+	service.SetOnModelProvisionEvent(func(event contract.ModelProvisionEvent) error {
+		received = event
+		return nil
+	})
+
+	service.HandleSuccessfulTrainingCompletion("task-1", TrainingCompletion{
+		OldModelURL: "mtlf-a/42", AccuracyReport: &report,
+	}, "http://daisy/model-new")
+
+	if received.ModelIdentity != report.ModelIdentity {
+		t.Fatalf("model identity = %+v, want %+v", received.ModelIdentity, report.ModelIdentity)
+	}
+	if received.TrainingTaskID != "task-1" || received.Artifact.MLModelURL != "http://daisy/model-new" {
+		t.Fatalf("provision event = %+v", received)
 	}
 }
 
@@ -269,7 +302,7 @@ func TestStartRetrainWorkflowRegistersOwnedDispatch(t *testing.T) {
 	var wg sync.WaitGroup
 	service.SetWaitGroup(&wg)
 
-	store := nwdaf_context.NewModelAccuracyStore("file:///old-model.onnx")
+	store := newTestRetrainingState()
 	store.SetRetraining(true)
 
 	service.startRetrainWorkflow("file:///old-model.onnx", store)
@@ -319,7 +352,7 @@ func TestSubmitDaisyTaskSkipsDuringShutdown(t *testing.T) {
 		ctx: cancelCtx,
 		cfg: cfg,
 	}, client, nil)
-	store := nwdaf_context.NewModelAccuracyStore("file:///old-model.onnx")
+	store := newTestRetrainingState()
 	store.SetRetraining(true)
 
 	service.submitDaisyTask(cfg.Configuration.Mtlf, "", "file:///old-model.onnx", store)

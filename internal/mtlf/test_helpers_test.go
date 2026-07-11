@@ -7,6 +7,16 @@ import (
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
 
+type testRetrainingState struct {
+	retraining bool
+}
+
+func newTestRetrainingState() *testRetrainingState { return &testRetrainingState{} }
+
+func (s *testRetrainingState) IsRetraining() bool { return s.retraining }
+
+func (s *testRetrainingState) SetRetraining(value bool) { s.retraining = value }
+
 type testNwdafApp struct {
 	ctx context.Context
 	cfg *factory.Config

@@ -3,12 +3,15 @@ package processor
 import (
 	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/internal/anlf/coordinator"
-	"github.com/free5gc/openapi/models"
 )
 
 type mlModelProvisionWorkflow interface {
-	PlanModelProvisionActions(notif *models.NwdafMlModelProvNotif) []coordinator.ModelProvisionAction
+	PlanModelProvisionActions(notif *contract.ModelProvisionNotification) []coordinator.ModelProvisionAction
 	StartModelProvisionActions(actions []coordinator.ModelProvisionAction)
+}
+
+type modelAccuracyWorkflow interface {
+	HandleModelAccuracyReport(report *contract.ModelAccuracyReport) error
 }
 
 type analyticsReportDispatcher interface {
@@ -17,7 +20,12 @@ type analyticsReportDispatcher interface {
 
 type Processor struct {
 	workflow         mlModelProvisionWorkflow
+	accuracyWorkflow modelAccuracyWorkflow
 	reportDispatcher analyticsReportDispatcher
+}
+
+func (p *Processor) SetModelAccuracyWorkflow(workflow modelAccuracyWorkflow) {
+	p.accuracyWorkflow = workflow
 }
 
 func NewProcessor(

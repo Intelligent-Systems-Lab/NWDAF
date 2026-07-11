@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/free5gc/nwdaf/internal/anlf/accuracy"
 	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/pkg/factory"
@@ -13,16 +12,35 @@ import (
 )
 
 type fakeAnlfBackendClient struct {
-	applyCalls    int
-	applyRequests []contract.ApplySubscriptionRuntimeRequest
-	applyResponse *contract.ApplySubscriptionRuntimeResponse
-	applyErr      error
-	releaseCalls  []string
-	releaseErr    error
-	syncCalls     int
-	sendCalls     int
-	sendErrors    []error
-	sentBatches   []contract.ObservationBatch
+	applyCalls      int
+	applyRequests   []contract.ApplySubscriptionRuntimeRequest
+	applyResponse   *contract.ApplySubscriptionRuntimeResponse
+	applyErr        error
+	releaseCalls    []string
+	releaseErr      error
+	syncCalls       int
+	sendCalls       int
+	sendErrors      []error
+	sentBatches     []contract.ObservationBatch
+	provisionEvents []contract.ModelProvisionEvent
+}
+
+func (f *fakeAnlfBackendClient) SyncModelProvisionBinding(
+	context.Context,
+	string,
+	contract.ModelProvisionBinding,
+) error {
+	return nil
+}
+
+func (f *fakeAnlfBackendClient) ApplyModelProvisionEvent(
+	_ context.Context,
+	event contract.ModelProvisionEvent,
+) (*contract.ModelProvisionEventResponse, error) {
+	f.provisionEvents = append(f.provisionEvents, event)
+	return &contract.ModelProvisionEventResponse{
+		Status: "APPLIED", AffectedRuntimeCount: 1, Generation: 2,
+	}, nil
 }
 
 func (f *fakeAnlfBackendClient) ApplySubscriptionRuntime(
@@ -89,7 +107,6 @@ func (testNwdafApp) Context() *nwdaf_context.NWDAFContext { return nwdaf_context
 func (a testNwdafApp) CancelContext() context.Context     { return a.ctx }
 
 func newTestCoordinator(app testNwdafApp, client *fakeAnlfBackendClient) *Coordinator {
-	monitor := accuracy.NewMonitor(app)
 	var runtimeClient BackendRuntimeClient
 	var sender ObservationSender
 	if client != nil {
@@ -97,7 +114,7 @@ func newTestCoordinator(app testNwdafApp, client *fakeAnlfBackendClient) *Coordi
 		sender = client
 	}
 	delivery := NewObservationDelivery(app.ctx, sender, nil)
-	return New(app, runtimeClient, monitor, delivery)
+	return New(app, runtimeClient, delivery)
 }
 
 func addTestSubscription(subscriptionID string) {
@@ -186,12 +203,6 @@ func TestReleaseSubscriptionRuntimeCallsBackendAndRemovesCorrelation(t *testing.
 	mlInfo.SetModelUrl("http://example.com/model-a")
 	mlInfo.SetModelReady()
 	nwdaf_context.GetSelf().SetMlModelInfo("sub-1", mlInfo)
-	shared, _ := nwdaf_context.GetSelf().GetOrCreateSharedModel(
-		"http://example.com/model-a",
-		models.NwdafEvent_UE_COMMUNICATION,
-	)
-	shared.AddSubscriber("sub-1")
-
 	client := &fakeAnlfBackendClient{}
 	service := newTestCoordinator(testNwdafApp{ctx: context.Background()}, client)
 	if err := service.ReleaseSubscriptionRuntime("sub-1"); err != nil {
@@ -203,54 +214,5 @@ func TestReleaseSubscriptionRuntimeCallsBackendAndRemovesCorrelation(t *testing.
 	}
 	if nwdaf_context.GetSelf().GetMlModelInfo("sub-1") != nil {
 		t.Fatal("ML correlation should be removed after release")
-	}
-}
-
-func TestApplyRetrainedModelUsesProvisionContractForAffectedSubscriptions(t *testing.T) {
-	nwdaf_context.Init()
-	ctx := nwdaf_context.GetSelf()
-	const (
-		oldReference = "http://example.com/model-old"
-		newReference = "http://example.com/model-new"
-	)
-	for _, subscriptionID := range []string{"sub-1", "sub-2"} {
-		addTestSubscription(subscriptionID)
-		mlInfo := nwdaf_context.NewMlModelInfo(models.NwdafEvent_UE_COMMUNICATION, "http://mtlf.example")
-		mlInfo.SetMtlfSubscription("mtlf-" + subscriptionID)
-		mlInfo.SetModelUrl(oldReference)
-		mlInfo.SetModelReady()
-		ctx.SetMlModelInfo(subscriptionID, mlInfo)
-	}
-	oldShared, _ := ctx.GetOrCreateSharedModel(oldReference, models.NwdafEvent_UE_COMMUNICATION)
-	oldShared.AddSubscriber("sub-1")
-	oldShared.AddSubscriber("sub-2")
-
-	client := &fakeAnlfBackendClient{applyResponse: &contract.ApplySubscriptionRuntimeResponse{
-		RuntimeState:         "READY",
-		Result:               contract.ApplyResultReplaced,
-		ActiveModelReference: newReference,
-	}}
-	service := newTestCoordinator(testNwdafApp{ctx: context.Background()}, client)
-
-	if err := service.ApplyRetrainedModel(oldReference, newReference); err != nil {
-		t.Fatalf("ApplyRetrainedModel() error = %v", err)
-	}
-	if client.applyCalls != 2 {
-		t.Fatalf("apply calls = %d, want 2", client.applyCalls)
-	}
-	for _, request := range client.applyRequests {
-		provision := request.ProvisionContext
-		if provision == nil || !provision.MLEventNotification.ModelUpdateInd {
-			t.Fatalf("retrain request did not carry modelUpdateInd: %+v", provision)
-		}
-		if provision.MLEventNotification.MLFileAddr.MLModelUrl != newReference {
-			t.Fatalf("new model reference = %q", provision.MLEventNotification.MLFileAddr.MLModelUrl)
-		}
-	}
-	if ctx.GetSharedModel(oldReference) != nil {
-		t.Fatal("old model correlation should be removed after all subscriptions move")
-	}
-	if shared := ctx.GetSharedModel(newReference); shared == nil || shared.SubscriberCount() != 2 {
-		t.Fatalf("new model correlation = %+v", shared)
 	}
 }

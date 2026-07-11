@@ -6,13 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"time"
-
-	"github.com/free5gc/nwdaf/internal/anlf/contract"
 )
-
-type predictionRecorder interface {
-	RecordAnalyticsReport(subscriptionID string, report *contract.AnalyticsReport)
-}
 
 var (
 	ErrSubscriptionNotFound    = errors.New("subscription not found")
@@ -23,15 +17,13 @@ var (
 )
 
 type ReportDispatcher struct {
-	baseCtx  context.Context
-	client   *http.Client
-	recorder predictionRecorder
+	baseCtx context.Context
+	client  *http.Client
 }
 
-func NewReportDispatcher(baseCtx context.Context, recorder predictionRecorder) *ReportDispatcher {
+func NewReportDispatcher(baseCtx context.Context) *ReportDispatcher {
 	return &ReportDispatcher{
-		baseCtx:  baseCtx,
-		client:   &http.Client{Timeout: 10 * time.Second},
-		recorder: recorder,
+		baseCtx: baseCtx,
+		client:  &http.Client{Timeout: 10 * time.Second},
 	}
 }

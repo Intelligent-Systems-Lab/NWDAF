@@ -17,10 +17,10 @@ const malformedRequestSyntaxTitle = "Malformed request syntax"
 
 type fakeMlModelNotifyProcessor struct {
 	callCount     int
-	notifications []models.NwdafMlModelProvNotif
+	notifications []contract.ModelProvisionNotification
 }
 
-func (f *fakeMlModelNotifyProcessor) HandleMlModelProvisionNotify(notifications []models.NwdafMlModelProvNotif) {
+func (f *fakeMlModelNotifyProcessor) HandleMlModelProvisionNotify(notifications []contract.ModelProvisionNotification) {
 	f.callCount++
 	f.notifications = notifications
 }
@@ -29,6 +29,10 @@ func (f *fakeMlModelNotifyProcessor) HandleAnalyticsReport(
 	string,
 	*contract.AnalyticsReport,
 ) error {
+	return nil
+}
+
+func (*fakeMlModelNotifyProcessor) HandleModelAccuracyReport(*contract.ModelAccuracyReport) error {
 	return nil
 }
 

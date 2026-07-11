@@ -25,7 +25,7 @@ import (
 type liveModelWorkflow struct{}
 
 func (*liveModelWorkflow) PlanModelProvisionActions(
-	*models.NwdafMlModelProvNotif,
+	*contract.ModelProvisionNotification,
 ) []coordinator.ModelProvisionAction {
 	return nil
 }
@@ -80,7 +80,7 @@ func TestLivePyAnLFContract(t *testing.T) {
 		IsActive: true,
 	}
 	nwdaf_context.GetSelf().AddSubscription(subscription)
-	dispatcher := notifier.NewReportDispatcher(context.Background(), nil)
+	dispatcher := notifier.NewReportDispatcher(context.Background())
 	processor := anlfprocessor.NewProcessor(&liveModelWorkflow{}, dispatcher)
 	callbackServer, err := anlfserver.NewServer(serverConfig, processor)
 	if err != nil {

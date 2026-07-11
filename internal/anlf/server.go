@@ -15,7 +15,6 @@ import (
 	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/pkg/factory"
-	"github.com/free5gc/openapi/models"
 	"github.com/free5gc/util/httpwrapper"
 	logger_util "github.com/free5gc/util/logger"
 )
@@ -47,8 +46,9 @@ func applyRoutes(group *gin.RouterGroup, routes []Route) {
 }
 
 type processorAPI interface {
-	HandleMlModelProvisionNotify(notifications []models.NwdafMlModelProvNotif)
+	HandleMlModelProvisionNotify(notifications []contract.ModelProvisionNotification)
 	HandleAnalyticsReport(subscriptionID string, report *contract.AnalyticsReport) error
+	HandleModelAccuracyReport(report *contract.ModelAccuracyReport) error
 }
 
 type Server struct {
@@ -67,6 +67,7 @@ func NewServer(cfg *factory.Config, processor processorAPI) (*Server, error) {
 	}
 	s.router.Use(gin.Recovery())
 	routes := append(s.mlModelNotifyRoutes(), s.analyticsReportRoutes()...)
+	routes = append(routes, s.modelAccuracyReportRoutes()...)
 	applyRoutes(s.router.Group(""), routes)
 
 	httpServer, err := httpwrapper.NewHttp2Server(

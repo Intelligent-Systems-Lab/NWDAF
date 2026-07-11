@@ -31,20 +31,18 @@ type BackendRuntimeClient interface {
 	) error
 }
 
-type ObservationSender interface {
-	SendObservations(ctx context.Context, sourceID string, batch contract.ObservationBatch) error
+type ModelProvisionClient interface {
+	SyncModelProvisionBinding(context.Context, string, contract.ModelProvisionBinding) error
+	ApplyModelProvisionEvent(context.Context, contract.ModelProvisionEvent) (*contract.ModelProvisionEventResponse, error)
 }
 
-type accuracyMonitor interface {
-	SetWaitGroup(wg *sync.WaitGroup)
-	StartOwnedAccuracyMonitorForModel(modelURL string)
-	StopAccuracyMonitorForModel(modelURL string)
+type ObservationSender interface {
+	SendObservations(ctx context.Context, sourceID string, batch contract.ObservationBatch) error
 }
 
 type Coordinator struct {
 	nwdaf               NwdafApp
 	backend             BackendRuntimeClient
-	accuracy            accuracyMonitor
 	wg                  *sync.WaitGroup
 	observationDelivery *ObservationDelivery
 }
@@ -52,13 +50,11 @@ type Coordinator struct {
 func New(
 	nwdaf NwdafApp,
 	backend BackendRuntimeClient,
-	monitor accuracyMonitor,
 	delivery *ObservationDelivery,
 ) *Coordinator {
 	return &Coordinator{
 		nwdaf:               nwdaf,
 		backend:             backend,
-		accuracy:            monitor,
 		observationDelivery: delivery,
 	}
 }
@@ -72,9 +68,6 @@ func (a *Coordinator) config() *factory.Config {
 
 func (a *Coordinator) SetWaitGroup(wg *sync.WaitGroup) {
 	a.wg = wg
-	if a.accuracy != nil {
-		a.accuracy.SetWaitGroup(wg)
-	}
 }
 
 func (a *Coordinator) launchOwnedTask(fn func()) {

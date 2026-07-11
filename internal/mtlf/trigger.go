@@ -6,8 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/free5gc/nwdaf/internal/anlf/accuracy"
-	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	mtlfcontract "github.com/free5gc/nwdaf/internal/mtlf/contract"
 )
 
 const (
@@ -46,20 +45,20 @@ func composeHitReason(degradationHit, chronicHit, lowTrafficHit bool) string {
 // determines whether retraining is necessary.
 func (m *MtlfService) HandleAccuracyReports(
 	modelUrl string,
-	reports []accuracy.Report,
-	store *nwdaf_context.ModelAccuracyStore,
+	reports []mtlfcontract.AccuracyReport,
+	store retrainingState,
 ) {
 	cfg := m.config()
 	if cfg == nil || cfg.Configuration == nil ||
 		cfg.Configuration.Mtlf == nil ||
-		cfg.Configuration.Mtlf.AccuracyMonitor == nil ||
+		cfg.Configuration.Mtlf.AccuracyPolicy == nil ||
 		len(reports) == 0 {
 		return
 	}
-	accCfg := cfg.Configuration.Mtlf.AccuracyMonitor
+	accCfg := cfg.Configuration.Mtlf.AccuracyPolicy
 
 	// Skip evaluation if a retrain is already in flight for this model.
-	if store.IsRetraining() {
+	if m.modelRetraining(modelUrl, store) {
 		mtlfLog.Debugf("Retraining in progress, skipping accuracy reports: model=%s", modelUrl)
 		return
 	}
@@ -257,14 +256,38 @@ func (m *MtlfService) HandleAccuracyReports(
 				hitReason,
 			)
 			m.stateStore.ResetModelBreaches(modelUrl)
-			store.SetRetraining(true)
+			m.setModelRetraining(modelUrl, store, true)
 			m.dispatchRetrain(modelUrl, store)
 			return
 		}
 	}
 }
 
-func (m *MtlfService) dispatchRetrain(modelUrl string, store *nwdaf_context.ModelAccuracyStore) {
+func (m *MtlfService) modelRetraining(modelKey string, store retrainingState) bool {
+	if store != nil {
+		return store.IsRetraining()
+	}
+	_, ok := m.retrainingModels.Load(modelKey)
+	return ok
+}
+
+func (m *MtlfService) setModelRetraining(
+	modelKey string,
+	store retrainingState,
+	retraining bool,
+) {
+	if store != nil {
+		store.SetRetraining(retraining)
+		return
+	}
+	if retraining {
+		m.retrainingModels.Store(modelKey, struct{}{})
+		return
+	}
+	m.retrainingModels.Delete(modelKey)
+}
+
+func (m *MtlfService) dispatchRetrain(modelUrl string, store retrainingState) {
 	if m.onRetrainTriggered != nil {
 		m.onRetrainTriggered(modelUrl, store)
 		return

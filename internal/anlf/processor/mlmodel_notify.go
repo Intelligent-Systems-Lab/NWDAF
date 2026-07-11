@@ -1,11 +1,11 @@
 package processor
 
 import (
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/internal/anlf/coordinator"
-	"github.com/free5gc/openapi/models"
 )
 
-func (p *Processor) HandleMlModelProvisionNotify(notifications []models.NwdafMlModelProvNotif) {
+func (p *Processor) HandleMlModelProvisionNotify(notifications []contract.ModelProvisionNotification) {
 	if p == nil || p.workflow == nil {
 		return
 	}

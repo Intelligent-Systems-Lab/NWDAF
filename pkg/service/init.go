@@ -12,8 +12,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/free5gc/nwdaf/internal/anlf"
-	"github.com/free5gc/nwdaf/internal/anlf/accuracy"
 	anlfclient "github.com/free5gc/nwdaf/internal/anlf/client"
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/internal/anlf/coordinator"
 	anlfprocessor "github.com/free5gc/nwdaf/internal/anlf/processor"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
@@ -99,7 +99,6 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		daisyClient = mtlfclient.NewClient(cfg.Configuration.Mtlf.Endpoint)
 	}
 
-	accuracyMonitor := accuracy.NewMonitor(nwdaf)
 	var observationConfig *factory.ObservationDeliveryConfig
 	if cfg.Configuration != nil && cfg.Configuration.AnlfBackend != nil {
 		observationConfig = cfg.Configuration.AnlfBackend.ObservationDelivery
@@ -109,20 +108,15 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		observationBackend,
 		observationConfig,
 	)
-	nwdaf.anlfCoordinator = coordinator.New(nwdaf, anlfBackend, accuracyMonitor, observationDelivery)
+	nwdaf.anlfCoordinator = coordinator.New(nwdaf, anlfBackend, observationDelivery)
 	mtlfService := mtlf.NewMtlfService(nwdaf, daisyClient, nwdaf.consumer.AdrfClient())
-	accuracyMonitor.SetOnAccuracyReports(func(
-		modelURL string,
-		reports []accuracy.Report,
-		store *nwdaf_context.ModelAccuracyStore,
-	) {
-		mtlfService.HandleAccuracyReports(modelURL, reports, store)
+	mtlfService.SetOnModelProvisionEvent(func(event contract.ModelProvisionEvent) error {
+		_, eventErr := nwdaf.anlfCoordinator.ApplyModelProvisionEvent(event)
+		return eventErr
 	})
-	mtlfService.SetOnModelProvisionUpdated(func(oldModelReference, newModelReference string) error {
-		return nwdaf.anlfCoordinator.ApplyRetrainedModel(oldModelReference, newModelReference)
-	})
-	reportDispatcher := notifier.NewReportDispatcher(nwdaf.ctx, accuracyMonitor)
+	reportDispatcher := notifier.NewReportDispatcher(nwdaf.ctx)
 	anlfProcessor := anlfprocessor.NewProcessor(nwdaf.anlfCoordinator, reportDispatcher)
+	anlfProcessor.SetModelAccuracyWorkflow(mtlfService)
 	mtlfProcessor := mtlfprocessor.NewProcessor(mtlfService)
 
 	// Initialize processor
