@@ -171,8 +171,15 @@ func (p *Processor) HandleUpfNotification(notif *UpfNotificationData) error {
 		malformed += itemMalformed
 		observations = append(observations, itemObservations...)
 	}
-	if len(observations) > 0 && !p.anlf.EnqueueObservations(correlationId, observations) {
-		logger.ProcLog.Warnf("UpfNotification: observation enqueue failed corr=%s", correlationId)
+	if len(observations) > 0 {
+		if !ctx.HasActiveNwdafSubscriber(correlationId) {
+			logger.ProcLog.Debugf(
+				"UpfNotification: skip AnLF enqueue without active subscriber corr=%s",
+				correlationId,
+			)
+		} else if !p.anlf.EnqueueObservations(correlationId, observations) {
+			logger.ProcLog.Warnf("UpfNotification: observation enqueue failed corr=%s", correlationId)
+		}
 	}
 
 	// Forward to ADRF buffer if configured.

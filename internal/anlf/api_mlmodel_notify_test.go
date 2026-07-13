@@ -36,6 +36,10 @@ func (*fakeMlModelNotifyProcessor) HandleModelAccuracyReport(*contract.ModelAccu
 	return nil
 }
 
+func (*fakeMlModelNotifyProcessor) HandleRuntimeCompletion(*contract.RuntimeCompletionEvent) error {
+	return nil
+}
+
 func newJSONRequestContext(method, target string, body []byte) (*gin.Context, *httptest.ResponseRecorder) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)

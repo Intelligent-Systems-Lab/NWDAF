@@ -110,6 +110,15 @@ type CollectionRequirements struct {
 	RequiredMeasurements    []string
 }
 
+type RuntimeCompletionDisposition int
+
+const (
+	RuntimeCompletionCompleted RuntimeCompletionDisposition = iota
+	RuntimeCompletionAlreadyInactive
+	RuntimeCompletionStale
+	RuntimeCompletionFuture
+)
+
 func (s *Subscription) SetRuntime(
 	revision int64,
 	requirements CollectionRequirements,
@@ -144,6 +153,23 @@ func (s *Subscription) SetActive(active bool) {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
 	s.IsActive = active
+}
+
+func (s *Subscription) CompleteRuntime(revision int64) RuntimeCompletionDisposition {
+	s.runtimeMu.Lock()
+	defer s.runtimeMu.Unlock()
+
+	switch {
+	case revision < s.RuntimeRevision:
+		return RuntimeCompletionStale
+	case revision > s.RuntimeRevision:
+		return RuntimeCompletionFuture
+	case !s.IsActive:
+		return RuntimeCompletionAlreadyInactive
+	default:
+		s.IsActive = false
+		return RuntimeCompletionCompleted
+	}
 }
 
 func (s *Subscription) BeginReport(

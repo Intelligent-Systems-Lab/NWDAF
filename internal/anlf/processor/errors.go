@@ -8,6 +8,7 @@ var (
 	ErrInvalidAnalyticsReport  = errors.New("invalid analytics report")
 	ErrExternalDelivery        = errors.New("external analytics delivery failed")
 	ErrAnalyticsReportInFlight = errors.New("analytics report delivery in progress")
+	ErrFutureRuntimeRevision   = errors.New("runtime completion revision is newer than current state")
 )
 
 type reportOutcomeError struct {

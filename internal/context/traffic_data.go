@@ -87,6 +87,17 @@ func (s *SmfSubscription) GetInfo() (correlationId, smfSubId string, refCount in
 	return s.CorrelationId, s.SmfSubId, s.RefCount
 }
 
+func (s *SmfSubscription) SubscriberIDsSnapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ids := make([]string, 0, len(s.NwdafSubIds))
+	for id := range s.NwdafSubIds {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // AddReference adds an NWDAF subscription reference (idempotent)
 func (s *SmfSubscription) AddReference(nwdafSubId string) bool {
 	s.mu.Lock()
@@ -367,6 +378,25 @@ func (c *NWDAFContext) GetSmfSubscription(correlationId string) *SmfSubscription
 		return val.(*SmfSubscription)
 	}
 	return nil
+}
+
+func (c *NWDAFContext) HasActiveNwdafSubscriber(correlationId string) bool {
+	smfSubscription := c.GetSmfSubscription(correlationId)
+	if smfSubscription == nil {
+		return false
+	}
+
+	for _, subscriptionID := range smfSubscription.SubscriberIDsSnapshot() {
+		subscription := c.GetSubscription(subscriptionID)
+		if subscription == nil {
+			continue
+		}
+		_, _, _, active := subscription.RuntimeSnapshot()
+		if active {
+			return true
+		}
+	}
+	return false
 }
 
 // Identifier returns the target identifier string for logging and mapping

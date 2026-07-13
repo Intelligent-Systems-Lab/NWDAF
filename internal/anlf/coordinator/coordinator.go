@@ -119,3 +119,11 @@ func (a *Coordinator) BuildAnalyticsReportCallbackURI(subscriptionID string) str
 	}
 	return cfg.GetAnlfServerURI() + "/subscriptions/" + subscriptionID + "/analytics-reports"
 }
+
+func (a *Coordinator) BuildRuntimeCompletionCallbackURI(subscriptionID string) string {
+	cfg := a.config()
+	if cfg == nil {
+		return ""
+	}
+	return cfg.GetAnlfServerURI() + "/subscriptions/" + subscriptionID + "/runtime-completions"
+}

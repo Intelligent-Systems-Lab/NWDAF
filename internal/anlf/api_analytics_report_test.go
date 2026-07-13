@@ -26,6 +26,10 @@ func (*analyticsReportProcessorStub) HandleModelAccuracyReport(*contract.ModelAc
 	return nil
 }
 
+func (*analyticsReportProcessorStub) HandleRuntimeCompletion(*contract.RuntimeCompletionEvent) error {
+	return nil
+}
+
 func TestHandleAnalyticsReportStatusMapping(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := `{"report_id":"report-1","report_sequence":1,"runtime_revision":1,` +

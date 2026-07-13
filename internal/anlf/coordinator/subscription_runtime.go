@@ -11,6 +11,8 @@ import (
 
 const provisionSourceMTLF = "MTLF_PROVISION"
 
+var ErrFutureRuntimeRevision = errors.New("runtime completion revision is newer than current state")
+
 func (a *Coordinator) BuildSubscriptionRuntimeRequest(
 	subscriptionID string,
 	provisionContext *contract.ProvisionContext,
@@ -39,9 +41,61 @@ func (a *Coordinator) BuildSubscriptionRuntimeRequestForSubscription(
 			EvtReq:             subscription.EvtReq,
 			EventSubscriptions: subscription.EventSubs,
 		},
-		ProvisionContext:  provisionContext,
-		ReportCallbackURI: a.BuildAnalyticsReportCallbackURI(subscription.ID),
+		ProvisionContext:             provisionContext,
+		ReportCallbackURI:            a.BuildAnalyticsReportCallbackURI(subscription.ID),
+		RuntimeCompletionCallbackURI: a.BuildRuntimeCompletionCallbackURI(subscription.ID),
 	}
+}
+
+func (a *Coordinator) CompleteSubscriptionRuntime(event *contract.RuntimeCompletionEvent) error {
+	ctx := nwdaf_context.GetSelf()
+	if ctx == nil {
+		return fmt.Errorf("NWDAF context not initialized")
+	}
+	if event == nil {
+		return fmt.Errorf("runtime completion event is required")
+	}
+
+	subscription := ctx.GetSubscription(event.SubscriptionID)
+	if subscription == nil {
+		logger.AnlfLog.Debugf(
+			"Runtime completion consumed for missing subscription: sub=%s revision=%d",
+			event.SubscriptionID,
+			event.RuntimeRevision,
+		)
+		return nil
+	}
+
+	switch subscription.CompleteRuntime(event.RuntimeRevision) {
+	case nwdaf_context.RuntimeCompletionCompleted:
+		logger.AnlfLog.Infof(
+			"AnLF runtime completed: sub=%s revision=%d reason=%s sequence=%d",
+			event.SubscriptionID,
+			event.RuntimeRevision,
+			event.Reason,
+			event.LastReportSequence,
+		)
+	case nwdaf_context.RuntimeCompletionAlreadyInactive:
+		logger.AnlfLog.Debugf(
+			"Duplicate runtime completion consumed: sub=%s revision=%d",
+			event.SubscriptionID,
+			event.RuntimeRevision,
+		)
+	case nwdaf_context.RuntimeCompletionStale:
+		logger.AnlfLog.Debugf(
+			"Stale runtime completion consumed: sub=%s revision=%d",
+			event.SubscriptionID,
+			event.RuntimeRevision,
+		)
+	case nwdaf_context.RuntimeCompletionFuture:
+		return fmt.Errorf(
+			"%w: sub=%s completion=%d",
+			ErrFutureRuntimeRevision,
+			event.SubscriptionID,
+			event.RuntimeRevision,
+		)
+	}
+	return nil
 }
 
 func (a *Coordinator) ApplySubscriptionRuntime(

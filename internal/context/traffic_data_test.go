@@ -422,6 +422,25 @@ func TestSmfSubscription_ValidateInvariant(t *testing.T) {
 	}
 }
 
+func TestHasActiveNwdafSubscriber(t *testing.T) {
+	Init()
+	ctx := GetSelf()
+	ctx.AddSubscription(&Subscription{ID: "inactive", IsActive: false, RuntimeRevision: 1})
+	ctx.AddSubscription(&Subscription{ID: "active", IsActive: true, RuntimeRevision: 1})
+	ctx.GetOrCreateSmfSubscription("corr-shared", "inactive")
+
+	if ctx.HasActiveNwdafSubscriber("corr-shared") {
+		t.Fatal("inactive-only source reported an active subscriber")
+	}
+	ctx.GetOrCreateSmfSubscription("corr-shared", "active")
+	if !ctx.HasActiveNwdafSubscriber("corr-shared") {
+		t.Fatal("shared source did not find its active subscriber")
+	}
+	if ctx.HasActiveNwdafSubscriber("missing") {
+		t.Fatal("missing source reported an active subscriber")
+	}
+}
+
 // =============================================================================
 // Unified Query Tests (nwdafSubId → correlationIds → data)
 // =============================================================================

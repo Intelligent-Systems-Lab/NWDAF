@@ -151,6 +151,9 @@ func TestApplySubscriptionRuntimeUpdatesOnlyCorrelationState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildSubscriptionRuntimeRequest() error = %v", err)
 	}
+	if request.RuntimeCompletionCallbackURI == "" {
+		t.Fatal("runtime completion callback URI was not populated")
+	}
 	if _, err = service.ApplySubscriptionRuntime(request); err != nil {
 		t.Fatalf("ApplySubscriptionRuntime() error = %v", err)
 	}

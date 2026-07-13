@@ -25,6 +25,10 @@ func (p *modelAccuracyProcessorStub) HandleModelAccuracyReport(*contract.ModelAc
 	return p.err
 }
 
+func (*modelAccuracyProcessorStub) HandleRuntimeCompletion(*contract.RuntimeCompletionEvent) error {
+	return nil
+}
+
 func TestHandleModelAccuracyReportStatusMapping(t *testing.T) {
 	body := `{"report_id":"report-1","report_sequence":1,"generated_at":"2026-07-11T00:00:00Z",` +
 		`"model_identity":{"provider_id":"mtlf-a","model_unique_id":42},"generation":2,` +

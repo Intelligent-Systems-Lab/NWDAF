@@ -32,6 +32,14 @@ func (*liveModelWorkflow) PlanModelProvisionActions(
 
 func (*liveModelWorkflow) StartModelProvisionActions([]coordinator.ModelProvisionAction) {}
 
+func (*liveModelWorkflow) CompleteSubscriptionRuntime(event *contract.RuntimeCompletionEvent) error {
+	subscription := nwdaf_context.GetSelf().GetSubscription(event.SubscriptionID)
+	if subscription != nil {
+		subscription.CompleteRuntime(event.RuntimeRevision)
+	}
+	return nil
+}
+
 func TestLivePyAnLFContract(t *testing.T) {
 	endpoint := os.Getenv("PYANLF_LIVE_ENDPOINT")
 	if endpoint == "" {
@@ -110,6 +118,8 @@ func TestLivePyAnLFContract(t *testing.T) {
 		},
 		ReportCallbackURI: serverConfig.GetAnlfServerURI() +
 			"/subscriptions/" + subscriptionID + "/analytics-reports",
+		RuntimeCompletionCallbackURI: serverConfig.GetAnlfServerURI() +
+			"/subscriptions/" + subscriptionID + "/runtime-completions",
 	}
 
 	response, err := client.ApplySubscriptionRuntime(context.Background(), request)
@@ -169,6 +179,15 @@ func TestLivePyAnLFContract(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for PyAnLF analytics report callback")
 	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		_, _, _, active := subscription.RuntimeSnapshot()
+		if !active {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for PyAnLF runtime completion callback")
 }
 
 func TestLivePyAnLFProvisionEventDedupNoMatch(t *testing.T) {

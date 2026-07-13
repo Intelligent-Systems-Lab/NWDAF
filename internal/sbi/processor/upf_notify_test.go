@@ -59,6 +59,72 @@ func setupTestContext() *nwdaf_context.NWDAFContext {
 	return ctx
 }
 
+func activateObservationSubscriber(ctx *nwdaf_context.NWDAFContext, correlationID string) {
+	ctx.AddSubscription(&nwdaf_context.Subscription{
+		ID:              "active-subscription",
+		IsActive:        true,
+		RuntimeRevision: 1,
+	})
+	ctx.GetOrCreateSmfSubscription(correlationID, "active-subscription")
+}
+
+func TestHandleUpfNotificationSkipsBackendWithoutActiveSubscriber(t *testing.T) {
+	ctx := setupTestContext()
+	activateObservationSubscriber(ctx, testCorsId)
+	ctx.GetSubscription("active-subscription").SetActive(false)
+	p := newTestProcessor(t)
+	notif := &UpfNotificationData{
+		CorrelationId: testCorsId,
+		NotificationItems: []UpfNotificationItem{{
+			UeIpv4Addr: "192.168.1.1",
+			TimeStamp:  time.Now(),
+			UserDataUsageMeasurements: []UserDataUsageMeasurements{{
+				VolumeMeasurement: &VolumeMeasurement{UlVolume: 100},
+			}},
+		}},
+	}
+
+	if err := p.HandleUpfNotification(notif); err != nil {
+		t.Fatalf("HandleUpfNotification failed: %v", err)
+	}
+	if got := p.anlf.(*capturingObservationCoordinator).observations; len(got) != 0 {
+		t.Fatalf("forwarded observations = %d, want 0", len(got))
+	}
+	if ctx.GetTrafficBucket(testCorsId).Get("192.168.1.1") == nil {
+		t.Fatal("traffic data was not stored for inactive backend consumer")
+	}
+}
+
+func TestHandleUpfNotificationSharedSourceKeepsActiveConsumer(t *testing.T) {
+	ctx := setupTestContext()
+	activateObservationSubscriber(ctx, testCorsId)
+	ctx.GetSubscription("active-subscription").SetActive(false)
+	ctx.AddSubscription(&nwdaf_context.Subscription{
+		ID:              "shared-active-subscription",
+		IsActive:        true,
+		RuntimeRevision: 1,
+	})
+	ctx.GetOrCreateSmfSubscription(testCorsId, "shared-active-subscription")
+	p := newTestProcessor(t)
+	notif := &UpfNotificationData{
+		CorrelationId: testCorsId,
+		NotificationItems: []UpfNotificationItem{{
+			UeIpv4Addr: "192.168.1.2",
+			TimeStamp:  time.Now(),
+			UserDataUsageMeasurements: []UserDataUsageMeasurements{{
+				VolumeMeasurement: &VolumeMeasurement{DlVolume: 200},
+			}},
+		}},
+	}
+
+	if err := p.HandleUpfNotification(notif); err != nil {
+		t.Fatalf("HandleUpfNotification failed: %v", err)
+	}
+	if got := p.anlf.(*capturingObservationCoordinator).observations; len(got) != 1 {
+		t.Fatalf("forwarded observations = %d, want 1", len(got))
+	}
+}
+
 func newTestProcessor(t *testing.T) *Processor {
 	return newTestProcessorWithConfig(t, nil)
 }
@@ -85,6 +151,7 @@ func newTestProcessorWithConfig(t *testing.T, cfg *factory.Config) *Processor {
 
 func TestHandleUpfNotification_Basic(t *testing.T) {
 	ctx := setupTestContext()
+	activateObservationSubscriber(ctx, testCorsId)
 	p := newTestProcessor(t)
 
 	correlationId := testCorsId
@@ -142,6 +209,7 @@ func TestHandleUpfNotification_Basic(t *testing.T) {
 
 func TestHandleUpfNotification_MultipleItems(t *testing.T) {
 	ctx := setupTestContext()
+	activateObservationSubscriber(ctx, testCorsId)
 	p := newTestProcessor(t)
 
 	correlationId := testCorsId
@@ -189,6 +257,7 @@ func TestHandleUpfNotification_MultipleItems(t *testing.T) {
 
 func TestHandleUpfNotification_DataAccumulation(t *testing.T) {
 	ctx := setupTestContext()
+	activateObservationSubscriber(ctx, testCorsId)
 	p := newTestProcessor(t)
 
 	correlationId := testCorsId
@@ -339,6 +408,7 @@ func TestHandleUpfNotification_WithMetadata(t *testing.T) {
 
 func TestHandleUpfNotification_ThroughputMeasurement(t *testing.T) {
 	ctx := setupTestContext()
+	activateObservationSubscriber(ctx, testCorsId)
 	p := newTestProcessor(t)
 
 	correlationId := testCorsId
@@ -383,6 +453,7 @@ func TestHandleUpfNotification_ThroughputMeasurement(t *testing.T) {
 
 func TestHandleUpfNotification_FullVolumeMeasurement(t *testing.T) {
 	ctx := setupTestContext()
+	activateObservationSubscriber(ctx, testCorsId)
 	p := newTestProcessor(t)
 
 	correlationId := testCorsId
@@ -451,6 +522,7 @@ func TestHandleUpfNotification_FullVolumeMeasurement(t *testing.T) {
 
 func TestHandleUpfNotification_PacketThroughput(t *testing.T) {
 	ctx := setupTestContext()
+	activateObservationSubscriber(ctx, testCorsId)
 	p := newTestProcessor(t)
 
 	correlationId := testCorsId

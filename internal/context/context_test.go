@@ -6,6 +6,46 @@ import (
 	"github.com/free5gc/openapi/models"
 )
 
+func TestSubscriptionCompleteRuntime(t *testing.T) {
+	tests := []struct {
+		name       string
+		active     bool
+		current    int64
+		completion int64
+		want       RuntimeCompletionDisposition
+		wantActive bool
+	}{
+		{
+			name: "current active", active: true, current: 2, completion: 2,
+			want: RuntimeCompletionCompleted, wantActive: false,
+		},
+		{
+			name: "duplicate", active: false, current: 2, completion: 2,
+			want: RuntimeCompletionAlreadyInactive, wantActive: false,
+		},
+		{
+			name: "stale", active: true, current: 3, completion: 2,
+			want: RuntimeCompletionStale, wantActive: true,
+		},
+		{
+			name: "future", active: true, current: 2, completion: 3,
+			want: RuntimeCompletionFuture, wantActive: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			subscription := &Subscription{IsActive: test.active, RuntimeRevision: test.current}
+			if got := subscription.CompleteRuntime(test.completion); got != test.want {
+				t.Fatalf("disposition = %v, want %v", got, test.want)
+			}
+			_, _, _, active := subscription.RuntimeSnapshot()
+			if active != test.wantActive {
+				t.Fatalf("active = %v, want %v", active, test.wantActive)
+			}
+		})
+	}
+}
+
 func TestNewSubscriptionId(t *testing.T) {
 	id1 := NewSubscriptionId()
 	id2 := NewSubscriptionId()

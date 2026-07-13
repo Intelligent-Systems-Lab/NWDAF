@@ -10,9 +10,10 @@ type SubscriptionRuntimeContext struct {
 }
 
 type ApplySubscriptionRuntimeRequest struct {
-	Subscription      SubscriptionRuntimeContext `json:"subscription"`
-	ProvisionContext  *ProvisionContext          `json:"provision_context,omitempty"`
-	ReportCallbackURI string                     `json:"report_callback_uri"`
+	Subscription                 SubscriptionRuntimeContext `json:"subscription"`
+	ProvisionContext             *ProvisionContext          `json:"provision_context,omitempty"`
+	ReportCallbackURI            string                     `json:"report_callback_uri"`
+	RuntimeCompletionCallbackURI string                     `json:"runtime_completion_callback_uri"`
 }
 
 type ApplyResult string

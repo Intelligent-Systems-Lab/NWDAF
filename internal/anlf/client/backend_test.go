@@ -44,6 +44,8 @@ func testApplyRequest() contract.ApplySubscriptionRuntimeRequest {
 				},
 			},
 		},
+		ReportCallbackURI:            "http://127.0.0.1:8090/subscriptions/sub-123/analytics-reports",
+		RuntimeCompletionCallbackURI: "http://127.0.0.1:8090/subscriptions/sub-123/runtime-completions",
 	}
 }
 

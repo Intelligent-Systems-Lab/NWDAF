@@ -49,6 +49,7 @@ type processorAPI interface {
 	HandleMlModelProvisionNotify(notifications []contract.ModelProvisionNotification)
 	HandleAnalyticsReport(subscriptionID string, report *contract.AnalyticsReport) error
 	HandleModelAccuracyReport(report *contract.ModelAccuracyReport) error
+	HandleRuntimeCompletion(event *contract.RuntimeCompletionEvent) error
 }
 
 type Server struct {
@@ -68,6 +69,7 @@ func NewServer(cfg *factory.Config, processor processorAPI) (*Server, error) {
 	s.router.Use(gin.Recovery())
 	routes := append(s.mlModelNotifyRoutes(), s.analyticsReportRoutes()...)
 	routes = append(routes, s.modelAccuracyReportRoutes()...)
+	routes = append(routes, s.runtimeCompletionRoutes()...)
 	applyRoutes(s.router.Group(""), routes)
 
 	httpServer, err := httpwrapper.NewHttp2Server(
