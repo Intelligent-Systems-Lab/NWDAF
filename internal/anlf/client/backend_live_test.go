@@ -40,6 +40,24 @@ func (*liveModelWorkflow) CompleteSubscriptionRuntime(event *contract.RuntimeCom
 	return nil
 }
 
+type liveReportDispatcher struct {
+	delegate *notifier.ReportDispatcher
+	reports  chan contract.AnalyticsReport
+}
+
+func (d *liveReportDispatcher) DispatchAnalyticsReport(
+	subscriptionID string,
+	report *contract.AnalyticsReport,
+) error {
+	if report != nil {
+		select {
+		case d.reports <- *report:
+		default:
+		}
+	}
+	return d.delegate.DispatchAnalyticsReport(subscriptionID, report)
+}
+
 func TestLivePyAnLFContract(t *testing.T) {
 	endpoint := os.Getenv("PYANLF_LIVE_ENDPOINT")
 	if endpoint == "" {
@@ -88,7 +106,10 @@ func TestLivePyAnLFContract(t *testing.T) {
 		IsActive: true,
 	}
 	nwdaf_context.GetSelf().AddSubscription(subscription)
-	dispatcher := notifier.NewReportDispatcher(context.Background())
+	dispatcher := &liveReportDispatcher{
+		delegate: notifier.NewReportDispatcher(context.Background()),
+		reports:  make(chan contract.AnalyticsReport, 1),
+	}
 	processor := anlfprocessor.NewProcessor(&liveModelWorkflow{}, dispatcher)
 	callbackServer, err := anlfserver.NewServer(serverConfig, processor)
 	if err != nil {
@@ -179,15 +200,136 @@ func TestLivePyAnLFContract(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for PyAnLF analytics report callback")
 	}
+	select {
+	case report := <-dispatcher.reports:
+		if report.ReportID == "" || report.ReportSequence != 1 ||
+			report.RuntimeRevision != response.RuntimeRevision {
+			t.Fatalf("unexpected backend analytics report: %+v", report)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for captured backend analytics report")
+	}
 	deadline := time.Now().Add(5 * time.Second)
+	completed := false
 	for time.Now().Before(deadline) {
 		_, _, _, active := subscription.RuntimeSnapshot()
 		if !active {
-			return
+			completed = true
+			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("timed out waiting for PyAnLF runtime completion callback")
+	if !completed {
+		t.Fatal("timed out waiting for PyAnLF runtime completion callback")
+	}
+}
+
+func TestLivePyAnLFExplicitReplacementAndReleaseDoNotComplete(t *testing.T) {
+	endpoint := os.Getenv("PYANLF_LIVE_ENDPOINT")
+	if endpoint == "" {
+		t.Skip("PYANLF_LIVE_ENDPOINT is not set")
+	}
+
+	probe, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve callback port: %v", err)
+	}
+	callbackPort := probe.Addr().(*net.TCPAddr).Port
+	if closeErr := probe.Close(); closeErr != nil {
+		t.Fatalf("release callback port: %v", closeErr)
+	}
+	serverConfig := &factory.Config{Configuration: &factory.Configuration{
+		Anlf: &factory.AnlfConfig{Server: &factory.AuxiliaryServerConfig{
+			BindingIPv4:  "127.0.0.1",
+			RegisterIPv4: "127.0.0.1",
+			Port:         callbackPort,
+		}},
+	}}
+
+	nwdaf_context.Init()
+	const subscriptionID = "live-explicit-release-subscription"
+	subscription := &nwdaf_context.Subscription{
+		ID:       subscriptionID,
+		IsActive: true,
+		EventSubs: []models.NwdafEventsSubscriptionEventSubscription{{
+			Event: models.NwdafEvent_UE_COMMUNICATION,
+		}},
+	}
+	nwdaf_context.GetSelf().AddSubscription(subscription)
+	processor := anlfprocessor.NewProcessor(&liveModelWorkflow{})
+	callbackServer, err := anlfserver.NewServer(serverConfig, processor)
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	var serverWG sync.WaitGroup
+	if err = callbackServer.Run(&serverWG); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	defer func() {
+		callbackServer.Shutdown()
+		serverWG.Wait()
+	}()
+
+	client := NewClient(endpoint)
+	request := contract.ApplySubscriptionRuntimeRequest{
+		Subscription: contract.SubscriptionRuntimeContext{
+			SubscriptionID: subscriptionID,
+			EvtReq: &models.ReportingInformation{
+				NotifMethod:  models.SmfEventExposureNotificationMethod_PERIODIC,
+				RepPeriod:    1,
+				ImmRep:       false,
+				MaxReportNbr: 1,
+			},
+			EventSubscriptions: subscription.EventSubs,
+		},
+		ReportCallbackURI: serverConfig.GetAnlfServerURI() +
+			"/subscriptions/" + subscriptionID + "/analytics-reports",
+		RuntimeCompletionCallbackURI: serverConfig.GetAnlfServerURI() +
+			"/subscriptions/" + subscriptionID + "/runtime-completions",
+	}
+	first, err := client.ApplySubscriptionRuntime(context.Background(), request)
+	if err != nil {
+		t.Fatalf("first ApplySubscriptionRuntime() error = %v", err)
+	}
+	subscription.SetRuntime(first.RuntimeRevision, nwdaf_context.CollectionRequirements{}, nil)
+	if err = client.SyncObservationBindings(
+		context.Background(),
+		subscriptionID,
+		contract.SyncObservationBindingsRequest{
+			RuntimeRevision: first.RuntimeRevision,
+			Bindings:        []contract.ObservationBinding{},
+		},
+	); err != nil {
+		t.Fatalf("first SyncObservationBindings() error = %v", err)
+	}
+
+	second, err := client.ApplySubscriptionRuntime(context.Background(), request)
+	if err != nil {
+		t.Fatalf("replacement ApplySubscriptionRuntime() error = %v", err)
+	}
+	if second.RuntimeRevision <= first.RuntimeRevision {
+		t.Fatalf("replacement revision = %d, first = %d", second.RuntimeRevision, first.RuntimeRevision)
+	}
+	subscription.SetRuntime(second.RuntimeRevision, nwdaf_context.CollectionRequirements{}, nil)
+	if err = client.SyncObservationBindings(
+		context.Background(),
+		subscriptionID,
+		contract.SyncObservationBindingsRequest{
+			RuntimeRevision: second.RuntimeRevision,
+			Bindings:        []contract.ObservationBinding{},
+		},
+	); err != nil {
+		t.Fatalf("replacement SyncObservationBindings() error = %v", err)
+	}
+	if err = client.ReleaseSubscriptionRuntime(context.Background(), subscriptionID); err != nil {
+		t.Fatalf("ReleaseSubscriptionRuntime() error = %v", err)
+	}
+
+	time.Sleep(1500 * time.Millisecond)
+	revision, _, _, active := subscription.RuntimeSnapshot()
+	if revision != second.RuntimeRevision || !active {
+		t.Fatalf("explicit lifecycle emitted completion: revision=%d active=%v", revision, active)
+	}
 }
 
 func TestLivePyAnLFProvisionEventDedupNoMatch(t *testing.T) {
