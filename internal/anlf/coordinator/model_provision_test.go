@@ -36,7 +36,8 @@ func provisionNotification(subscriptionID, mtlfSubscriptionID, modelURL string) 
 func TestPlanModelProvisionActionsBuildsSpecAlignedApplyRequest(t *testing.T) {
 	nwdaf_context.Init()
 	setupProvisionSubscription("sub-123", "mtlf-sub-1")
-	service := newTestCoordinator(testNwdafApp{ctx: context.Background()}, nil)
+	client := &fakeAnlfBackendClient{}
+	service := newTestCoordinator(testNwdafApp{ctx: context.Background()}, client)
 	notif := provisionNotification("sub-123", "mtlf-sub-1", provisionTestModelURL)
 
 	actions := service.PlanModelProvisionActions(&notif)
@@ -86,11 +87,55 @@ func TestModelProvisionNotificationWithIdentityForwardsCompleteEvent(t *testing.
 		t.Fatalf("provision event count = %d, want 1", len(client.provisionEvents))
 	}
 	event := client.provisionEvents[0]
+	if event.EventID == "" || len(event.EventID) < len("mtlf:") || event.EventID[:len("mtlf:")] != "mtlf:" {
+		t.Fatalf("event ID = %q, want mtlf prefix", event.EventID)
+	}
 	if event.ModelIdentity.ProviderID != "mtlf-a" || event.ModelIdentity.ModelUniqueID != 42 {
 		t.Fatalf("model identity = %+v", event.ModelIdentity)
 	}
 	if !event.ModelUpdateInd || event.Artifact.MLModelURL != provisionTestModelURL {
 		t.Fatalf("provision event = %+v", event)
+	}
+}
+
+func TestPlanModelProvisionActionsAssignsDistinctStableEventIDs(t *testing.T) {
+	nwdaf_context.Init()
+	client := &fakeAnlfBackendClient{}
+	service := newTestCoordinator(testNwdafApp{ctx: context.Background()}, client)
+	firstID := int64(42)
+	secondID := int64(43)
+	notif := contract.ModelProvisionNotification{
+		SubscriptionID: "mtlf-sub-1",
+		EventNotifications: []contract.MLEventNotification{
+			{
+				MlEventNotif: models.MlEventNotif{
+					Event:      models.NwdafEvent_UE_COMMUNICATION,
+					MLFileAddr: &models.MlModelAddr{MLModelUrl: provisionTestModelURL},
+				},
+				ModelUniqueID: &firstID,
+			},
+			{
+				MlEventNotif: models.MlEventNotif{
+					Event:      models.NwdafEvent_UE_COMMUNICATION,
+					MLFileAddr: &models.MlModelAddr{MLModelUrl: provisionTestModelURL},
+				},
+				ModelUniqueID: &secondID,
+			},
+		},
+	}
+
+	actions := service.PlanModelProvisionActions(&notif)
+
+	if len(actions) != 2 || actions[0].Event == nil || actions[1].Event == nil {
+		t.Fatalf("actions = %+v", actions)
+	}
+	if actions[0].Event.EventID == actions[1].Event.EventID {
+		t.Fatalf("event IDs are equal: %q", actions[0].Event.EventID)
+	}
+	original := actions[0].Event.EventID
+	service.ExecuteModelProvisionActions(actions[:1])
+	if len(client.provisionEvents) != 1 || client.provisionEvents[0].EventID != original {
+		t.Fatalf("forwarded event IDs = %+v, want %q", client.provisionEvents, original)
 	}
 }
 

@@ -1,6 +1,11 @@
 package contract
 
-import "github.com/free5gc/openapi/models"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/free5gc/openapi/models"
+)
 
 type ProvisionContext struct {
 	Source              string              `json:"source"`
@@ -41,6 +46,7 @@ type ProvisionNotificationCorrelation struct {
 }
 
 type ModelProvisionEvent struct {
+	EventID                 string                           `json:"event_id"`
 	Source                  string                           `json:"source"`
 	ModelIdentity           ModelIdentity                    `json:"model_identity"`
 	ModelUpdateInd          bool                             `json:"model_update_ind"`
@@ -48,6 +54,13 @@ type ModelProvisionEvent struct {
 	AnalyticsEvent          string                           `json:"analytics_event"`
 	NotificationCorrelation ProvisionNotificationCorrelation `json:"notification_correlation"`
 	TrainingTaskID          string                           `json:"training_task_id,omitempty"`
+}
+
+func (e ModelProvisionEvent) Validate() error {
+	if strings.TrimSpace(e.EventID) == "" {
+		return fmt.Errorf("model provision event requires event_id")
+	}
+	return nil
 }
 
 type ModelProvisionEventResponse struct {

@@ -276,6 +276,9 @@ func TestAccuracyRetrainCompletionPreservesModelIdentity(t *testing.T) {
 	if received.TrainingTaskID != "task-1" || received.Artifact.MLModelURL != "http://daisy/model-new" {
 		t.Fatalf("provision event = %+v", received)
 	}
+	if received.EventID != "daisy:task-1" {
+		t.Fatalf("event ID = %q, want %q", received.EventID, "daisy:task-1")
+	}
 }
 
 func TestStartRetrainWorkflowRegistersOwnedDispatch(t *testing.T) {

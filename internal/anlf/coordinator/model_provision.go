@@ -1,6 +1,8 @@
 package coordinator
 
 import (
+	"github.com/google/uuid"
+
 	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 )
@@ -32,7 +34,8 @@ func (a *Coordinator) PlanModelProvisionActions(
 				providerID = "external-mtlf"
 			}
 			actions = append(actions, ModelProvisionAction{Event: &contract.ModelProvisionEvent{
-				Source: "MTLF_PROVISION",
+				EventID: "mtlf:" + uuid.NewString(),
+				Source:  "MTLF_PROVISION",
 				ModelIdentity: contract.ModelIdentity{
 					ProviderID: providerID, ModelUniqueID: *eventNotif.ModelUniqueID,
 				},

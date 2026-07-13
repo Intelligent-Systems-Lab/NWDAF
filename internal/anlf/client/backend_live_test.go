@@ -170,3 +170,35 @@ func TestLivePyAnLFContract(t *testing.T) {
 		t.Fatal("timed out waiting for PyAnLF analytics report callback")
 	}
 }
+
+func TestLivePyAnLFProvisionEventDedupNoMatch(t *testing.T) {
+	endpoint := os.Getenv("PYANLF_LIVE_ENDPOINT")
+	if endpoint == "" {
+		t.Skip("PYANLF_LIVE_ENDPOINT is not set")
+	}
+
+	eventID := "live-no-match:" + time.Now().UTC().Format("20060102T150405.000000000")
+	event := contract.ModelProvisionEvent{
+		EventID: eventID,
+		Source:  "LIVE_CONTRACT_TEST",
+		ModelIdentity: contract.ModelIdentity{
+			ProviderID:    "live-contract-test",
+			ModelUniqueID: time.Now().UnixNano(),
+		},
+		Artifact:       contract.ModelArtifact{MLModelURL: "http://invalid.example/model"},
+		AnalyticsEvent: string(models.NwdafEvent_UE_COMMUNICATION),
+	}
+	client := NewClient(endpoint)
+
+	first, err := client.ApplyModelProvisionEvent(context.Background(), event)
+	if err != nil {
+		t.Fatalf("first ApplyModelProvisionEvent() error = %v", err)
+	}
+	second, err := client.ApplyModelProvisionEvent(context.Background(), event)
+	if err != nil {
+		t.Fatalf("duplicate ApplyModelProvisionEvent() error = %v", err)
+	}
+	if first.Status != "NO_MATCH" || *first != *second {
+		t.Fatalf("duplicate responses differ: first=%+v second=%+v", first, second)
+	}
+}

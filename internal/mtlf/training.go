@@ -198,6 +198,7 @@ func (m *MtlfService) HandleSuccessfulTrainingCompletion(
 	if completion.AccuracyReport != nil && m.onModelProvisionEvent != nil {
 		report := completion.AccuracyReport
 		event := contract.ModelProvisionEvent{
+			EventID:        "daisy:" + taskID,
 			Source:         "DAISY_RETRAIN",
 			ModelIdentity:  report.ModelIdentity,
 			ModelUpdateInd: true,
