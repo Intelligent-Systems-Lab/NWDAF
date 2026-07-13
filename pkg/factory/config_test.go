@@ -107,15 +107,6 @@ configuration:
 			wantErr: "sbi.port",
 		},
 		{
-			name: "invalid ground truth ring buffer",
-			yaml: `
-configuration:
-  groundTruthRetention:
-    ringBufferSize: -1
-`,
-			wantErr: "groundTruthRetention.ringBufferSize",
-		},
-		{
 			name: "smf enabled requires endpoints and callback uris",
 			yaml: `
 configuration:

@@ -45,19 +45,18 @@ type Info struct {
 }
 
 type Configuration struct {
-	Mongodb              *Mongodb                    `yaml:"mongodb,omitempty"`
-	NwdafName            string                      `yaml:"nwdafName,omitempty"`
-	Sbi                  *Sbi                        `yaml:"sbi,omitempty"`
-	NrfUri               string                      `yaml:"nrfUri,omitempty"`
-	SupportedAnalytics   []string                    `yaml:"supportedAnalytics,omitempty"`
-	Smf                  *SmfConfig                  `yaml:"smf,omitempty"`
-	Anlf                 *AnlfConfig                 `yaml:"anlf,omitempty"`
-	ExternalMtlf         *ExternalMtlfConfig         `yaml:"externalMtlf,omitempty"`
-	AnlfBackend          *AnlfBackendConfig          `yaml:"anlfBackend,omitempty"`
-	GroupMembership      *GroupMembershipConfig      `yaml:"groupMembership,omitempty"`
-	Mtlf                 *MtlfConfig                 `yaml:"mtlf,omitempty"`
-	GroundTruthRetention *GroundTruthRetentionConfig `yaml:"groundTruthRetention,omitempty"`
-	Adrf                 *AdrfConfig                 `yaml:"adrf,omitempty"`
+	Mongodb            *Mongodb               `yaml:"mongodb,omitempty"`
+	NwdafName          string                 `yaml:"nwdafName,omitempty"`
+	Sbi                *Sbi                   `yaml:"sbi,omitempty"`
+	NrfUri             string                 `yaml:"nrfUri,omitempty"`
+	SupportedAnalytics []string               `yaml:"supportedAnalytics,omitempty"`
+	Smf                *SmfConfig             `yaml:"smf,omitempty"`
+	Anlf               *AnlfConfig            `yaml:"anlf,omitempty"`
+	ExternalMtlf       *ExternalMtlfConfig    `yaml:"externalMtlf,omitempty"`
+	AnlfBackend        *AnlfBackendConfig     `yaml:"anlfBackend,omitempty"`
+	GroupMembership    *GroupMembershipConfig `yaml:"groupMembership,omitempty"`
+	Mtlf               *MtlfConfig            `yaml:"mtlf,omitempty"`
+	Adrf               *AdrfConfig            `yaml:"adrf,omitempty"`
 }
 
 // GroupMembershipConfig maps Group IDs to SUPI lists (substitute for UDM)
@@ -172,17 +171,6 @@ type AnlfBackendConfig struct {
 	ObservationDelivery *ObservationDeliveryConfig `yaml:"observationDelivery,omitempty"`
 }
 
-type GroundTruthRetentionConfig struct {
-	RingBufferSize int `yaml:"ringBufferSize,omitempty"`
-}
-
-func (c *GroundTruthRetentionConfig) RingBufferSizeOrDefault() int {
-	if c != nil && c.RingBufferSize > 0 {
-		return c.RingBufferSize
-	}
-	return 50
-}
-
 type ObservationDeliveryConfig struct {
 	QueueCapacity  int `yaml:"queueCapacity,omitempty"`
 	RequestTimeout int `yaml:"requestTimeout,omitempty"`
@@ -235,16 +223,9 @@ type ModelProviderConfig struct {
 	BootstrapModelUniqueID int64  `yaml:"bootstrapModelUniqueId"`
 }
 
-// AccuracyMonitorConfig controls accuracy monitoring behavior
-// Per TS 23.288 §5C: accuracy determined by comparing predictions against ground truth
+// AccuracyMonitorConfig controls how MTLF evaluates accuracy reports from AnLF.
 type AccuracyMonitorConfig struct {
-	Enabled       bool `yaml:"enabled"`
-	CheckInterval int  `yaml:"checkInterval,omitempty"` // Seconds between checks (default: 60)
-	MinSamples    int  `yaml:"minSamples,omitempty"`    // Min samples before evaluation (default: 5)
-	// Seconds to skip checks after start (default: 120).
-	WarmupDuration int `yaml:"warmupDuration,omitempty"`
-	// Candidate metrics retained for observability.
-	MetricsToRecord []string `yaml:"metricsToRecord,omitempty"`
+	Enabled bool `yaml:"enabled"`
 	// Metric used for retrain decision.
 	PrimaryMetric string `yaml:"primaryMetric,omitempty"`
 	// Per-scope history length.
@@ -291,13 +272,6 @@ type LowTrafficPolicyConfig struct {
 }
 
 const chronicAggregatorPercentile = "percentile"
-
-func (a *AccuracyMonitorConfig) MetricsToRecordOrDefault() []string {
-	if a == nil || len(a.MetricsToRecord) == 0 {
-		return []string{"sMAPE", "MAE", "MSE", "WAPE", "NRMSE"}
-	}
-	return append([]string(nil), a.MetricsToRecord...)
-}
 
 func (a *AccuracyMonitorConfig) PrimaryMetricOrDefault() string {
 	if a == nil || a.PrimaryMetric == "" {
@@ -688,9 +662,6 @@ func (c *Configuration) validate() error {
 			errs = append(errs, validateErr)
 		}
 	}
-	if c.GroundTruthRetention != nil && c.GroundTruthRetention.RingBufferSize < 0 {
-		errs = append(errs, errors.New("groundTruthRetention.ringBufferSize must be zero or positive"))
-	}
 	if c.ExternalMtlf != nil && c.ExternalMtlf.Enabled {
 		if validateErr := c.ExternalMtlf.validate(); validateErr != nil {
 			errs = append(errs, validateErr)
@@ -1033,7 +1004,6 @@ func ReadConfig(cfgPath string) (*Config, error) {
 		logger.CfgLog.Errorf("Failed to read config file: %v", err)
 		return nil, err
 	}
-
 	if err = yaml.Unmarshal(data, cfg); err != nil {
 		logger.CfgLog.Errorf("Failed to parse config file: %v", err)
 		return nil, err
@@ -1189,14 +1159,6 @@ func (c *Config) GetMtlfServerPort() int {
 		return NwdafMtlfDefaultPort
 	}
 	return c.Configuration.Mtlf.Server.Port
-}
-
-// GetRingBufferSize returns transitional Go-side ground-truth retention capacity.
-func (c *Config) GetRingBufferSize() int {
-	if c == nil || c.Configuration == nil {
-		return 50
-	}
-	return c.Configuration.GroundTruthRetention.RingBufferSizeOrDefault()
 }
 
 func (c *Config) GetNwdafName() string {

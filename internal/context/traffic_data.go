@@ -182,7 +182,6 @@ func (b *TrafficDataBucket) GetOrCreate(ipAddr string) *TrafficData {
 	data := &TrafficData{
 		CorrelationId: b.CorrelationId,
 		IpAddress:     ipAddr,
-		RawUpfData:    make([]UpfDataPoint, 0),
 		CreatedAt:     time.Now(),
 	}
 	b.dataMap[ipAddr] = data
@@ -247,9 +246,6 @@ type TrafficData struct {
 	Dnn     string
 	Snssai  *models.Snssai
 	RatType models.RatType
-
-	// Raw UPF data points
-	RawUpfData []UpfDataPoint
 
 	// Timestamps
 	CreatedAt  time.Time

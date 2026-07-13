@@ -328,7 +328,7 @@ func (p *Processor) processUpfNotificationItemUnified(
 				dataPoint.UlPacketThroughput, dataPoint.DlPacketThroughput)
 		}
 
-		// Save to MongoDB for ground truth lookup by the accuracy monitor.
+		// Persist traffic records for ADRF retrieval and offline analysis.
 		if nwdaf_context.IsMongoAvailable() &&
 			cfg != nil && cfg.Configuration != nil &&
 			cfg.Configuration.Mongodb != nil {
@@ -340,12 +340,6 @@ func (p *Processor) processUpfNotificationItemUnified(
 			}
 		}
 
-		data.RawUpfData = append(data.RawUpfData, dataPoint)
-		ringBufferSize := cfg.GetRingBufferSize()
-		if len(data.RawUpfData) > ringBufferSize {
-			drop := len(data.RawUpfData) - ringBufferSize
-			data.RawUpfData = data.RawUpfData[drop:]
-		}
 		observation := contract.SourceObservation{
 			ObservedAt:               measurementTs,
 			IPv4Address:              ipAddr,

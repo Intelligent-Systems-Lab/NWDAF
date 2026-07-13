@@ -148,9 +148,6 @@ func TestAccuracyMonitorConfig_PolicyDefaults(t *testing.T) {
 	if got := cfg.ConsecutiveBreachesOrDefault(); got != 3 {
 		t.Errorf("ConsecutiveBreachesOrDefault() = %d, want 3", got)
 	}
-	if got := cfg.MetricsToRecordOrDefault(); len(got) != 5 {
-		t.Errorf("MetricsToRecordOrDefault() length = %d, want 5", len(got))
-	}
 	if cfg.ChronicPolicy.EnabledOrDefault() {
 		t.Error("ChronicPolicy.EnabledOrDefault() = true, want false")
 	}
@@ -180,7 +177,6 @@ func TestAccuracyMonitorConfig_PolicyDefaults(t *testing.T) {
 func TestAccuracyMonitorConfig_PolicyExplicitValues(t *testing.T) {
 	enabled := true
 	cfg := &factory.AccuracyMonitorConfig{
-		MetricsToRecord:      []string{"MAE", "WAPE"},
 		PrimaryMetric:        "WAPE",
 		RecentBufferSize:     12,
 		MinBufferSamples:     4,
@@ -242,10 +238,6 @@ func TestAccuracyMonitorConfig_PolicyExplicitValues(t *testing.T) {
 	}
 	if got := cfg.ConsecutiveBreachesOrDefault(); got != 5 {
 		t.Errorf("ConsecutiveBreachesOrDefault() = %d, want 5", got)
-	}
-	gotMetrics := cfg.MetricsToRecordOrDefault()
-	if len(gotMetrics) != 2 || gotMetrics[0] != "MAE" || gotMetrics[1] != "WAPE" {
-		t.Errorf("MetricsToRecordOrDefault() = %v, want [MAE WAPE]", gotMetrics)
 	}
 	if !cfg.ChronicPolicy.EnabledOrDefault() {
 		t.Error("ChronicPolicy.EnabledOrDefault() = false, want true")

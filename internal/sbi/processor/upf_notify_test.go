@@ -7,12 +7,44 @@ import (
 
 	"go.uber.org/mock/gomock"
 
+	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/mtlf"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/nwdaf/pkg/mockapp"
 	"github.com/free5gc/openapi/models"
 )
+
+type capturingObservationCoordinator struct {
+	observations []contract.SourceObservation
+}
+
+func (*capturingObservationCoordinator) ApplyInitialSubscriptionRuntime(
+	*nwdaf_context.Subscription,
+) (*contract.ApplySubscriptionRuntimeResponse, error) {
+	return nil, nil
+}
+
+func (*capturingObservationCoordinator) ReleaseSubscriptionRuntime(string) error { return nil }
+
+func (*capturingObservationCoordinator) SyncCurrentObservationBindings(string) error { return nil }
+
+func (*capturingObservationCoordinator) BuildProvisionNotificationURI() string { return "" }
+
+func (*capturingObservationCoordinator) SyncModelProvisionBinding(
+	string,
+	contract.ModelProvisionBinding,
+) error {
+	return nil
+}
+
+func (c *capturingObservationCoordinator) EnqueueObservations(
+	_ string,
+	observations []contract.SourceObservation,
+) bool {
+	c.observations = append(c.observations, observations...)
+	return true
+}
 
 const (
 	testCorsId = "test-corr-001"
@@ -42,7 +74,7 @@ func newTestProcessorWithConfig(t *testing.T, cfg *factory.Config) *Processor {
 	mockApp.EXPECT().Consumer().Return(nil).AnyTimes()
 	mockApp.EXPECT().Config().Return(cfg).AnyTimes()
 
-	anlfService := newTestAnlfCoordinator(mockApp, nil, nil)
+	anlfService := &capturingObservationCoordinator{}
 	mtlfService := mtlf.NewMtlfService(mockApp, nil, nil)
 	return NewProcessor(mockApp, anlfService, mtlfService)
 }
@@ -88,20 +120,23 @@ func TestHandleUpfNotification_Basic(t *testing.T) {
 		t.Fatal("Traffic bucket should be created")
 	}
 
-	// Verify traffic data was stored
+	// The Go-side bucket retains session metadata, while raw observations are
+	// forwarded to the AnLF backend.
 	data := bucket.Get("192.168.1.1")
 	if data == nil {
 		t.Fatal("Traffic data should be stored for IP")
-	} else if len(data.RawUpfData) != 1 {
-		t.Fatalf("RawUpfData length = %d, want 1", len(data.RawUpfData))
 	}
 
-	point := data.RawUpfData[0]
-	if point.UlVolume != 1000 {
-		t.Errorf("UlVolume = %d, want 1000", point.UlVolume)
+	got := p.anlf.(*capturingObservationCoordinator).observations
+	if len(got) != 1 {
+		t.Fatalf("forwarded observations = %d, want 1", len(got))
 	}
-	if point.DlVolume != 2000 {
-		t.Errorf("DlVolume = %d, want 2000", point.DlVolume)
+	point := got[0]
+	if point.UplinkVolume != 1000 {
+		t.Errorf("UplinkVolume = %f, want 1000", point.UplinkVolume)
+	}
+	if point.DownlinkVolume != 2000 {
+		t.Errorf("DownlinkVolume = %f, want 2000", point.DownlinkVolume)
 	}
 }
 
@@ -192,19 +227,18 @@ func TestHandleUpfNotification_DataAccumulation(t *testing.T) {
 		t.Errorf("Second notification failed: %v", err)
 	}
 
-	bucket := ctx.GetTrafficBucket(correlationId)
-	data := bucket.Get("192.168.1.1")
-
-	// Should have 2 data points accumulated
-	if len(data.RawUpfData) != 2 {
-		t.Fatalf("RawUpfData length = %d, want 2", len(data.RawUpfData))
+	if data := ctx.GetTrafficBucket(correlationId).Get("192.168.1.1"); data == nil {
+		t.Fatal("Traffic data should retain session metadata")
 	}
-
-	if data.RawUpfData[0].UlVolume != 100 {
-		t.Errorf("First UlVolume = %d, want 100", data.RawUpfData[0].UlVolume)
+	got := p.anlf.(*capturingObservationCoordinator).observations
+	if len(got) != 2 {
+		t.Fatalf("forwarded observations = %d, want 2", len(got))
 	}
-	if data.RawUpfData[1].UlVolume != 200 {
-		t.Errorf("Second UlVolume = %d, want 200", data.RawUpfData[1].UlVolume)
+	if got[0].UplinkVolume != 100 {
+		t.Errorf("first uplink volume = %f, want 100", got[0].UplinkVolume)
+	}
+	if got[1].UplinkVolume != 200 {
+		t.Errorf("second uplink volume = %f, want 200", got[1].UplinkVolume)
 	}
 }
 
@@ -331,19 +365,19 @@ func TestHandleUpfNotification_ThroughputMeasurement(t *testing.T) {
 		t.Errorf("HandleUpfNotification failed: %v", err)
 	}
 
-	bucket := ctx.GetTrafficBucket(correlationId)
-	data := bucket.Get("192.168.1.1")
-
-	if len(data.RawUpfData) != 1 {
-		t.Fatalf("RawUpfData length = %d, want 1", len(data.RawUpfData))
+	if data := ctx.GetTrafficBucket(correlationId).Get("192.168.1.1"); data == nil {
+		t.Fatal("Traffic data should retain session metadata")
 	}
-
-	point := data.RawUpfData[0]
-	if point.UlThroughput != 1500000.0 {
-		t.Errorf("UlThroughput = %f, want 1500000.0 (parsed from '1.5 Mbps')", point.UlThroughput)
+	got := p.anlf.(*capturingObservationCoordinator).observations
+	if len(got) != 1 {
+		t.Fatalf("forwarded observations = %d, want 1", len(got))
 	}
-	if point.DlThroughput != 10200000.0 {
-		t.Errorf("DlThroughput = %f, want 10200000.0 (parsed from '10.2 Mbps')", point.DlThroughput)
+	point := got[0]
+	if point.UplinkThroughput != 1500000.0 {
+		t.Errorf("UplinkThroughput = %f, want 1500000.0 (parsed from '1.5 Mbps')", point.UplinkThroughput)
+	}
+	if point.DownlinkThroughput != 10200000.0 {
+		t.Errorf("DownlinkThroughput = %f, want 10200000.0 (parsed from '10.2 Mbps')", point.DownlinkThroughput)
 	}
 }
 
@@ -388,28 +422,30 @@ func TestHandleUpfNotification_FullVolumeMeasurement(t *testing.T) {
 	data := bucket.Get("10.0.0.1")
 	if data == nil {
 		t.Fatal("Traffic data should be stored for IP")
-	} else if len(data.RawUpfData) != 1 {
-		t.Fatalf("RawUpfData length = %d, want 1", len(data.RawUpfData))
 	}
 
-	point := data.RawUpfData[0]
+	got := p.anlf.(*capturingObservationCoordinator).observations
+	if len(got) != 1 {
+		t.Fatalf("forwarded observations = %d, want 1", len(got))
+	}
+	point := got[0]
 	if point.TotalVolume != 3000 {
-		t.Errorf("TotalVolume = %d, want 3000", point.TotalVolume)
+		t.Errorf("TotalVolume = %f, want 3000", point.TotalVolume)
 	}
-	if point.UlVolume != 1000 {
-		t.Errorf("UlVolume = %d, want 1000", point.UlVolume)
+	if point.UplinkVolume != 1000 {
+		t.Errorf("UplinkVolume = %f, want 1000", point.UplinkVolume)
 	}
-	if point.DlVolume != 2000 {
-		t.Errorf("DlVolume = %d, want 2000", point.DlVolume)
+	if point.DownlinkVolume != 2000 {
+		t.Errorf("DownlinkVolume = %f, want 2000", point.DownlinkVolume)
 	}
-	if point.TotalNbOfPackets != 300 {
-		t.Errorf("TotalNbOfPackets = %d, want 300", point.TotalNbOfPackets)
+	if point.TotalPacketCount != 300 {
+		t.Errorf("TotalPacketCount = %f, want 300", point.TotalPacketCount)
 	}
-	if point.UlNbOfPackets != 100 {
-		t.Errorf("UlNbOfPackets = %d, want 100", point.UlNbOfPackets)
+	if point.UplinkPacketCount != 100 {
+		t.Errorf("UplinkPacketCount = %f, want 100", point.UplinkPacketCount)
 	}
-	if point.DlNbOfPackets != 200 {
-		t.Errorf("DlNbOfPackets = %d, want 200", point.DlNbOfPackets)
+	if point.DownlinkPacketCount != 200 {
+		t.Errorf("DownlinkPacketCount = %f, want 200", point.DownlinkPacketCount)
 	}
 }
 
@@ -451,21 +487,23 @@ func TestHandleUpfNotification_PacketThroughput(t *testing.T) {
 	data := bucket.Get("10.0.0.2")
 	if data == nil {
 		t.Fatal("Traffic data should be stored for IP")
-	} else if len(data.RawUpfData) != 1 {
-		t.Fatalf("RawUpfData length = %d, want 1", len(data.RawUpfData))
 	}
 
-	point := data.RawUpfData[0]
-	if point.UlThroughput != 5000000.0 {
-		t.Errorf("UlThroughput = %f, want 5000000.0 (parsed from '5 Mbps')", point.UlThroughput)
+	got := p.anlf.(*capturingObservationCoordinator).observations
+	if len(got) != 1 {
+		t.Fatalf("forwarded observations = %d, want 1", len(got))
 	}
-	if point.DlThroughput != 20000000.0 {
-		t.Errorf("DlThroughput = %f, want 20000000.0 (parsed from '20 Mbps')", point.DlThroughput)
+	point := got[0]
+	if point.UplinkThroughput != 5000000.0 {
+		t.Errorf("UplinkThroughput = %f, want 5000000.0 (parsed from '5 Mbps')", point.UplinkThroughput)
 	}
-	if point.UlPacketThroughput != 500.0 {
-		t.Errorf("UlPacketThroughput = %f, want 500.0 (parsed from '500 pps')", point.UlPacketThroughput)
+	if point.DownlinkThroughput != 20000000.0 {
+		t.Errorf("DownlinkThroughput = %f, want 20000000.0 (parsed from '20 Mbps')", point.DownlinkThroughput)
 	}
-	if point.DlPacketThroughput != 2000.0 {
-		t.Errorf("DlPacketThroughput = %f, want 2000.0 (parsed from '2000 pps')", point.DlPacketThroughput)
+	if point.UplinkPacketThroughput != 500.0 {
+		t.Errorf("UplinkPacketThroughput = %f, want 500.0 (parsed from '500 pps')", point.UplinkPacketThroughput)
+	}
+	if point.DownlinkPacketThroughput != 2000.0 {
+		t.Errorf("DownlinkPacketThroughput = %f, want 2000.0 (parsed from '2000 pps')", point.DownlinkPacketThroughput)
 	}
 }

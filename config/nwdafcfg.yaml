@@ -35,10 +35,6 @@ configuration:
       smf: http://127.0.0.1:8080/collector/notify
       upf: http://127.0.0.1:8080/collector/upf-notify
 
-  # Transitional Go-side retention used by the Phase 4 accuracy workflow.
-  groundTruthRetention:
-    ringBufferSize: 50
-
   # External MTLF Integration
   externalMtlf:
     enabled: false  # Disable MTLF to use static model URL
@@ -84,7 +80,6 @@ configuration:
       bootstrapModelUniqueId: 1
     accuracyPolicy:
       enabled: true            # Trigger retraining on accuracy degradation
-      minSamples: 2             # keep testbed margin; do not require the theoretical max slots per round
       primaryMetric: WAPE       # decision metric for retrain policy
       recentBufferSize: 12      # per-scope retained report history
       minBufferSamples: 5       # samples required before enabling z-score gate

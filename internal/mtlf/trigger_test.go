@@ -327,7 +327,6 @@ func TestHandleAccuracyReports_DegradationSignalDoesNotPolluteReferenceBuffer(t 
 		Enabled:              true,
 		PrimaryMetric:        "MAE",
 		RecentBufferSize:     5,
-		MinSamples:           2,
 		MinBufferSamples:     3,
 		MinStd:               1,
 		FixedFloor:           100,
@@ -350,6 +349,24 @@ func TestHandleAccuracyReports_DegradationSignalDoesNotPolluteReferenceBuffer(t 
 	}
 	if got := scope.DegradationReferenceCount(); got != 3 {
 		t.Fatalf("DegradationReferenceCount() = %d, want 3 after signal round", got)
+	}
+}
+
+func TestHandleAccuracyReports_DoesNotRepeatAnLFMatchedSampleGate(t *testing.T) {
+	cfg := setTestAccuracyMonitorConfig(t, &factory.AccuracyMonitorConfig{
+		Enabled:          true,
+		PrimaryMetric:    "MAE",
+		MinBufferSamples: 3,
+	})
+	m := newTestMtlfService(cfg)
+	report := testAccuracyReport(testModelURL, testScopeKey, 50)
+	report.SampleCount = 1
+
+	m.HandleAccuracyReports(testModelURL, []anlf.AccuracyReport{report}, newTestRetrainingState())
+
+	scope := m.stateStore.GetOrCreateScope(testModelURL, testScopeKey, 20, 3)
+	if got := scope.DegradationReferenceCount(); got != 1 {
+		t.Fatalf("DegradationReferenceCount() = %d, want 1 for an AnLF-admitted report", got)
 	}
 }
 

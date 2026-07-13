@@ -73,10 +73,6 @@ func (m *MtlfService) HandleAccuracyReports(
 	primaryMetric := accCfg.PrimaryMetricOrDefault()
 	bufferSize := accCfg.RecentBufferSizeOrDefault()
 	minBufferSamples := accCfg.MinBufferSamplesOrDefault()
-	minSamples := accCfg.MinSamples
-	if minSamples <= 0 {
-		minSamples = 5
-	}
 	minStd := accCfg.MinStdOrDefault()
 	fixedFloor := accCfg.FixedFloorOrDefault()
 	degradationMinScale := accCfg.DegradationPolicy.MinDecisionTrafficScaleOrDefault()
@@ -195,8 +191,7 @@ func (m *MtlfService) HandleAccuracyReports(
 		}
 
 		baselineNotFull := degradationHistoryCount < minBufferSamples
-		shouldRecordDegradationReference := report.SampleCount >= minSamples &&
-			degradationTrafficEligible &&
+		shouldRecordDegradationReference := degradationTrafficEligible &&
 			(baselineNotFull || !degradationSignal)
 		if shouldRecordDegradationReference {
 			scopeState.RecordDegradationReference(observation)
