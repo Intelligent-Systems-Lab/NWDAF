@@ -55,9 +55,11 @@ type nwdafApp interface {
 
 type processorAPI interface {
 	HandleCreateSubscription(
+		ctx context.Context,
 		req *models.NnwdafEventsSubscription,
 	) (*models.NnwdafEventsSubscription, string, *models.ProblemDetails)
 	HandleUpdateSubscription(
+		ctx context.Context,
 		subscriptionID string,
 		req *models.NnwdafEventsSubscription,
 	) (*models.NnwdafEventsSubscription, *models.ProblemDetails)

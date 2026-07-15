@@ -8,6 +8,10 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"golang.org/x/oauth2"
+
+	"github.com/free5gc/openapi"
 )
 
 const (
@@ -120,10 +124,16 @@ func (s *NsmfService) UnsubscribeFromSmf(
 		return err
 	}
 	defer cancel()
+	if err = ctx.Err(); err != nil {
+		return fmt.Errorf("SMF unsubscription canceled before dispatch: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
+	}
+	if bindErr := bindOAuthTokenToRequest(req, ctx); bindErr != nil {
+		return fmt.Errorf("bind OAuth2 token to SMF unsubscription request: %w", bindErr)
 	}
 
 	resp, err := s.httpClient.Do(req)
@@ -161,12 +171,18 @@ func (s *NsmfService) sendRequest(ctx context.Context, smfEndpoint string, reque
 		return "", err
 	}
 	defer cancel()
+	if err = ctx.Err(); err != nil {
+		return "", fmt.Errorf("SMF subscription canceled before dispatch: %w", err)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if bindErr := bindOAuthTokenToRequest(req, ctx); bindErr != nil {
+		return "", fmt.Errorf("bind OAuth2 token to SMF subscription request: %w", bindErr)
+	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -183,6 +199,22 @@ func (s *NsmfService) sendRequest(ctx context.Context, smfEndpoint string, reque
 	}
 
 	return s.parseSubscriptionId(resp), nil
+}
+
+func bindOAuthTokenToRequest(req *http.Request, requestCtx context.Context) error {
+	if requestCtx == nil {
+		return nil
+	}
+	tokenSource, ok := requestCtx.Value(openapi.ContextOAuth2).(oauth2.TokenSource)
+	if !ok {
+		return nil
+	}
+	token, err := tokenSource.Token()
+	if err != nil {
+		return err
+	}
+	token.SetAuthHeader(req)
+	return nil
 }
 
 // parseSubscriptionId extracts subscription ID from response

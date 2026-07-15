@@ -29,8 +29,7 @@ configuration:
   # SMF Data Collection
   smf:
     enabled: true
-    endpoints:
-      - http://127.0.0.1:8081  # Fake SMF+UPF server for testing
+    endpointSource: nrf  # Discover every registered SMF offering nsmf-event-exposure
     subscriptionDuration: 3600  # seconds
     notifUris:
       smf: http://127.0.0.1:8080/collector/notify

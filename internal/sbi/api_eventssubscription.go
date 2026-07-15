@@ -30,7 +30,7 @@ func (s *Server) HandleCreateSubscription(c *gin.Context) {
 		return
 	}
 
-	response, subscriptionId, problemDetails := s.Processor().HandleCreateSubscription(&req)
+	response, subscriptionId, problemDetails := s.Processor().HandleCreateSubscription(c.Request.Context(), &req)
 	if problemDetails != nil {
 		util.GinProblemJson(c, problemDetails)
 		return
@@ -65,7 +65,7 @@ func (s *Server) HandleUpdateSubscription(c *gin.Context) {
 		return
 	}
 
-	response, problemDetails := s.Processor().HandleUpdateSubscription(subscriptionId, &req)
+	response, problemDetails := s.Processor().HandleUpdateSubscription(c.Request.Context(), subscriptionId, &req)
 	if problemDetails != nil {
 		util.GinProblemJson(c, problemDetails)
 		return

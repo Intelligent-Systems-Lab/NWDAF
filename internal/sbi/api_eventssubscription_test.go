@@ -1,6 +1,7 @@
 package sbi
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -16,9 +17,17 @@ func TestHandleCreateSubscription_Success(t *testing.T) {
 	defer ctrl.Finish()
 
 	mockProcessor := NewMockprocessorAPI(ctrl)
+	var processorCtx context.Context
 	mockProcessor.EXPECT().
-		HandleCreateSubscription(gomock.AssignableToTypeOf(&models.NnwdafEventsSubscription{})).
-		Return(&models.NnwdafEventsSubscription{}, "sub-123", nil)
+		HandleCreateSubscription(gomock.Any(), gomock.AssignableToTypeOf(&models.NnwdafEventsSubscription{})).
+		DoAndReturn(func(ctx context.Context, _ *models.NnwdafEventsSubscription) (
+			*models.NnwdafEventsSubscription,
+			string,
+			*models.ProblemDetails,
+		) {
+			processorCtx = ctx
+			return &models.NnwdafEventsSubscription{}, "sub-123", nil
+		})
 
 	server := newHandlerTestServer(t, mockProcessor)
 	createBody := `{
@@ -32,6 +41,8 @@ func TestHandleCreateSubscription_Success(t *testing.T) {
 		"/nnwdaf-eventssubscription/v1/subscriptions",
 		[]byte(createBody),
 	)
+	requestCtx := context.WithValue(c.Request.Context(), requestContextTestKey{}, "request-marker")
+	c.Request = c.Request.WithContext(requestCtx)
 
 	server.HandleCreateSubscription(c)
 
@@ -42,7 +53,12 @@ func TestHandleCreateSubscription_Success(t *testing.T) {
 	if location := recorder.Header().Get("Location"); location != expectedLocation {
 		t.Fatalf("Location = %q", location)
 	}
+	if processorCtx != requestCtx {
+		t.Fatal("handler did not pass the inbound request context to the processor")
+	}
 }
+
+type requestContextTestKey struct{}
 
 func TestHandleCreateSubscription_InvalidJSON(t *testing.T) {
 	server := newHandlerTestServer(t, nil)
@@ -73,7 +89,7 @@ func TestHandleUpdateSubscription_ProcessorFailure(t *testing.T) {
 
 	mockProcessor := NewMockprocessorAPI(ctrl)
 	mockProcessor.EXPECT().
-		HandleUpdateSubscription("sub-123", gomock.AssignableToTypeOf(&models.NnwdafEventsSubscription{})).
+		HandleUpdateSubscription(gomock.Any(), "sub-123", gomock.AssignableToTypeOf(&models.NnwdafEventsSubscription{})).
 		Return(nil, &models.ProblemDetails{
 			Status: http.StatusNotFound,
 			Cause:  "SUBSCRIPTION_NOT_FOUND",

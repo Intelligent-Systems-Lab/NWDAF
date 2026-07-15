@@ -174,13 +174,71 @@ func TestHandleCreateSubscriptionRejectsUnavailableAnalyticsRuntime(t *testing.T
 		}},
 	}
 
-	response, _, problem := processor.HandleCreateSubscription(request)
+	response, _, problem := processor.HandleCreateSubscription(context.Background(), request)
 
 	if response != nil || problem == nil || problem.Status != http.StatusServiceUnavailable {
 		t.Fatalf("response=%+v problem=%+v", response, problem)
 	}
 	if ctx.SubscriptionCount() != 0 {
 		t.Fatalf("subscription count = %d, want 0", ctx.SubscriptionCount())
+	}
+}
+
+func TestHandleDeleteSubscriptionUsesBoundedApplicationCleanupContext(t *testing.T) {
+	ctx := setupTestContext()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	consumerClient := NewMockConsumerAPI(ctrl)
+	consumerClient.EXPECT().AdrfClient().Return(nil).AnyTimes()
+	smfEndpoint := "http://smf-delete.example"
+	supi := "imsi-999990000000003"
+	consumerClient.EXPECT().
+		UnsubscribeFromSmf(gomock.Any(), smfEndpoint, "smf-sub-delete").
+		DoAndReturn(func(cleanupCtx context.Context, _, _ string) error {
+			if cleanupCtx.Err() != nil {
+				t.Fatalf("cleanup context is already canceled: %v", cleanupCtx.Err())
+			}
+			deadline, ok := cleanupCtx.Deadline()
+			if !ok {
+				t.Fatal("cleanup context has no deadline")
+			}
+			remaining := time.Until(deadline)
+			if remaining <= 0 || remaining > dataCollectionCleanupTimeout {
+				t.Fatalf("cleanup deadline remaining = %s", remaining)
+			}
+			return nil
+		})
+
+	appCtx, cancelApp := context.WithCancel(context.Background())
+	defer cancelApp()
+	app := &subscriptionTestApp{ctx: appCtx, consumer: consumerClient}
+	p := NewProcessor(
+		app,
+		newTestAnlfCoordinator(app, &subscriptionTestBackend{}, nil),
+		mtlf.NewMtlfService(app, nil, nil),
+	)
+
+	subscriptionID := "sub-app-owned-cleanup"
+	correlationID := "corr-app-owned-cleanup"
+	ctx.AddSubscription(&nwdaf_context.Subscription{ID: subscriptionID, IsActive: true})
+	smfSubscription, _ := ctx.GetOrCreateSmfSubscription(correlationID, subscriptionID)
+	smfSubscription.Lock()
+	smfSubscription.Supi = supi
+	smfSubscription.SmfEndpoint = smfEndpoint
+	smfSubscription.SmfSubId = "smf-sub-delete"
+	smfSubscription.Unlock()
+	ctx.AddNwdafSubResource(subscriptionID, nwdaf_context.NwdafSubResource{
+		SmfEndpoint:   smfEndpoint,
+		Supi:          supi,
+		CorrelationId: correlationID,
+	})
+
+	if problem := p.HandleDeleteSubscription(subscriptionID); problem != nil {
+		t.Fatalf("HandleDeleteSubscription() problem = %+v", problem)
+	}
+	if ctx.GetSubscription(subscriptionID) != nil {
+		t.Fatal("subscription still exists after delete")
 	}
 }
 
@@ -894,7 +952,7 @@ func TestHandleUpdateSubscription_ReappliesDefaultValidation(t *testing.T) {
 		NotificationURI: "http://consumer.example/callback",
 	}
 
-	response, problemDetails := p.HandleUpdateSubscription(subscriptionID, req)
+	response, problemDetails := p.HandleUpdateSubscription(context.Background(), subscriptionID, req)
 	if response != nil {
 		t.Fatalf("expected nil response on invalid update, got %+v", response)
 	}
@@ -936,8 +994,9 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 	cfg := &factory.Config{
 		Configuration: &factory.Configuration{
 			Smf: &factory.SmfConfig{
-				Enabled:   true,
-				Endpoints: []string{"http://smf.example"},
+				Enabled:        true,
+				EndpointSource: factory.SmfEndpointSourceConfigured,
+				Endpoints:      []string{"http://smf.example"},
 				NotifUris: &factory.NotifUris{
 					Smf: "http://127.0.0.1:8080/collector/notify",
 					Upf: "http://127.0.0.1:8080/collector/upf-notify",
@@ -973,7 +1032,8 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 		},
 	})
 
-	p.triggerTargetDataCollection(
+	if _, _, err := p.triggerTargetDataCollection(
+		context.Background(),
 		ctx,
 		consumerClient,
 		[]string{"http://smf.example"},
@@ -982,7 +1042,9 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 		"http://127.0.0.1:8080/collector/notify",
 		"http://127.0.0.1:8080/collector/upf-notify",
 		10,
-	)
+	); err != nil {
+		t.Fatalf("triggerTargetDataCollection() error = %v", err)
+	}
 
 	oldProfile := canonicalCollectionProfileKey(10, []string{"TOTAL_VOLUME", "UL_VOLUME", "DL_VOLUME"})
 	oldCorrelationID, found := ctx.GetSmfCorrelationIdForProfile(
@@ -1020,7 +1082,7 @@ func TestHandleUpdateSubscription_ReconcilesExternalState(t *testing.T) {
 		},
 	}
 
-	response, problemDetails := p.HandleUpdateSubscription(subscriptionID, req)
+	response, problemDetails := p.HandleUpdateSubscription(context.Background(), subscriptionID, req)
 	if problemDetails != nil {
 		t.Fatalf("HandleUpdateSubscription returned problem: %+v", problemDetails)
 	}

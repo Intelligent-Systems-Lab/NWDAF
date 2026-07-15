@@ -10,6 +10,7 @@
 package sbi
 
 import (
+	context "context"
 	reflect "reflect"
 
 	processor "github.com/free5gc/nwdaf/internal/sbi/processor"
@@ -53,9 +54,9 @@ func (mr *MockprocessorAPIMockRecorder) HandleAdrfRetrievalNotify(notifCorrID, f
 }
 
 // HandleCreateSubscription mocks base method.
-func (m *MockprocessorAPI) HandleCreateSubscription(req *models.NnwdafEventsSubscription) (*models.NnwdafEventsSubscription, string, *models.ProblemDetails) {
+func (m *MockprocessorAPI) HandleCreateSubscription(ctx context.Context, req *models.NnwdafEventsSubscription) (*models.NnwdafEventsSubscription, string, *models.ProblemDetails) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HandleCreateSubscription", req)
+	ret := m.ctrl.Call(m, "HandleCreateSubscription", ctx, req)
 	ret0, _ := ret[0].(*models.NnwdafEventsSubscription)
 	ret1, _ := ret[1].(string)
 	ret2, _ := ret[2].(*models.ProblemDetails)
@@ -63,9 +64,9 @@ func (m *MockprocessorAPI) HandleCreateSubscription(req *models.NnwdafEventsSubs
 }
 
 // HandleCreateSubscription indicates an expected call of HandleCreateSubscription.
-func (mr *MockprocessorAPIMockRecorder) HandleCreateSubscription(req any) *gomock.Call {
+func (mr *MockprocessorAPIMockRecorder) HandleCreateSubscription(ctx, req any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleCreateSubscription", reflect.TypeOf((*MockprocessorAPI)(nil).HandleCreateSubscription), req)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleCreateSubscription", reflect.TypeOf((*MockprocessorAPI)(nil).HandleCreateSubscription), ctx, req)
 }
 
 // HandleDeleteSubscription mocks base method.
@@ -97,18 +98,18 @@ func (mr *MockprocessorAPIMockRecorder) HandleSmfNotification(notification any) 
 }
 
 // HandleUpdateSubscription mocks base method.
-func (m *MockprocessorAPI) HandleUpdateSubscription(subscriptionID string, req *models.NnwdafEventsSubscription) (*models.NnwdafEventsSubscription, *models.ProblemDetails) {
+func (m *MockprocessorAPI) HandleUpdateSubscription(ctx context.Context, subscriptionID string, req *models.NnwdafEventsSubscription) (*models.NnwdafEventsSubscription, *models.ProblemDetails) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HandleUpdateSubscription", subscriptionID, req)
+	ret := m.ctrl.Call(m, "HandleUpdateSubscription", ctx, subscriptionID, req)
 	ret0, _ := ret[0].(*models.NnwdafEventsSubscription)
 	ret1, _ := ret[1].(*models.ProblemDetails)
 	return ret0, ret1
 }
 
 // HandleUpdateSubscription indicates an expected call of HandleUpdateSubscription.
-func (mr *MockprocessorAPIMockRecorder) HandleUpdateSubscription(subscriptionID, req any) *gomock.Call {
+func (mr *MockprocessorAPIMockRecorder) HandleUpdateSubscription(ctx, subscriptionID, req any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleUpdateSubscription", reflect.TypeOf((*MockprocessorAPI)(nil).HandleUpdateSubscription), subscriptionID, req)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleUpdateSubscription", reflect.TypeOf((*MockprocessorAPI)(nil).HandleUpdateSubscription), ctx, subscriptionID, req)
 }
 
 // HandleUpfNotification mocks base method.

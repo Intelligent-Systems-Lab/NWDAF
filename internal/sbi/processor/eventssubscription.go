@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 // HandleCreateSubscription processes new subscription requests
 func (p *Processor) HandleCreateSubscription(
+	requestCtx context.Context,
 	req *models.NnwdafEventsSubscription,
 ) (*models.NnwdafEventsSubscription, string, *models.ProblemDetails) {
 	// Phase 1: Hard validation (structure, event type, target period, etc.)
@@ -69,7 +71,7 @@ func (p *Processor) HandleCreateSubscription(
 	ctx.AddSubscription(subscription)
 
 	// Complete source reconciliation and binding sync before accepting the subscription.
-	if collectionErr := p.TriggerDataCollection(req.EventSubscriptions, subscriptionId); collectionErr != nil {
+	if collectionErr := p.TriggerDataCollection(requestCtx, req.EventSubscriptions, subscriptionId); collectionErr != nil {
 		subscription.SetActive(false)
 		p.cleanupMlModelState(subscriptionId)
 		p.cleanupDataCollection(subscriptionId)
@@ -87,6 +89,7 @@ func (p *Processor) HandleCreateSubscription(
 
 // HandleUpdateSubscription processes subscription update requests
 func (p *Processor) HandleUpdateSubscription(
+	requestCtx context.Context,
 	subscriptionId string,
 	req *models.NnwdafEventsSubscription,
 ) (*models.NnwdafEventsSubscription, *models.ProblemDetails) {
@@ -144,7 +147,7 @@ func (p *Processor) HandleUpdateSubscription(
 
 	ctx.UpdateSubscription(subscription)
 
-	if collectionErr := p.TriggerDataCollection(req.EventSubscriptions, subscriptionId); collectionErr != nil {
+	if collectionErr := p.TriggerDataCollection(requestCtx, req.EventSubscriptions, subscriptionId); collectionErr != nil {
 		if rollbackErr := p.rollbackSubscriptionUpdate(existing); rollbackErr != nil {
 			logger.ProcLog.Errorf(
 				"Subscription update rollback failed: sub=%s err=%v",
@@ -183,7 +186,7 @@ func (p *Processor) rollbackSubscriptionUpdate(
 	)
 	previous.SetActive(true)
 	nwdaf_context.GetSelf().UpdateSubscription(previous)
-	return p.TriggerDataCollection(previous.EventSubs, previous.ID)
+	return p.TriggerDataCollection(p.nwdaf.CancelContext(), previous.EventSubs, previous.ID)
 }
 
 // HandleDeleteSubscription processes subscription deletion requests
@@ -819,6 +822,13 @@ func (p *Processor) isCommunRelated(eventSub *models.NwdafEventsSubscriptionEven
 // Per free5gc pattern: keep related processor methods in same file
 // This method is called when a NWDAF subscription is deleted
 func (p *Processor) cleanupDataCollection(subscriptionId string) {
+	cleanupCtx, cancel, err := p.dataCollectionCleanupContext()
+	if err != nil {
+		logger.ProcLog.Errorf("CleanupDataCollection: sub=%s err=%v", subscriptionId, err)
+		return
+	}
+	defer cancel()
+
 	ctx := nwdaf_context.GetSelf()
 
 	// Get all resources tracked for this NWDAF subscription
@@ -831,7 +841,7 @@ func (p *Processor) cleanupDataCollection(subscriptionId string) {
 
 	// Release each SMF subscription
 	for _, res := range resources {
-		p.releaseDataCollectionResource(subscriptionId, res)
+		p.releaseDataCollectionResource(cleanupCtx, subscriptionId, res)
 	}
 
 	// Delete cleanup tracking for this subscription
@@ -842,6 +852,7 @@ func (p *Processor) cleanupDataCollection(subscriptionId string) {
 }
 
 func (p *Processor) releaseDataCollectionResource(
+	cleanupCtx context.Context,
 	subscriptionID string,
 	resource nwdaf_context.NwdafSubResource,
 ) {
@@ -858,7 +869,7 @@ func (p *Processor) releaseDataCollectionResource(
 	}
 	_, smfSubscriptionID, _ := smfSubscription.GetInfo()
 	if err := consumer.UnsubscribeFromSmf(
-		p.nwdaf.CancelContext(),
+		cleanupCtx,
 		resource.SmfEndpoint,
 		smfSubscriptionID,
 	); err != nil {

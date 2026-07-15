@@ -51,6 +51,26 @@ func (mr *MockConsumerAPIMockRecorder) AdrfClient() *gomock.Call {
 	)
 }
 
+// DiscoverSmfEventExposure mocks base method.
+func (m *MockConsumerAPI) DiscoverSmfEventExposure(ctx context.Context) ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DiscoverSmfEventExposure", ctx)
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DiscoverSmfEventExposure indicates an expected call of DiscoverSmfEventExposure.
+func (mr *MockConsumerAPIMockRecorder) DiscoverSmfEventExposure(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(
+		mr.mock,
+		"DiscoverSmfEventExposure",
+		reflect.TypeOf((*MockConsumerAPI)(nil).DiscoverSmfEventExposure),
+		ctx,
+	)
+}
+
 // SubscribeToSmf mocks base method.
 func (m *MockConsumerAPI) SubscribeToSmf(
 	ctx context.Context,

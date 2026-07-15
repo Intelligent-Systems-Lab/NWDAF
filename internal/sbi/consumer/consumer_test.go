@@ -2,11 +2,14 @@ package consumer
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"slices"
 	"testing"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/pkg/factory"
+	"github.com/free5gc/openapi/models"
 )
 
 type testSmfService struct {
@@ -169,6 +172,79 @@ func TestConsumerDelegatesToInjectedServices(t *testing.T) {
 	}
 	if !mtlfService.subscribeCalled || !mtlfService.unsubscribeCalled {
 		t.Fatal("expected MTLF service delegation to be invoked")
+	}
+}
+
+func TestConsumerRequestsSmfTokenBeforeRawPostAndDelete(t *testing.T) {
+	var requestOrder []string
+	var tokenScopes []string
+	server := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case testAccessTokenPath:
+			requestOrder = append(requestOrder, "token")
+			if err := r.ParseForm(); err != nil {
+				t.Errorf("parse token form: %v", err)
+			}
+			if got := r.Form.Get("targetNfType"); got != string(models.NrfNfManagementNfType_SMF) {
+				t.Errorf("targetNfType = %q, want SMF", got)
+			}
+			if got := r.Form.Get("targetNfInstanceId"); got != "" {
+				t.Errorf("targetNfInstanceId = %q, want omitted", got)
+			}
+			tokenScopes = append(tokenScopes, r.Form.Get("scope"))
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(models.NrfAccessTokenAccessTokenRsp{
+				AccessToken: "smf-service-token",
+				TokenType:   "Bearer",
+				ExpiresIn:   300,
+				Scope:       string(models.ServiceName_NSMF_EVENT_EXPOSURE),
+			}); err != nil {
+				t.Errorf("encode SMF access token response: %v", err)
+			}
+		case SmfEventExposurePath:
+			requestOrder = append(requestOrder, "subscribe")
+			if got := r.Header.Get("Authorization"); got != "Bearer smf-service-token" {
+				t.Errorf("subscription Authorization = %q", got)
+			}
+			w.Header().Set("Location", SmfEventExposurePath+"/smf-sub-1")
+			w.WriteHeader(http.StatusCreated)
+		case SmfEventExposurePath + "/smf-sub-1":
+			requestOrder = append(requestOrder, "unsubscribe")
+			if got := r.Header.Get("Authorization"); got != "Bearer smf-service-token" {
+				t.Errorf("unsubscription Authorization = %q", got)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	app := newTestConsumerApp(nil)
+	app.ctx = newNFManagementTestContext(t, server.URL)
+	app.ctx.RecordOAuth2Required(server.URL + "/nnrf-nfm/v1/nf-instances/" + testNFInstanceID)
+	consumerClient, err := NewConsumer(app)
+	if err != nil {
+		t.Fatalf("NewConsumer() error = %v", err)
+	}
+	consumerClient.smfService.(*NsmfService).httpClient = server.Client()
+
+	if _, err = consumerClient.SubscribeToSmf(context.Background(), server.URL, SmfSubscriptionOptions{}); err != nil {
+		t.Fatalf("SubscribeToSmf() error = %v", err)
+	}
+	if err = consumerClient.UnsubscribeFromSmf(context.Background(), server.URL, "smf-sub-1"); err != nil {
+		t.Fatalf("UnsubscribeFromSmf() error = %v", err)
+	}
+	wantOrder := []string{"token", "subscribe", "token", "unsubscribe"}
+	if !slices.Equal(requestOrder, wantOrder) {
+		t.Fatalf("request order = %v, want %v", requestOrder, wantOrder)
+	}
+	wantScopes := []string{
+		string(models.ServiceName_NSMF_EVENT_EXPOSURE),
+		string(models.ServiceName_NSMF_EVENT_EXPOSURE),
+	}
+	if !slices.Equal(tokenScopes, wantScopes) {
+		t.Fatalf("token scopes = %v, want %v", tokenScopes, wantScopes)
 	}
 }
 

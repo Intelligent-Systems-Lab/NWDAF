@@ -15,16 +15,18 @@ import (
 )
 
 const (
-	NwdafDefaultConfigPath     = "./config/nwdafcfg.yaml"
-	NwdafSbiDefaultScheme      = "http"
-	NwdafSbiTLSScheme          = "https"
-	NwdafSbiDefaultIPv4        = "127.0.0.1"
-	NwdafSbiDefaultPort        = 8080
-	NwdafAnlfDefaultPort       = 8090
-	NwdafMtlfDefaultPort       = 8091
-	NwdafDefaultNwdafName      = "NWDAF"
-	NwdafEventsSubResUriPrefix = "/nnwdaf-eventssubscription/v1"
-	NwdafSupportedEventUEComm  = "UE_COMMUNICATION"
+	NwdafDefaultConfigPath      = "./config/nwdafcfg.yaml"
+	NwdafSbiDefaultScheme       = "http"
+	NwdafSbiTLSScheme           = "https"
+	NwdafSbiDefaultIPv4         = "127.0.0.1"
+	NwdafSbiDefaultPort         = 8080
+	NwdafAnlfDefaultPort        = 8090
+	NwdafMtlfDefaultPort        = 8091
+	NwdafDefaultNwdafName       = "NWDAF"
+	NwdafEventsSubResUriPrefix  = "/nnwdaf-eventssubscription/v1"
+	NwdafSupportedEventUEComm   = "UE_COMMUNICATION"
+	SmfEndpointSourceNRF        = "nrf"
+	SmfEndpointSourceConfigured = "configured"
 )
 
 var NwdafConfig *Config
@@ -503,6 +505,7 @@ func (a *AdrfConfig) WatchdogTimeoutOrDefault() int {
 // SmfConfig configuration for SMF data collection
 type SmfConfig struct {
 	Enabled              bool       `yaml:"enabled"`
+	EndpointSource       string     `yaml:"endpointSource,omitempty"`
 	Endpoints            []string   `yaml:"endpoints,omitempty"`
 	SubscriptionDuration int        `yaml:"subscriptionDuration,omitempty"` // seconds
 	NotifUris            *NotifUris `yaml:"notifUris,omitempty"`
@@ -796,13 +799,28 @@ func (s *AuxiliaryServerConfig) validate(fieldPrefix string) error {
 func (s *SmfConfig) validate() error {
 	var errs []error
 
-	if len(s.Endpoints) == 0 {
-		errs = append(errs, errors.New("smf.endpoints must contain at least one endpoint when smf.enabled is true"))
-	}
-	for i, endpoint := range s.Endpoints {
-		if err := validateHTTPURL(fmt.Sprintf("smf.endpoints[%d]", i), endpoint); err != nil {
-			errs = append(errs, err)
+	s.EndpointSource = strings.ToLower(strings.TrimSpace(s.EndpointSource))
+	switch s.EndpointSource {
+	case SmfEndpointSourceConfigured:
+		if len(s.Endpoints) == 0 {
+			errs = append(errs, errors.New(
+				"smf.endpoints must contain at least one endpoint when smf.endpointSource is configured",
+			))
 		}
+		for i, endpoint := range s.Endpoints {
+			if err := validateHTTPURL(fmt.Sprintf("smf.endpoints[%d]", i), endpoint); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	case SmfEndpointSourceNRF:
+	case "":
+		errs = append(errs, errors.New("smf.endpointSource is required when smf.enabled is true"))
+	default:
+		errs = append(errs, fmt.Errorf(
+			"smf.endpointSource must be %q or %q",
+			SmfEndpointSourceNRF,
+			SmfEndpointSourceConfigured,
+		))
 	}
 	if s.NotifUris == nil {
 		errs = append(errs, errors.New("smf.notifUris is required when smf.enabled is true"))

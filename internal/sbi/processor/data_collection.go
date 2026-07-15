@@ -1,6 +1,8 @@
 package processor
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -10,12 +12,85 @@ import (
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
+	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
+
+const dataCollectionCleanupTimeout = 10 * time.Second
+
+func (p *Processor) dataCollectionContext(
+	requestCtx context.Context,
+) (context.Context, context.CancelFunc, error) {
+	if requestCtx == nil {
+		return nil, nil, errors.New("data collection requires request context")
+	}
+	operationCtx, cancel := context.WithCancel(requestCtx)
+	appCtx := p.nwdaf.CancelContext()
+	if appCtx == nil {
+		return operationCtx, cancel, nil
+	}
+	stop := context.AfterFunc(appCtx, cancel)
+	return operationCtx, func() {
+		stop()
+		cancel()
+	}, nil
+}
+
+func (p *Processor) dataCollectionCleanupContext() (context.Context, context.CancelFunc, error) {
+	appCtx := p.nwdaf.CancelContext()
+	if appCtx == nil {
+		return nil, nil, errors.New("data collection cleanup requires application context")
+	}
+	cleanupCtx, cancel := context.WithTimeout(appCtx, dataCollectionCleanupTimeout)
+	return cleanupCtx, cancel, nil
+}
+
+func (p *Processor) resolveSmfEndpoints(ctx context.Context) ([]string, error) {
+	cfg := p.config()
+	if cfg == nil || cfg.Configuration == nil || cfg.Configuration.Smf == nil ||
+		!cfg.Configuration.Smf.Enabled {
+		return nil, nil
+	}
+
+	smfConfig := cfg.Configuration.Smf
+	switch smfConfig.EndpointSource {
+	case factory.SmfEndpointSourceConfigured:
+		if len(smfConfig.Endpoints) == 0 {
+			return nil, errors.New("configured SMF endpoint source returned no endpoints")
+		}
+		logger.ProcLog.Debugf(
+			"Resolved SMF endpoints [source: %s, endpoints: %d]",
+			smfConfig.EndpointSource,
+			len(smfConfig.Endpoints),
+		)
+		return append([]string(nil), smfConfig.Endpoints...), nil
+	case factory.SmfEndpointSourceNRF:
+		consumerClient := p.nwdaf.Consumer()
+		if consumerClient == nil {
+			return nil, errors.New("NRF SMF discovery requires consumer")
+		}
+		endpoints, err := consumerClient.DiscoverSmfEventExposure(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("resolve SMF endpoints through NRF: %w", err)
+		}
+		if len(endpoints) == 0 {
+			return nil, errors.New("NRF SMF discovery returned no endpoints")
+		}
+		logger.ProcLog.Debugf(
+			"Resolved SMF endpoints [source: %s, endpoints: %d]",
+			smfConfig.EndpointSource,
+			len(endpoints),
+		)
+		return append([]string(nil), endpoints...), nil
+	default:
+		return nil, fmt.Errorf("unsupported SMF endpoint source %q", smfConfig.EndpointSource)
+	}
+}
 
 // TriggerDataCollection triggers data collection subscriptions for source NFs
 // Per 3GPP TS 23.288 §6.2: NWDAF invokes Nnf_EventExposure_Subscribe to collect data
 func (p *Processor) TriggerDataCollection(
+	requestCtx context.Context,
 	eventSubs []models.NwdafEventsSubscriptionEventSubscription,
 	subscriptionId string,
 ) error {
@@ -31,13 +106,36 @@ func (p *Processor) TriggerDataCollection(
 		return fmt.Errorf("subscription %s no longer exists", subscriptionId)
 	}
 
+	operationCtx, cancel, err := p.dataCollectionContext(requestCtx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+
+	var (
+		smfEndpoints         []string
+		smfEndpointsResolved bool
+	)
 	for i := range eventSubs {
 		eventSub := &eventSubs[i]
 		switch eventSub.Event {
 		case models.NwdafEvent_UE_COMMUNICATION:
 			p.triggerMlModelProvisioning(eventSub, subscriptionId)
-			// Trigger SMF data collection (sync)
-			p.triggerUeCommunicationCollection(eventSub, subscriptionId)
+			if !smfEndpointsResolved {
+				smfEndpoints, err = p.resolveSmfEndpoints(operationCtx)
+				if err != nil {
+					return err
+				}
+				smfEndpointsResolved = true
+			}
+			if err = p.triggerUeCommunicationCollection(
+				operationCtx,
+				eventSub,
+				subscriptionId,
+				smfEndpoints,
+			); err != nil {
+				return err
+			}
 		case models.NwdafEvent_ABNORMAL_BEHAVIOUR:
 			// Currently not supported - skip
 			logger.ProcLog.Debugf("ABNORMAL_BEHAVIOUR data collection not implemented")
@@ -45,22 +143,33 @@ func (p *Processor) TriggerDataCollection(
 			logger.ProcLog.Debugf("Data collection not implemented for event: %s", eventSub.Event)
 		}
 	}
-	staleResources := p.reconcileDataCollectionResources(subscriptionId)
-	if err := p.syncObservationBindings(subscriptionId); err != nil {
-		logger.ProcLog.Errorf("SyncObservationBindings failed: sub=%s err=%v", subscriptionId, err)
+	staleResources := p.reconcileDataCollectionResources(subscriptionId, smfEndpoints)
+	if syncErr := p.syncObservationBindings(subscriptionId); syncErr != nil {
+		logger.ProcLog.Errorf("SyncObservationBindings failed: sub=%s err=%v", subscriptionId, syncErr)
 		for _, resource := range staleResources {
 			nwdaf_context.GetSelf().AddNwdafSubResource(subscriptionId, resource)
 		}
-		return err
+		return syncErr
 	}
-	for _, resource := range staleResources {
-		p.releaseDataCollectionResource(subscriptionId, resource)
+	if len(staleResources) > 0 {
+		cleanupCtx, cleanupCancel, cleanupErr := p.dataCollectionCleanupContext()
+		if cleanupErr != nil {
+			for _, resource := range staleResources {
+				nwdaf_context.GetSelf().AddNwdafSubResource(subscriptionId, resource)
+			}
+			return cleanupErr
+		}
+		defer cleanupCancel()
+		for _, resource := range staleResources {
+			p.releaseDataCollectionResource(cleanupCtx, subscriptionId, resource)
+		}
 	}
 	return nil
 }
 
 func (p *Processor) reconcileDataCollectionResources(
 	subscriptionID string,
+	smfEndpoints []string,
 ) []nwdaf_context.NwdafSubResource {
 	ctx := nwdaf_context.GetSelf()
 	subscription := ctx.GetSubscription(subscriptionID)
@@ -92,10 +201,8 @@ func (p *Processor) reconcileDataCollectionResources(
 		}
 	}
 	endpoints := make(map[string]struct{})
-	if cfg := p.config(); cfg != nil && cfg.Configuration != nil && cfg.Configuration.Smf != nil {
-		for _, endpoint := range cfg.Configuration.Smf.Endpoints {
-			endpoints[endpoint] = struct{}{}
-		}
+	for _, endpoint := range smfEndpoints {
+		endpoints[endpoint] = struct{}{}
 	}
 	resources := ctx.GetNwdafSubResources(subscriptionID)
 	kept := make([]nwdaf_context.NwdafSubResource, 0, len(resources))
@@ -118,33 +225,34 @@ func (p *Processor) reconcileDataCollectionResources(
 // Per TS 23.288: NWDAF subscribes to SMF via Nsmf_EventExposure for UE communication analytics
 // Supports both SUPI-based and Group ID subscriptions (unified architecture)
 func (p *Processor) triggerUeCommunicationCollection(
+	requestCtx context.Context,
 	eventSub *models.NwdafEventsSubscriptionEventSubscription,
 	subscriptionId string,
-) {
+	endpoints []string,
+) error {
 	// Check if SMF data collection is enabled in config
 	cfg := p.config()
 	if cfg == nil || cfg.Configuration == nil ||
 		cfg.Configuration.Smf == nil || !cfg.Configuration.Smf.Enabled {
 		logger.ProcLog.Debugf("SMF data collection is disabled in config")
-		return
+		return nil
 	}
 
 	smfConfig := cfg.Configuration.Smf
-	if len(smfConfig.Endpoints) == 0 {
-		logger.ProcLog.Warnf("SMF data collection enabled but no endpoints configured")
-		return
+	if len(endpoints) == 0 {
+		return errors.New("SMF data collection has no usable endpoints")
 	}
 
 	if eventSub.TgtUe == nil {
 		logger.ProcLog.Warnf("TgtUe is nil, cannot trigger data collection")
-		return
+		return nil
 	}
 
 	// Get consumer for SMF subscription
 	smfConsumer := p.nwdaf.Consumer()
 	if smfConsumer == nil {
 		logger.ProcLog.Warnf("Consumer not available for data collection")
-		return
+		return errors.New("SMF consumer is unavailable")
 	}
 
 	// Get notification URIs from config
@@ -163,13 +271,13 @@ func (p *Processor) triggerUeCommunicationCollection(
 	ctx := nwdaf_context.GetSelf()
 	subscription := ctx.GetSubscription(subscriptionId)
 	if subscription == nil {
-		return
+		return fmt.Errorf("subscription %s no longer exists", subscriptionId)
 	}
 	requirements := subscription.CollectionRequirementsSnapshot()
 	smfRepPeriod := int32(requirements.SamplingIntervalSeconds)
 	if smfRepPeriod <= 0 {
 		logger.ProcLog.Errorf("Collection requirements missing: sub=%s", subscriptionId)
-		return
+		return fmt.Errorf("collection requirements missing for subscription %s", subscriptionId)
 	}
 
 	// Build targets from TgtUe
@@ -205,12 +313,28 @@ func (p *Processor) triggerUeCommunicationCollection(
 	}
 
 	if len(targets) > 0 {
-		p.triggerTargetDataCollection(
-			ctx, smfConsumer, smfConfig.Endpoints,
+		succeeded, attempted, collectionErr := p.triggerTargetDataCollection(
+			requestCtx,
+			ctx, smfConsumer, endpoints,
 			targets, subscriptionId,
 			smfNotifUri, upfNotifUri, smfRepPeriod,
 		)
+		if collectionErr != nil {
+			return collectionErr
+		}
+		if succeeded == 0 && attempted > 0 {
+			return fmt.Errorf("all %d SMF Event Exposure subscription attempts failed", attempted)
+		}
+		if succeeded < attempted {
+			logger.ProcLog.Warnf(
+				"SMF Event Exposure fan-out partially succeeded: sub=%s succeeded=%d attempted=%d",
+				subscriptionId,
+				succeeded,
+				attempted,
+			)
+		}
 	}
+	return nil
 }
 
 // DataCollectionTarget represents a SUPI target for SMF subscription
@@ -228,6 +352,7 @@ func (t DataCollectionTarget) Identifier() string {
 // triggerTargetDataCollection handles SUPI-based SMF subscriptions
 // Per TS 23.502 §4.15.4.5.2: Group IDs are already resolved to SUPIs before this function
 func (p *Processor) triggerTargetDataCollection(
+	requestCtx context.Context,
 	ctx *nwdaf_context.NWDAFContext,
 	smfConsumer consumer.ConsumerAPI,
 	endpoints []string,
@@ -235,7 +360,9 @@ func (p *Processor) triggerTargetDataCollection(
 	subscriptionId string,
 	smfNotifUri, upfNotifUri string,
 	smfRepPeriod int32,
-) {
+) (int, int, error) {
+	succeeded := 0
+	attempted := 0
 	requirements := nwdaf_context.CollectionRequirements{
 		SamplingIntervalSeconds: int(smfRepPeriod),
 		RequiredMeasurements:    []string{"TOTAL_VOLUME", "UL_VOLUME", "DL_VOLUME"},
@@ -249,6 +376,13 @@ func (p *Processor) triggerTargetDataCollection(
 	profileKey := canonicalCollectionProfileKey(smfRepPeriod, requirements.RequiredMeasurements)
 	for _, smfEndpoint := range endpoints {
 		for _, target := range targets {
+			if err := requestCtx.Err(); err != nil {
+				return succeeded, attempted, fmt.Errorf(
+					"SMF Event Exposure subscription canceled before dispatch: %w",
+					err,
+				)
+			}
+			attempted++
 			targetId := target.Identifier()
 			correlationId, found := ctx.GetSmfCorrelationIdForProfile(targetId, smfEndpoint, profileKey)
 
@@ -283,11 +417,17 @@ func (p *Processor) triggerTargetDataCollection(
 					Supi:        target.Supi, // Always SUPI after Group ID resolution
 				}
 
-				subId, err := smfConsumer.SubscribeToSmf(p.nwdaf.CancelContext(), smfEndpoint, opts)
+				subId, err := smfConsumer.SubscribeToSmf(requestCtx, smfEndpoint, opts)
 				if err != nil {
 					ctx.ReleaseSmfSubscription(correlationId, subscriptionId)
 					logger.ProcLog.Errorf("CreateSmfSubscription failed: corr=%s err=%v",
 						correlationId, err)
+					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+						return succeeded, attempted, fmt.Errorf(
+							"SMF Event Exposure subscription canceled: %w",
+							err,
+						)
+					}
 					continue
 				}
 
@@ -299,6 +439,7 @@ func (p *Processor) triggerTargetDataCollection(
 				logger.ProcLog.Infof("CreateSmfSubscription: created corr=%s sub=%s",
 					correlationId, subId)
 			}
+			succeeded++
 
 			// Record SMF subscription parameters for ADRF storage
 			ctx.StoreAdrfSmfInfo(correlationId, &nwdaf_context.AdrfSmfInfo{
@@ -321,6 +462,7 @@ func (p *Processor) triggerTargetDataCollection(
 			})
 		}
 	}
+	return succeeded, attempted, nil
 }
 
 func canonicalCollectionProfileKey(samplingInterval int32, measurements []string) string {
