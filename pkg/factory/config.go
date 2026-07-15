@@ -49,6 +49,7 @@ type Configuration struct {
 	NwdafName          string                 `yaml:"nwdafName,omitempty"`
 	Sbi                *Sbi                   `yaml:"sbi,omitempty"`
 	NrfUri             string                 `yaml:"nrfUri,omitempty"`
+	NrfCertPem         string                 `yaml:"nrfCertPem,omitempty"`
 	SupportedAnalytics []string               `yaml:"supportedAnalytics,omitempty"`
 	Smf                *SmfConfig             `yaml:"smf,omitempty"`
 	Anlf               *AnlfConfig            `yaml:"anlf,omitempty"`
@@ -614,6 +615,7 @@ func (c *Config) Validate() (bool, error) {
 
 func (c *Configuration) validate() error {
 	var errs []error
+	c.NrfCertPem = strings.TrimSpace(c.NrfCertPem)
 
 	normalizedNrfURI, nrfErr := normalizeNrfURI(c.NrfUri)
 	if nrfErr != nil {
@@ -1235,4 +1237,11 @@ func (c *Config) GetNrfUri() string {
 		return ""
 	}
 	return c.Configuration.NrfUri
+}
+
+func (c *Config) GetNrfCertPem() string {
+	if c == nil || c.Configuration == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.Configuration.NrfCertPem)
 }

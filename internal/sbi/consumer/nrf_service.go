@@ -15,10 +15,12 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/net/http2"
+	"golang.org/x/oauth2"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/openapi"
 	"github.com/free5gc/openapi/models"
+	"github.com/free5gc/openapi/nrf/AccessToken"
 	"github.com/free5gc/openapi/nrf/NFManagement"
 	sbi_metrics "github.com/free5gc/util/metrics/sbi"
 )
@@ -28,10 +30,7 @@ const (
 	maximumNRFRegistrationRetry = 30 * time.Second
 )
 
-var (
-	ErrOAuth2Required         = errors.New("NRF requires OAuth2; Phase 1 support is required")
-	ErrUnsupportedNRFRedirect = errors.New("NRF redirect is unsupported in Phase 0")
-)
+var ErrUnsupportedNRFRedirect = errors.New("NRF redirect is unsupported")
 
 type RegistrationResult struct {
 	ResourceURI      string
@@ -48,6 +47,7 @@ type NFManagementService interface {
 type NrfService struct {
 	mu                  sync.Mutex
 	nfManagementClients map[string]*NFManagement.APIClient
+	accessTokenClients  map[string]*AccessToken.APIClient
 	httpClientFactory   func(string) (*http.Client, error)
 	initialRetryDelay   time.Duration
 	maximumRetryDelay   time.Duration
@@ -56,10 +56,39 @@ type NrfService struct {
 func newNrfService() *NrfService {
 	return &NrfService{
 		nfManagementClients: make(map[string]*NFManagement.APIClient),
+		accessTokenClients:  make(map[string]*AccessToken.APIClient),
 		httpClientFactory:   newNRFHTTPClient,
 		initialRetryDelay:   initialNRFRegistrationRetry,
 		maximumRetryDelay:   maximumNRFRegistrationRetry,
 	}
+}
+
+func (s *NrfService) getAccessTokenClient(nrfURI string) (*AccessToken.APIClient, error) {
+	if nrfURI == "" {
+		return nil, errors.New("NRF URI is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if client, ok := s.accessTokenClients[nrfURI]; ok {
+		return client, nil
+	}
+
+	configuration := AccessToken.NewConfiguration()
+	configuration.SetBasePath(nrfURI)
+	configuration.SetMetrics(sbi_metrics.SbiMetricHook)
+	httpClientFactory := s.httpClientFactory
+	if httpClientFactory == nil {
+		httpClientFactory = newNRFHTTPClient
+	}
+	httpClient, err := httpClientFactory(nrfURI)
+	if err != nil {
+		return nil, err
+	}
+	configuration.SetHTTPClient(httpClient)
+	client := AccessToken.NewAPIClient(configuration)
+	s.accessTokenClients[nrfURI] = client
+	return client, nil
 }
 
 func (s *NrfService) getNFManagementClient(nrfURI string) (*NFManagement.APIClient, error) {
@@ -218,9 +247,21 @@ func (s *NrfService) DeregisterNFInstance(
 	if err != nil {
 		return err
 	}
+	requestCtx := ctx
+	if nwdafCtx.RegistrationState().OAuth2Required {
+		requestCtx, err = s.getTokenContext(
+			ctx,
+			nwdafCtx,
+			models.ServiceName_NNRF_NFM,
+			models.NrfNfManagementNfType_NRF,
+		)
+		if err != nil {
+			return fmt.Errorf("authorize NRF deregistration: %w", err)
+		}
+	}
 
 	request := &NFManagement.DeregisterNFInstanceRequest{NfInstanceID: &profile.NfInstanceId}
-	response, deregisterErr := client.NFInstanceIDDocumentApi.DeregisterNFInstance(ctx, request)
+	response, deregisterErr := client.NFInstanceIDDocumentApi.DeregisterNFInstance(requestCtx, request)
 	if deregisterErr == nil {
 		if response == nil {
 			return errors.New("malformed NRF deregistration success: response is nil")
@@ -245,6 +286,57 @@ func (s *NrfService) DeregisterNFInstance(
 	return fmt.Errorf("deregister NF instance failed: %w", deregisterErr)
 }
 
+func (s *NrfService) getTokenContext(
+	ctx context.Context,
+	nwdafCtx *nwdaf_context.NWDAFContext,
+	serviceName models.ServiceName,
+	targetNF models.NrfNfManagementNfType,
+) (context.Context, error) {
+	if ctx == nil {
+		return nil, errors.New("access token request requires context")
+	}
+	if nwdafCtx == nil {
+		return nil, errors.New("access token request requires NWDAF context")
+	}
+	client, err := s.getAccessTokenClient(nwdafCtx.NrfUri())
+	if err != nil {
+		return nil, err
+	}
+
+	request := &AccessToken.AccessTokenRequestRequest{}
+	request.SetGrantType("client_credentials")
+	request.SetNfInstanceId(nwdafCtx.NfId)
+	request.SetNfType(models.NrfNfManagementNfType_NWDAF)
+	request.SetTargetNfType(targetNF)
+	request.SetScope(string(serviceName))
+
+	response, requestErr := client.AccessTokenRequestApi.AccessTokenRequest(ctx, request)
+	if requestErr != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("access token request canceled: %w", ctx.Err())
+		}
+		var apiErr openapi.GenericOpenAPIError
+		if errors.As(requestErr, &apiErr) {
+			switch apiErr.ErrorStatus {
+			case http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+				return nil, fmt.Errorf("%w: status=%d", ErrUnsupportedNRFRedirect, apiErr.ErrorStatus)
+			default:
+				return nil, fmt.Errorf("access token request failed: status=%d", apiErr.ErrorStatus)
+			}
+		}
+		return nil, fmt.Errorf("access token request failed: %w", requestErr)
+	}
+	if response == nil || response.NrfAccessTokenAccessTokenRsp.AccessToken == "" {
+		return nil, errors.New("malformed access token response: access_token is empty")
+	}
+
+	token := &oauth2.Token{
+		AccessToken: response.NrfAccessTokenAccessTokenRsp.AccessToken,
+		TokenType:   response.NrfAccessTokenAccessTokenRsp.TokenType,
+	}
+	return context.WithValue(ctx, openapi.ContextOAuth2, oauth2.StaticTokenSource(token)), nil
+}
+
 func validateRegistrationResponse(
 	response *NFManagement.RegisterNFInstanceResponse,
 	expectedInstanceID string,
@@ -265,9 +357,6 @@ func validateRegistrationResponse(
 			}
 			result.OAuth2Required = oauth2Required
 		}
-	}
-	if result.OAuth2Required {
-		return result, ErrOAuth2Required
 	}
 	if profile.NfInstanceId == "" {
 		return result, errors.New("malformed NRF registration success: nfInstanceId is missing")

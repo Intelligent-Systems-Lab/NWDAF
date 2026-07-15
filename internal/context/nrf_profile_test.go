@@ -3,6 +3,7 @@ package context
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/free5gc/openapi/models"
@@ -17,6 +18,7 @@ func TestConfigureNFManagementBuildsTruthfulPhaseZeroProfile(t *testing.T) {
 	}
 	err := ctx.ConfigureNFManagement(
 		"http://127.0.0.10:8000",
+		" cert/nrf.pem ",
 		"NWDAF",
 		"https://192.0.2.10:8080",
 		"https",
@@ -25,6 +27,9 @@ func TestConfigureNFManagementBuildsTruthfulPhaseZeroProfile(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("ConfigureNFManagement() error = %v", err)
+	}
+	if got := ctx.NrfCertPem(); got != "cert/nrf.pem" {
+		t.Fatalf("NrfCertPem() = %q, want cert/nrf.pem", got)
 	}
 
 	profile := ctx.NFProfile()
@@ -111,7 +116,7 @@ func TestNFRegistrationStateTransitions(t *testing.T) {
 
 	ctx.RecordOAuth2Required("http://nrf/nnrf-nfm/v1/nf-instances/id")
 	state = ctx.RegistrationState()
-	if state.Registered || !state.OAuth2Required || state.ResourceURI == "" {
+	if !state.Registered || !state.OAuth2Required || state.ResourceURI == "" {
 		t.Fatalf("OAuth-required state = %+v", state)
 	}
 
@@ -119,6 +124,33 @@ func TestNFRegistrationStateTransitions(t *testing.T) {
 	state = ctx.RegistrationState()
 	if state.Registered || state.ResourceURI != "" {
 		t.Fatalf("deregistered state = %+v", state)
+	}
+}
+
+func TestNFRegistrationStateConcurrentSnapshots(t *testing.T) {
+	t.Parallel()
+
+	ctx := &NWDAFContext{}
+	var wg sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for iteration := 0; iteration < 100; iteration++ {
+				if worker%2 == 0 {
+					ctx.MarkRegistered("http://nrf/nnrf-nfm/v1/nf-instances/id")
+				} else {
+					ctx.RecordOAuth2Required("http://nrf/nnrf-nfm/v1/nf-instances/id")
+				}
+				_ = ctx.RegistrationState()
+			}
+		}(worker)
+	}
+	wg.Wait()
+
+	state := ctx.RegistrationState()
+	if !state.Registered || state.ResourceURI == "" {
+		t.Fatalf("registration state = %+v", state)
 	}
 }
 
@@ -133,6 +165,7 @@ func TestConfigureNFManagementRejectsNonAdvertisableIPv4(t *testing.T) {
 			ctx := &NWDAFContext{NfId: "11111111-1111-4111-8111-111111111111"}
 			err := ctx.ConfigureNFManagement(
 				"http://127.0.0.10:8000",
+				"",
 				"NWDAF",
 				"http://192.0.2.10:8080",
 				"http",

@@ -394,7 +394,7 @@ func TestRegisterNFInstanceRejectsRedirectWithoutFollowingIt(t *testing.T) {
 	}
 }
 
-func TestRegisterNFInstanceReportsOAuth2Requirement(t *testing.T) {
+func TestRegisterNFInstanceAcceptsOAuth2Requirement(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
@@ -409,15 +409,15 @@ func TestRegisterNFInstanceReportsOAuth2Requirement(t *testing.T) {
 		context.Background(),
 		newNFManagementTestContext(t, server.URL),
 	)
-	if !errors.Is(err, ErrOAuth2Required) {
-		t.Fatalf("RegisterNFInstance() error = %v, want OAuth2 requirement", err)
+	if err != nil {
+		t.Fatalf("RegisterNFInstance() error = %v", err)
 	}
 	if !result.OAuth2Required || result.ResourceURI == "" {
 		t.Fatalf("RegistrationResult = %+v", result)
 	}
 }
 
-func TestRegisterNFInstancePreservesOAuth2RequirementOnMalformedProfile(t *testing.T) {
+func TestRegisterNFInstancePreservesOAuth2RequirementOnIdentityMismatch(t *testing.T) {
 	t.Parallel()
 
 	server := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -432,8 +432,8 @@ func TestRegisterNFInstancePreservesOAuth2RequirementOnMalformedProfile(t *testi
 		context.Background(),
 		newNFManagementTestContext(t, server.URL),
 	)
-	if !errors.Is(err, ErrOAuth2Required) {
-		t.Fatalf("RegisterNFInstance() error = %v, want OAuth2 requirement", err)
+	if err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("RegisterNFInstance() error = %v, want identity mismatch", err)
 	}
 	if !result.RemoteRegistered || !result.OAuth2Required {
 		t.Fatalf("RegistrationResult = %+v, want protected remote registration", result)
@@ -568,6 +568,175 @@ func TestDeregisterNFInstanceRespectsCancellation(t *testing.T) {
 	}
 }
 
+func TestDeregisterNFInstanceObtainsAccessTokenWhenOAuth2Required(t *testing.T) {
+	t.Parallel()
+
+	requests := make([]string, 0, 2)
+	server := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor != 2 {
+			t.Errorf("HTTP protocol = %s, want HTTP/2", r.Proto)
+		}
+		switch r.URL.Path {
+		case "/oauth2/token":
+			requests = append(requests, "token")
+			if r.Method != http.MethodPost {
+				t.Errorf("access token method = %s, want POST", r.Method)
+			}
+			if err := r.ParseForm(); err != nil {
+				t.Errorf("parse access token form: %v", err)
+			}
+			wantForm := map[string]string{
+				"grant_type":   "client_credentials",
+				"nfInstanceId": testNFInstanceID,
+				"nfType":       string(models.NrfNfManagementNfType_NWDAF),
+				"targetNfType": string(models.NrfNfManagementNfType_NRF),
+				"scope":        string(models.ServiceName_NNRF_NFM),
+			}
+			for key, want := range wantForm {
+				if got := r.Form.Get(key); got != want {
+					t.Errorf("access token form %s = %q, want %q", key, got, want)
+				}
+			}
+			if got := r.Form.Get("targetNfInstanceId"); got != "" {
+				t.Errorf("targetNfInstanceId = %q, want omitted", got)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(models.NrfAccessTokenAccessTokenRsp{
+				AccessToken: "protected-token",
+				TokenType:   "Bearer",
+				ExpiresIn:   300,
+				Scope:       string(models.ServiceName_NNRF_NFM),
+			}); err != nil {
+				t.Errorf("encode access token response: %v", err)
+			}
+		case "/nnrf-nfm/v1/nf-instances/" + testNFInstanceID:
+			requests = append(requests, "deregister")
+			if r.Method != http.MethodDelete {
+				t.Errorf("deregistration method = %s, want DELETE", r.Method)
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer protected-token" {
+				t.Errorf("Authorization = %q, want bearer token", got)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	ctx := newNFManagementTestContext(t, server.URL)
+	ctx.RecordOAuth2Required(server.URL + "/nnrf-nfm/v1/nf-instances/" + testNFInstanceID)
+	if err := newTestNrfService().DeregisterNFInstance(context.Background(), ctx); err != nil {
+		t.Fatalf("DeregisterNFInstance() error = %v", err)
+	}
+	if len(requests) != 2 || requests[0] != "token" || requests[1] != "deregister" {
+		t.Fatalf("request order = %v, want [token deregister]", requests)
+	}
+}
+
+func TestAccessTokenRequestRejectsInvalidResponses(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		location   string
+		wantErr    string
+	}{
+		{
+			name:       "empty access token",
+			statusCode: http.StatusOK,
+			body:       `{"access_token":"","token_type":"Bearer"}`,
+			wantErr:    "access_token is empty",
+		},
+		{
+			name:       "server failure",
+			statusCode: http.StatusInternalServerError,
+			body:       `{"detail":"sensitive-response-content"}`,
+			wantErr:    "status=500",
+		},
+		{
+			name:       "unsupported redirect",
+			statusCode: http.StatusTemporaryRedirect,
+			body:       `{}`,
+			location:   "http://other-nrf.example/oauth2/token",
+			wantErr:    "NRF redirect is unsupported",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if tt.location != "" {
+					w.Header().Set("Location", tt.location)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.statusCode)
+				if tt.body != "" {
+					if _, err := w.Write([]byte(tt.body)); err != nil {
+						t.Errorf("write response: %v", err)
+					}
+				}
+			}))
+			defer server.Close()
+
+			_, err := newTestNrfService().getTokenContext(
+				context.Background(),
+				newNFManagementTestContext(t, server.URL),
+				models.ServiceName_NNRF_NFM,
+				models.NrfNfManagementNfType_NRF,
+			)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("getTokenContext() error = %v, want %q", err, tt.wantErr)
+			}
+			if strings.Contains(err.Error(), "sensitive-response-content") {
+				t.Fatalf("getTokenContext() leaked response body: %v", err)
+			}
+		})
+	}
+}
+
+func TestAccessTokenRequestPreservesCallerCancellation(t *testing.T) {
+	t.Parallel()
+
+	requestObserved := make(chan struct{}, 1)
+	server := newH2CTestServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		requestObserved <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := newTestNrfService().getTokenContext(
+			ctx,
+			newNFManagementTestContext(t, server.URL),
+			models.ServiceName_NNRF_NFM,
+			models.NrfNfManagementNfType_NRF,
+		)
+		resultCh <- err
+	}()
+
+	select {
+	case <-requestObserved:
+		cancel()
+	case <-time.After(time.Second):
+		t.Fatal("access token request was not observed")
+	}
+	select {
+	case err := <-resultCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("getTokenContext() error = %v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("access token request did not return after cancellation")
+	}
+}
+
 func newTestNrfService() *NrfService {
 	service := newNrfService()
 	service.initialRetryDelay = time.Millisecond
@@ -580,6 +749,7 @@ func newNFManagementTestContext(t *testing.T, nrfURI string) *nwdaf_context.NWDA
 	ctx := &nwdaf_context.NWDAFContext{NfId: testNFInstanceID}
 	if err := ctx.ConfigureNFManagement(
 		nrfURI,
+		"",
 		"NWDAF",
 		"http://192.0.2.10:8080",
 		"http",

@@ -23,6 +23,7 @@ func TestReadConfigValidationMatrix(t *testing.T) {
 			yaml: `
 configuration:
   nrfUri: http://127.0.0.10:8000/
+  nrfCertPem: "  cert/nrf.pem  "
 `,
 			checkConfig: func(t *testing.T, cfg *factory.Config) {
 				t.Helper()
@@ -40,6 +41,9 @@ configuration:
 				}
 				if got := cfg.GetNrfUri(); got != "http://127.0.0.10:8000" {
 					t.Fatalf("GetNrfUri() = %q, want %q", got, "http://127.0.0.10:8000")
+				}
+				if got := cfg.GetNrfCertPem(); got != "cert/nrf.pem" {
+					t.Fatalf("GetNrfCertPem() = %q, want %q", got, "cert/nrf.pem")
 				}
 			},
 		},

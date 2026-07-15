@@ -29,6 +29,7 @@ import (
 	"github.com/free5gc/nwdaf/internal/sbi/processor"
 	"github.com/free5gc/nwdaf/pkg/app"
 	"github.com/free5gc/nwdaf/pkg/factory"
+	"github.com/free5gc/openapi/oauth"
 	"github.com/free5gc/util/mongoapi"
 )
 
@@ -73,6 +74,7 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 	nwdaf.nwdafCtx = nwdaf_context.GetSelf()
 	if err := nwdaf.nwdafCtx.ConfigureNFManagement(
 		cfg.GetNrfUri(),
+		cfg.GetNrfCertPem(),
 		cfg.GetNwdafName(),
 		cfg.GetSbiUri(),
 		cfg.GetSbiScheme(),
@@ -267,28 +269,28 @@ func (a *NwdafApp) startRuntime() error {
 
 	result, registrationErr := a.nrfManagement.RegisterNFInstance(a.ctx)
 	a.nwdafCtx.RecordHeartBeatTimer(result.HeartBeatTimer)
-	if result.OAuth2Required {
-		a.nwdafCtx.RecordOAuth2Required(result.ResourceURI)
-	}
 	if registrationErr != nil {
-		if result.RemoteRegistered && !result.OAuth2Required {
-			a.nwdafCtx.MarkRegistered(result.ResourceURI)
+		if result.RemoteRegistered {
+			if result.OAuth2Required {
+				a.nwdafCtx.RecordOAuth2Required(result.ResourceURI)
+			} else {
+				a.nwdafCtx.MarkRegistered(result.ResourceURI)
+			}
 			a.deregisterFromNrf()
-		}
-		if result.OAuth2Required {
-			return fmt.Errorf(
-				"register NWDAF with NRF requires OAuth2; "+
-					"remote NF profile may require NRF-side cleanup: "+
-					"nfInstanceId=%s resourceUri=%q: %w",
-				a.nwdafCtx.NfId,
-				result.ResourceURI,
-				registrationErr,
-			)
 		}
 		return fmt.Errorf("register NWDAF with NRF: %w", registrationErr)
 	}
-	a.nwdafCtx.MarkRegistered(result.ResourceURI)
-	logger.InitLog.Infof("Registered NWDAF with NRF: nfInstanceId=%s", a.nwdafCtx.NfId)
+	if result.OAuth2Required {
+		a.nwdafCtx.RecordOAuth2Required(result.ResourceURI)
+		a.logOAuthCertificateState()
+	} else {
+		a.nwdafCtx.MarkRegistered(result.ResourceURI)
+	}
+	logger.InitLog.Infof(
+		"Registered NWDAF with NRF: nfInstanceId=%s oauth2Required=%t",
+		a.nwdafCtx.NfId,
+		result.OAuth2Required,
+	)
 
 	if ctxErr := a.ctx.Err(); ctxErr != nil {
 		a.deregisterFromNrf()
@@ -313,6 +315,25 @@ func (a *NwdafApp) startRuntime() error {
 	a.processor.StartMtlfTrainingScheduler(&a.wg)
 	logger.InitLog.Infoln("NWDAF startup complete")
 	return nil
+}
+
+func (a *NwdafApp) logOAuthCertificateState() {
+	certPath := a.nwdafCtx.NrfCertPem()
+	if certPath == "" {
+		logger.InitLog.Error(
+			"NRF requires OAuth2 but nrfCertPem is not configured; " +
+				"protected inbound SBI requests will be rejected",
+		)
+		return
+	}
+	if _, err := oauth.ParsePublicKeyFromPEM(certPath); err != nil {
+		logger.InitLog.Errorf(
+			"NRF requires OAuth2 but nrfCertPem is unusable; "+
+				"protected inbound SBI requests will be rejected: path=%s err=%v",
+			certPath,
+			err,
+		)
+	}
 }
 
 func (a *NwdafApp) listenShutdownEvent() {

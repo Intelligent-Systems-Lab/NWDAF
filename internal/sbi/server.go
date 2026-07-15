@@ -95,6 +95,12 @@ func NewServer(nwdaf nwdafApp, tlsKeyLogPath string) (*Server, error) {
 	// EventsSubscription routes
 	eventsSubRoutes := s.getEventsSubscriptionRoutes()
 	eventsSubGroup := s.router.Group(factory.NwdafEventsSubResUriPrefix)
+	eventsSubAuthorization := newRouterAuthorizationCheck(
+		models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION,
+	)
+	eventsSubGroup.Use(func(c *gin.Context) {
+		eventsSubAuthorization.Check(c, s.Context())
+	})
 	applyRoutes(eventsSubGroup, eventsSubRoutes)
 
 	// Collector routes (for SMF callbacks)

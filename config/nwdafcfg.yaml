@@ -17,7 +17,8 @@ configuration:
       key: cert/nwdaf.key
   supportedAnalytics:
     - UE_COMMUNICATION
-  nrfUri: http://127.0.0.10:8000  # NRF API root; Phase 0 requires OAuth-disabled NRF operation
+  nrfUri: http://127.0.0.10:8000  # NRF API root
+  nrfCertPem: cert/nrf.pem        # NRF public certificate used to verify OAuth access tokens
 
   anlf:
     server:

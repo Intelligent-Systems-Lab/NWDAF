@@ -12,6 +12,7 @@ import (
 
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/openapi/models"
+	"github.com/free5gc/openapi/oauth"
 )
 
 var nwdafContext *NWDAFContext
@@ -41,6 +42,7 @@ type NWDAFContext struct {
 	nfManagementMu      sync.RWMutex
 	nfServiceInstanceId string
 	nrfUri              string
+	nrfCertPem          string
 	nfProfile           models.NrfNfManagementNfProfile
 	registered          bool
 	registrationUri     string
@@ -101,6 +103,7 @@ type NFRegistrationState struct {
 
 func (c *NWDAFContext) ConfigureNFManagement(
 	nrfUri string,
+	nrfCertPem string,
 	nwdafName string,
 	sbiUri string,
 	sbiScheme string,
@@ -176,6 +179,7 @@ func (c *NWDAFContext) ConfigureNFManagement(
 	defer c.nfManagementMu.Unlock()
 	c.NwdafName = nwdafName
 	c.nrfUri = nrfUri
+	c.nrfCertPem = strings.TrimSpace(nrfCertPem)
 	c.nfProfile = profile
 	c.registered = false
 	c.registrationUri = ""
@@ -191,6 +195,15 @@ func (c *NWDAFContext) NrfUri() string {
 	c.nfManagementMu.RLock()
 	defer c.nfManagementMu.RUnlock()
 	return c.nrfUri
+}
+
+func (c *NWDAFContext) NrfCertPem() string {
+	if c == nil {
+		return ""
+	}
+	c.nfManagementMu.RLock()
+	defer c.nfManagementMu.RUnlock()
+	return c.nrfCertPem
 }
 
 func (c *NWDAFContext) NFProfile() models.NrfNfManagementNfProfile {
@@ -219,9 +232,23 @@ func (c *NWDAFContext) RecordOAuth2Required(resourceURI string) {
 	}
 	c.nfManagementMu.Lock()
 	defer c.nfManagementMu.Unlock()
-	c.registered = false
+	c.registered = true
 	c.registrationUri = resourceURI
 	c.oauth2Required = true
+}
+
+func (c *NWDAFContext) AuthorizationCheck(token string, serviceName models.ServiceName) error {
+	if c == nil {
+		return fmt.Errorf("NWDAF context is nil")
+	}
+	c.nfManagementMu.RLock()
+	oauth2Required := c.oauth2Required
+	nrfCertPem := c.nrfCertPem
+	c.nfManagementMu.RUnlock()
+	if !oauth2Required {
+		return nil
+	}
+	return oauth.VerifyOAuth(token, string(serviceName), nrfCertPem)
 }
 
 func (c *NWDAFContext) RecordHeartBeatTimer(heartBeatTimer int32) {

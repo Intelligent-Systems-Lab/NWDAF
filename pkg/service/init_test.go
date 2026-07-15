@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -17,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/factory"
 )
@@ -348,7 +350,7 @@ func TestStartRuntimeCleansUpMalformedRegistrationSuccess(t *testing.T) {
 	}
 }
 
-func TestStartRuntimeRecordsOAuth2RequirementWithoutStartingListeners(t *testing.T) {
+func TestStartRuntimeContinuesAfterOAuth2RequiredRegistration(t *testing.T) {
 	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
 	app, err := NewApp(context.Background(), cfg)
 	if err != nil {
@@ -358,30 +360,64 @@ func TestStartRuntimeRecordsOAuth2RequirementWithoutStartingListeners(t *testing
 	fake := &fakeNFManagement{
 		registerFn: func(context.Context) (consumer.RegistrationResult, error) {
 			return consumer.RegistrationResult{
-				ResourceURI:    resourceURI,
-				OAuth2Required: true,
-			}, consumer.ErrOAuth2Required
+				ResourceURI:      resourceURI,
+				OAuth2Required:   true,
+				RemoteRegistered: true,
+			}, nil
 		},
 	}
 	app.nrfManagement = fake
 
-	if startErr := app.startRuntime(); !errors.Is(startErr, consumer.ErrOAuth2Required) {
-		t.Fatalf("startRuntime() error = %v, want OAuth2 requirement", startErr)
-	} else if !strings.Contains(startErr.Error(), app.nwdafCtx.NfId) ||
-		!strings.Contains(startErr.Error(), resourceURI) ||
-		!strings.Contains(startErr.Error(), "NRF-side cleanup") {
-		t.Fatalf("startRuntime() error = %v, want NF identity, resource URI, and cleanup action", startErr)
+	if startErr := app.startRuntime(); startErr != nil {
+		t.Fatalf("startRuntime() error = %v", startErr)
 	}
 	state := app.nwdafCtx.RegistrationState()
-	if state.Registered || !state.OAuth2Required || state.ResourceURI != resourceURI {
+	if !state.Registered || !state.OAuth2Required || state.ResourceURI != resourceURI {
 		t.Fatalf("registration state = %+v", state)
 	}
-	if portIsOpen(cfg.GetSbiBindingAddr()) || portIsOpen(cfg.GetAnlfServerBindingAddr()) ||
-		portIsOpen(cfg.GetMtlfServerBindingAddr()) {
-		t.Fatal("owned listener opened after OAuth-required registration response")
+	if !portIsOpen(cfg.GetSbiBindingAddr()) || !portIsOpen(cfg.GetAnlfServerBindingAddr()) ||
+		!portIsOpen(cfg.GetMtlfServerBindingAddr()) {
+		t.Fatal("owned listener did not open after OAuth-required registration response")
 	}
-	if fake.deregisters != 0 {
-		t.Fatalf("deregister calls = %d, want 0", fake.deregisters)
+
+	app.Terminate()
+	waitForWaitGroup(t, &app.wg)
+	if fake.deregisters != 1 {
+		t.Fatalf("deregister calls = %d, want 1", fake.deregisters)
+	}
+}
+
+func TestLogOAuthCertificateStateReportsMissingAndUnusableMaterial(t *testing.T) {
+	tests := []struct {
+		name     string
+		certPath string
+		wantLog  string
+	}{
+		{name: "missing configuration", wantLog: "nrfCertPem is not configured"},
+		{
+			name:     "unusable certificate",
+			certPath: filepath.Join(t.TempDir(), "missing-nrf.pem"),
+			wantLog:  "nrfCertPem is unusable",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+			cfg.Configuration.NrfCertPem = tt.certPath
+			app, err := NewApp(context.Background(), cfg)
+			if err != nil {
+				t.Fatalf("NewApp() error = %v", err)
+			}
+
+			var output bytes.Buffer
+			originalOutput := logger.Log.Out
+			logger.Log.SetOutput(&output)
+			t.Cleanup(func() { logger.Log.SetOutput(originalOutput) })
+			app.logOAuthCertificateState()
+			if !strings.Contains(output.String(), tt.wantLog) {
+				t.Fatalf("log output = %q, want %q", output.String(), tt.wantLog)
+			}
+		})
 	}
 }
 
