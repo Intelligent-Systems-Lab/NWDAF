@@ -737,6 +737,59 @@ func TestAccessTokenRequestPreservesCallerCancellation(t *testing.T) {
 	}
 }
 
+func TestAccessTokenRequestReturnsTransportFailure(t *testing.T) {
+	t.Parallel()
+
+	transportErr := errors.New("simulated access token transport failure")
+	service := newTestNrfService()
+	service.httpClientFactory = func(string) (*http.Client, error) {
+		return &http.Client{
+			Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				return nil, transportErr
+			}),
+		}, nil
+	}
+
+	_, err := service.getTokenContext(
+		context.Background(),
+		newNFManagementTestContext(t, "http://127.0.0.10:8000"),
+		models.ServiceName_NNRF_NFM,
+		models.NrfNfManagementNfType_NRF,
+	)
+	if !errors.Is(err, transportErr) {
+		t.Fatalf("getTokenContext() error = %v, want transport failure", err)
+	}
+	if !strings.Contains(err.Error(), "access token request failed") {
+		t.Fatalf("getTokenContext() error = %v, want access token request context", err)
+	}
+}
+
+func TestAccessTokenRequestCanceledBeforeDispatch(t *testing.T) {
+	t.Parallel()
+
+	var requests atomic.Int32
+	server := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := newTestNrfService().getTokenContext(
+		ctx,
+		newNFManagementTestContext(t, server.URL),
+		models.ServiceName_NNRF_NFM,
+		models.NrfNfManagementNfType_NRF,
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("getTokenContext() error = %v, want context cancellation", err)
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("access token requests dispatched = %d, want 0", got)
+	}
+}
+
 func newTestNrfService() *NrfService {
 	service := newNrfService()
 	service.initialRetryDelay = time.Millisecond

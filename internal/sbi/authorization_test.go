@@ -4,12 +4,16 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/mock/gomock"
 
+	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/util"
 	"github.com/free5gc/nwdaf/pkg/factory"
+	"github.com/free5gc/nwdaf/pkg/mockapp"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -135,5 +139,66 @@ func TestEventsSubscriptionAuthorizationAllowsHandler(t *testing.T) {
 	}
 	if stub.calls != 1 {
 		t.Fatalf("authorization calls = %d, want 1", stub.calls)
+	}
+}
+
+func TestNewServerWiresEventsSubscriptionAuthorizationOnly(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	cfg := &factory.Config{Configuration: &factory.Configuration{
+		Sbi: &factory.Sbi{
+			Scheme:       "http",
+			BindingIPv4:  "127.0.0.1",
+			RegisterIPv4: "127.0.0.1",
+			Port:         8080,
+		},
+	}}
+	authorizationCtx := &nwdaf_context.NWDAFContext{}
+	authorizationCtx.RecordOAuth2Required("http://nrf/nnrf-nfm/v1/nf-instances/nwdaf")
+	mockApp := mockapp.NewMockApp(ctrl)
+	mockApp.EXPECT().Config().Return(cfg).AnyTimes()
+	mockApp.EXPECT().Context().Return(authorizationCtx).AnyTimes()
+
+	server, err := NewServer(handlerTestApp{MockApp: mockApp}, "")
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+
+	protectedRequests := []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodPost, path: factory.NwdafEventsSubResUriPrefix + "/subscriptions"},
+		{method: http.MethodPut, path: factory.NwdafEventsSubResUriPrefix + "/subscriptions/sub-1"},
+		{method: http.MethodDelete, path: factory.NwdafEventsSubResUriPrefix + "/subscriptions/sub-1"},
+	}
+	for _, request := range protectedRequests {
+		recorder := httptest.NewRecorder()
+		server.router.ServeHTTP(recorder, httptest.NewRequest(request.method, request.path, nil))
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s status = %d, want 401", request.method, request.path, recorder.Code)
+		}
+		if recorder.Header().Get("Content-Type") != util.ProblemJSONContentType {
+			t.Fatalf(
+				"%s %s Content-Type = %q, want %q",
+				request.method,
+				request.path,
+				recorder.Header().Get("Content-Type"),
+				util.ProblemJSONContentType,
+			)
+		}
+	}
+
+	collectorRequest := httptest.NewRequest(
+		http.MethodPost,
+		"/collector/notify",
+		strings.NewReader("{"),
+	)
+	collectorRequest.Header.Set("Content-Type", "application/json")
+	collectorRecorder := httptest.NewRecorder()
+	server.router.ServeHTTP(collectorRecorder, collectorRequest)
+	if collectorRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("collector status = %d, want 400 without producer authorization", collectorRecorder.Code)
 	}
 }

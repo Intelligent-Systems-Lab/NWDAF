@@ -60,14 +60,32 @@ func TestAuthorizationCheckUsesFree5GCOAuthVerification(t *testing.T) {
 func TestAuthorizationCheckRejectsMissingVerificationMaterial(t *testing.T) {
 	t.Parallel()
 
-	for _, certPath := range []string{"", filepath.Join(t.TempDir(), "missing.pem")} {
-		ctx := &NWDAFContext{oauth2Required: true, nrfCertPem: certPath}
-		if err := ctx.AuthorizationCheck(
-			"Bearer unusable",
-			models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION,
-		); err == nil {
-			t.Fatalf("AuthorizationCheck() error = nil for cert path %q", certPath)
-		}
+	invalidPEMPath := filepath.Join(t.TempDir(), "invalid.pem")
+	if err := os.WriteFile(invalidPEMPath, []byte("not PEM content"), 0o600); err != nil {
+		t.Fatalf("write invalid PEM: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		certPath string
+	}{
+		{name: "missing configuration"},
+		{name: "unreadable certificate", certPath: filepath.Join(t.TempDir(), "missing.pem")},
+		{name: "invalid PEM content", certPath: invalidPEMPath},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := &NWDAFContext{oauth2Required: true, nrfCertPem: tt.certPath}
+			if err := ctx.AuthorizationCheck(
+				"Bearer unusable",
+				models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION,
+			); err == nil {
+				t.Fatalf("AuthorizationCheck() error = nil for cert path %q", tt.certPath)
+			}
+		})
 	}
 }
 

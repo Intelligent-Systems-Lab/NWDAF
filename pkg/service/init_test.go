@@ -8,19 +8,27 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/factory"
+	"github.com/free5gc/openapi/models"
 )
 
 type fakeNFManagement struct {
@@ -388,6 +396,11 @@ func TestStartRuntimeContinuesAfterOAuth2RequiredRegistration(t *testing.T) {
 }
 
 func TestLogOAuthCertificateStateReportsMissingAndUnusableMaterial(t *testing.T) {
+	invalidPEMPath := filepath.Join(t.TempDir(), "invalid-nrf.pem")
+	if err := os.WriteFile(invalidPEMPath, []byte("not PEM content"), 0o600); err != nil {
+		t.Fatalf("write invalid PEM: %v", err)
+	}
+
 	tests := []struct {
 		name     string
 		certPath string
@@ -397,6 +410,11 @@ func TestLogOAuthCertificateStateReportsMissingAndUnusableMaterial(t *testing.T)
 		{
 			name:     "unusable certificate",
 			certPath: filepath.Join(t.TempDir(), "missing-nrf.pem"),
+			wantLog:  "nrfCertPem is unusable",
+		},
+		{
+			name:     "invalid PEM content",
+			certPath: invalidPEMPath,
 			wantLog:  "nrfCertPem is unusable",
 		},
 	}
@@ -446,6 +464,88 @@ func TestStartRuntimeDeregistersAfterPostRegistrationListenerFailure(t *testing.
 	}
 	if !deregisterObservedReachableSBI {
 		t.Fatal("SBI was not reachable during listener-failure rollback deregistration")
+	}
+	assertPortClosedEventually(t, cfg.GetSbiBindingAddr())
+	assertPortClosedEventually(t, cfg.GetMtlfServerBindingAddr())
+}
+
+func TestStartRuntimeOAuthRollbackUsesProtectedDeregistration(t *testing.T) {
+	var tokenRequests atomic.Int32
+	var deregistrationRequests atomic.Int32
+	var protectedDeregistration atomic.Bool
+	server := httptest.NewServer(h2c.NewHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/nnrf-nfm/v1/nf-instances/"):
+			var profile models.NrfNfManagementNfProfile
+			if err := json.NewDecoder(r.Body).Decode(&profile); err != nil {
+				t.Errorf("decode registration profile: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			profile.CustomInfo = map[string]interface{}{"oauth2": true}
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Location", serverURL(r)+r.URL.Path)
+			w.WriteHeader(http.StatusCreated)
+			if err := json.NewEncoder(w).Encode(profile); err != nil {
+				t.Errorf("encode registration profile: %v", err)
+			}
+		case r.Method == http.MethodPost && r.URL.Path == "/oauth2/token":
+			tokenRequests.Add(1)
+			if err := r.ParseForm(); err != nil {
+				t.Errorf("parse access token form: %v", err)
+			}
+			if got := r.Form.Get("scope"); got != string(models.ServiceName_NNRF_NFM) {
+				t.Errorf("access token scope = %q, want %q", got, models.ServiceName_NNRF_NFM)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(models.NrfAccessTokenAccessTokenRsp{
+				AccessToken: "rollback-token",
+				TokenType:   "Bearer",
+				ExpiresIn:   300,
+				Scope:       string(models.ServiceName_NNRF_NFM),
+			}); err != nil {
+				t.Errorf("encode access token response: %v", err)
+			}
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/nnrf-nfm/v1/nf-instances/"):
+			deregistrationRequests.Add(1)
+			if r.Header.Get("Authorization") != "Bearer rollback-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			protectedDeregistration.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}), &http2.Server{}))
+	defer server.Close()
+
+	anlfBlocker, anlfPort := takeOccupiedPort(t)
+	defer closeListener(t, anlfBlocker)
+	cfg := newLifecycleTestConfig(t, takeFreePort(t), anlfPort, takeFreePort(t))
+	cfg.Configuration.NrfUri = server.URL
+	app, err := NewApp(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+
+	startErr := app.startRuntime()
+	if startErr == nil {
+		app.stopOwnedServers()
+		t.Fatal("startRuntime() error = nil, want listener bind failure")
+	}
+	if tokenRequests.Load() != 1 || deregistrationRequests.Load() != 1 {
+		t.Fatalf(
+			"token/deregistration requests = %d/%d, want 1/1",
+			tokenRequests.Load(),
+			deregistrationRequests.Load(),
+		)
+	}
+	if !protectedDeregistration.Load() {
+		t.Fatal("listener-failure rollback deregistration did not use the NRF access token")
+	}
+	if app.nwdafCtx.RegistrationState().Registered {
+		t.Fatal("registration remained active after protected rollback deregistration")
 	}
 	assertPortClosedEventually(t, cfg.GetSbiBindingAddr())
 	assertPortClosedEventually(t, cfg.GetMtlfServerBindingAddr())
@@ -548,6 +648,10 @@ func portIsOpen(addr string) bool {
 		return false
 	}
 	return conn.Close() == nil
+}
+
+func serverURL(r *http.Request) string {
+	return "http://" + r.Host
 }
 
 func takeFreePort(t *testing.T) int {
