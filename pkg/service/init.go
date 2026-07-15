@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"runtime/debug"
@@ -32,24 +34,29 @@ import (
 
 var _ app.App = &NwdafApp{}
 
+const nrfDeregistrationTimeout = 5 * time.Second
+
 type NwdafApp struct {
-	cfg             *factory.Config
-	nwdafCtx        *nwdaf_context.NWDAFContext
-	ctx             context.Context
-	cancel          context.CancelFunc
-	consumer        *consumer.Consumer
-	processor       *processor.Processor
-	sbiServer       *sbi.Server
-	anlfServer      *anlf.Server
-	anlfCoordinator *coordinator.Coordinator
-	mtlfServer      *mtlf.Server
-	wg              sync.WaitGroup
+	cfg               *factory.Config
+	nwdafCtx          *nwdaf_context.NWDAFContext
+	ctx               context.Context
+	cancel            context.CancelFunc
+	consumer          *consumer.Consumer
+	nrfManagement     consumer.NFManagementService
+	processor         *processor.Processor
+	sbiServer         *sbi.Server
+	anlfServer        *anlf.Server
+	anlfCoordinator   *coordinator.Coordinator
+	mtlfServer        *mtlf.Server
+	wg                sync.WaitGroup
+	deregisterTimeout time.Duration
 }
 
 func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 	nwdaf := &NwdafApp{
-		cfg: cfg,
-		wg:  sync.WaitGroup{},
+		cfg:               cfg,
+		wg:                sync.WaitGroup{},
+		deregisterTimeout: nrfDeregistrationTimeout,
 	}
 
 	// Set log settings
@@ -64,7 +71,16 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 	// Initialize context
 	nwdaf_context.Init()
 	nwdaf.nwdafCtx = nwdaf_context.GetSelf()
-	nwdaf.nwdafCtx.NwdafName = cfg.GetNwdafName()
+	if err := nwdaf.nwdafCtx.ConfigureNFManagement(
+		cfg.GetNrfUri(),
+		cfg.GetNwdafName(),
+		cfg.GetSbiUri(),
+		cfg.GetSbiScheme(),
+		cfg.GetSbiRegisterIP(),
+		cfg.GetSbiPort(),
+	); err != nil {
+		return nil, fmt.Errorf("configure NRF NFManagement context: %w", err)
+	}
 
 	// Initialize GroupResolver for Group ID → SUPI resolution
 	// Per TS 23.502 §4.15.4.5.2: NWDAF must resolve Group IDs before SMF subscription
@@ -79,6 +95,7 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 	if err != nil {
 		return nil, err
 	}
+	nwdaf.nrfManagement = nwdaf.consumer
 
 	var anlfBackend coordinator.BackendRuntimeClient
 	var observationBackend coordinator.ObservationSender
@@ -184,7 +201,13 @@ func (a *NwdafApp) SetReportCaller(reportCaller bool) {
 }
 
 func (a *NwdafApp) Start() {
-	logger.InitLog.Infoln("NWDAF Server started")
+	if err := a.Run(); err != nil {
+		logger.InitLog.Fatalf("Run NWDAF failed: %+v", err)
+	}
+}
+
+func (a *NwdafApp) Run() error {
+	logger.InitLog.Infoln("NWDAF starting")
 
 	// Connect to MongoDB
 	if a.cfg.Configuration != nil && a.cfg.Configuration.Mongodb != nil {
@@ -224,22 +247,72 @@ func (a *NwdafApp) Start() {
 		}
 	}
 
-	a.wg.Add(1)
-	go a.listenShutdownEvent()
+	if err := a.startRuntime(); err != nil {
+		a.cancel()
+		if errors.Is(err, context.Canceled) && a.ctx.Err() != nil {
+			logger.InitLog.Infoln("NWDAF startup canceled by shutdown signal")
+			return nil
+		}
+		return err
+	}
 
-	// Set WaitGroup for processor goroutine lifecycle management
+	a.WaitRoutineStopped()
+	return nil
+}
+
+func (a *NwdafApp) startRuntime() error {
+	// Set WaitGroup before starting any app-owned worker.
 	a.processor.SetWaitGroup(&a.wg)
 	a.anlfCoordinator.SetWaitGroup(&a.wg)
 
-	if err := a.startOwnedServers(); err != nil {
-		logger.InitLog.Fatalf("Run NWDAF servers failed: %+v", err)
+	result, registrationErr := a.nrfManagement.RegisterNFInstance(a.ctx)
+	a.nwdafCtx.RecordHeartBeatTimer(result.HeartBeatTimer)
+	if result.OAuth2Required {
+		a.nwdafCtx.RecordOAuth2Required(result.ResourceURI)
 	}
+	if registrationErr != nil {
+		if result.RemoteRegistered && !result.OAuth2Required {
+			a.nwdafCtx.MarkRegistered(result.ResourceURI)
+			a.deregisterFromNrf()
+		}
+		if result.OAuth2Required {
+			return fmt.Errorf(
+				"register NWDAF with NRF requires OAuth2; "+
+					"remote NF profile may require NRF-side cleanup: "+
+					"nfInstanceId=%s resourceUri=%q: %w",
+				a.nwdafCtx.NfId,
+				result.ResourceURI,
+				registrationErr,
+			)
+		}
+		return fmt.Errorf("register NWDAF with NRF: %w", registrationErr)
+	}
+	a.nwdafCtx.MarkRegistered(result.ResourceURI)
+	logger.InitLog.Infof("Registered NWDAF with NRF: nfInstanceId=%s", a.nwdafCtx.NfId)
+
+	if ctxErr := a.ctx.Err(); ctxErr != nil {
+		a.deregisterFromNrf()
+		return fmt.Errorf("startup canceled after NRF registration: %w", ctxErr)
+	}
+	if serverErr := a.startOwnedServers(); serverErr != nil {
+		a.deregisterFromNrf()
+		a.stopOwnedServers()
+		a.wg.Wait()
+		return fmt.Errorf("start NWDAF listeners after NRF registration: %w", serverErr)
+	}
+	if ctxErr := a.ctx.Err(); ctxErr != nil {
+		a.deregisterFromNrf()
+		a.stopOwnedServers()
+		a.wg.Wait()
+		return fmt.Errorf("startup canceled after listener startup: %w", ctxErr)
+	}
+
+	a.wg.Add(1)
+	go a.listenShutdownEvent()
 	a.anlfCoordinator.StartObservationDelivery()
-
-	// Start MTLF training scheduler only after the owned listeners are ready.
 	a.processor.StartMtlfTrainingScheduler(&a.wg)
-
-	a.WaitRoutineStopped()
+	logger.InitLog.Infoln("NWDAF startup complete")
+	return nil
 }
 
 func (a *NwdafApp) listenShutdownEvent() {
@@ -258,17 +331,16 @@ func (a *NwdafApp) Terminate() {
 	a.cancel()
 }
 
+// startOwnedServers leaves already-started listeners running on error so the
+// lifecycle owner can deregister from NRF before listener cleanup.
 func (a *NwdafApp) startOwnedServers() error {
+	if err := a.sbiServer.Run(&a.wg); err != nil {
+		return err
+	}
 	if err := a.anlfServer.Run(&a.wg); err != nil {
 		return err
 	}
 	if err := a.mtlfServer.Run(&a.wg); err != nil {
-		a.anlfServer.Shutdown()
-		return err
-	}
-	if err := a.sbiServer.Run(&a.wg); err != nil {
-		a.anlfServer.Shutdown()
-		a.mtlfServer.Shutdown()
 		return err
 	}
 	return nil
@@ -291,9 +363,34 @@ func (a *NwdafApp) terminateProcedure() {
 
 	a.anlfCoordinator.StopObservationDelivery()
 
+	a.deregisterFromNrf()
+
 	a.stopOwnedServers()
 
 	logger.InitLog.Infof("NWDAF terminated")
+}
+
+func (a *NwdafApp) deregisterFromNrf() {
+	if a.nrfManagement == nil || !a.nwdafCtx.RegistrationState().Registered {
+		return
+	}
+
+	timeout := a.deregisterTimeout
+	if timeout <= 0 {
+		timeout = nrfDeregistrationTimeout
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := a.nrfManagement.DeregisterNFInstance(cleanupCtx); err != nil {
+		logger.InitLog.Errorf(
+			"Deregister NWDAF from NRF failed: nfInstanceId=%s err=%v",
+			a.nwdafCtx.NfId,
+			err,
+		)
+		return
+	}
+	a.nwdafCtx.MarkDeregistered()
+	logger.InitLog.Infof("Deregistered NWDAF from NRF: nfInstanceId=%s", a.nwdafCtx.NfId)
 }
 
 func (a *NwdafApp) WaitRoutineStopped() {

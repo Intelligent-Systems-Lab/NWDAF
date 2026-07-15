@@ -21,7 +21,8 @@ func TestReadConfigValidationMatrix(t *testing.T) {
 		{
 			name: "valid minimal configuration defaults",
 			yaml: `
-configuration: {}
+configuration:
+  nrfUri: http://127.0.0.10:8000/
 `,
 			checkConfig: func(t *testing.T, cfg *factory.Config) {
 				t.Helper()
@@ -37,7 +38,65 @@ configuration: {}
 				if got := cfg.Configuration.SupportedAnalytics; len(got) != 1 || got[0] != "UE_COMMUNICATION" {
 					t.Fatalf("SupportedAnalytics = %v, want [UE_COMMUNICATION]", got)
 				}
+				if got := cfg.GetNrfUri(); got != "http://127.0.0.10:8000" {
+					t.Fatalf("GetNrfUri() = %q, want %q", got, "http://127.0.0.10:8000")
+				}
 			},
+		},
+		{
+			name: "missing nrf uri",
+			yaml: `
+configuration: {}
+`,
+			wantErr: "nrfUri is required",
+		},
+		{
+			name: "nrf uri rejects service path",
+			yaml: `
+configuration:
+  nrfUri: http://127.0.0.10:8000/nnrf-nfm/v1
+`,
+			wantErr: "nrfUri must not include a path",
+		},
+		{
+			name: "nrf uri rejects query",
+			yaml: `
+configuration:
+  nrfUri: http://127.0.0.10:8000?target=nrf
+`,
+			wantErr: "nrfUri must not include a query",
+		},
+		{
+			name: "nrf uri rejects unsupported scheme",
+			yaml: `
+configuration:
+  nrfUri: ftp://127.0.0.10:8000
+`,
+			wantErr: "nrfUri must use http or https",
+		},
+		{
+			name: "nrf uri rejects zero port",
+			yaml: `
+configuration:
+  nrfUri: http://127.0.0.10:0
+`,
+			wantErr: "nrfUri port must be between 1 and 65535",
+		},
+		{
+			name: "nrf uri rejects out of range port",
+			yaml: `
+configuration:
+  nrfUri: http://127.0.0.10:65536
+`,
+			wantErr: "nrfUri port must be between 1 and 65535",
+		},
+		{
+			name: "nrf uri rejects nonnumeric port",
+			yaml: `
+configuration:
+  nrfUri: http://127.0.0.10:nrf
+`,
+			wantErr: "nrfUri must be a valid URL",
 		},
 		{
 			name: "missing configuration section",
@@ -60,6 +119,7 @@ configuration:
 			name: "https sbi requires tls paths",
 			yaml: `
 configuration:
+  nrfUri: https://127.0.0.10:8000
   sbi:
     scheme: https
 `,
@@ -69,6 +129,7 @@ configuration:
 			name: "https sbi accepts free5gc style tls config",
 			yaml: `
 configuration:
+  nrfUri: https://127.0.0.10:8000
   sbi:
     scheme: https
     tls:
@@ -147,11 +208,55 @@ configuration:
 			name: "external mtlf enabled accepts endpoint-only config",
 			yaml: `
 configuration:
+  nrfUri: http://127.0.0.10:8000
   externalMtlf:
     enabled: true
     endpoints:
       - http://127.0.0.1:8082
 `,
+		},
+		{
+			name: "sbi wildcard binding requires register ip",
+			yaml: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+  sbi:
+    bindingIPv4: 0.0.0.0
+`,
+			wantErr: "sbi.registerIPv4",
+		},
+		{
+			name: "sbi register ip rejects wildcard",
+			yaml: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+  sbi:
+    bindingIPv4: 127.0.0.1
+    registerIPv4: 0.0.0.0
+`,
+			wantErr: "valid non-wildcard IPv4 address",
+		},
+		{
+			name: "sbi register ip rejects hostname",
+			yaml: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+  sbi:
+    bindingIPv4: 0.0.0.0
+    registerIPv4: nwdaf.example.com
+`,
+			wantErr: "valid non-wildcard IPv4 address",
+		},
+		{
+			name: "sbi register ip rejects ipv6",
+			yaml: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+  sbi:
+    bindingIPv4: "::"
+    registerIPv4: "2001:db8::10"
+`,
+			wantErr: "valid non-wildcard IPv4 address",
 		},
 		{
 			name: "anlf wildcard binding requires register ip",

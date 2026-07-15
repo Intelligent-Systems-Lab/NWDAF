@@ -26,12 +26,25 @@ import (
 var NWDAF *service.NwdafApp
 
 func main() {
+	os.Exit(runMain(os.Args))
+}
+
+func runMain(args []string) (exitCode int) {
 	defer func() {
 		if p := recover(); p != nil {
-			logger.MainLog.Fatalf("panic: %v\n%s", p, string(debug.Stack()))
+			logger.MainLog.Errorf("panic: %v\n%s", p, string(debug.Stack()))
+			exitCode = 1
 		}
 	}()
 
+	if err := run(args); err != nil {
+		fmt.Fprintf(os.Stderr, "NWDAF Run Error: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func run(args []string) error {
 	app := cli.NewApp()
 	app.Name = "nwdaf"
 	app.Usage = "5G Network Data Analytics Function (NWDAF)"
@@ -48,9 +61,7 @@ func main() {
 			Usage:   "Output NF log to `FILE`",
 		},
 	}
-	if err := app.Run(os.Args); err != nil {
-		fmt.Printf("NWDAF Run Error: %v\n", err)
-	}
+	return app.Run(args)
 }
 
 func action(cliCtx *cli.Context) error {
@@ -61,20 +72,25 @@ func action(cliCtx *cli.Context) error {
 	logger.MainLog.Infoln("NWDAF")
 	logger.MainLog.Infoln("NWDAF version: v0.1.0")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-sigCh
-		cancel()
-	}()
-
 	cfg, err := factory.ReadConfig(cliCtx.String("config"))
 	if err != nil {
 		return err
 	}
 	factory.NwdafConfig = cfg
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	go func() {
+		select {
+		case <-sigCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	nwdaf, err := service.NewApp(ctx, cfg)
 	if err != nil {
@@ -82,9 +98,7 @@ func action(cliCtx *cli.Context) error {
 	}
 	NWDAF = nwdaf
 
-	nwdaf.Start()
-
-	return nil
+	return nwdaf.Run()
 }
 
 func initLogFile(logNfPath []string) error {

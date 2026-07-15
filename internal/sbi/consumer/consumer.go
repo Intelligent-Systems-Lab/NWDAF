@@ -58,6 +58,7 @@ type Consumer struct {
 
 	smfService  SmfServiceClient
 	mtlfService MtlfServiceClient
+	nrfService  *NrfService
 	Adrf        AdrfServiceAPI // nil if ADRF not configured
 }
 
@@ -71,6 +72,7 @@ func newConsumerWithServices(
 		nwdaf:       nwdaf,
 		smfService:  smfService,
 		mtlfService: mtlfService,
+		nrfService:  newNrfService(),
 		Adrf:        adrf,
 	}
 }
@@ -148,4 +150,12 @@ func (c *Consumer) MtlfService() MtlfServiceClient {
 
 func (c *Consumer) AdrfClient() AdrfServiceAPI {
 	return c.Adrf
+}
+
+func (c *Consumer) RegisterNFInstance(ctx context.Context) (RegistrationResult, error) {
+	return c.nrfService.RegisterNFInstance(ctx, c.Context())
+}
+
+func (c *Consumer) DeregisterNFInstance(ctx context.Context) error {
+	return c.nrfService.DeregisterNFInstance(ctx, c.Context())
 }

@@ -2,6 +2,8 @@ package context
 
 import (
 	"fmt"
+	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,10 +16,16 @@ import (
 
 var nwdafContext *NWDAFContext
 
+const (
+	nwdafEventsSubscriptionAPIVersion     = "v1"
+	nwdafEventsSubscriptionAPIFullVersion = "1.0.0"
+)
+
 func Init() {
 	nwdafContext = &NWDAFContext{
-		NfId:          uuid.New().String(),
-		subscriptions: make(map[string]*Subscription),
+		NfId:                uuid.New().String(),
+		nfServiceInstanceId: uuid.New().String(),
+		subscriptions:       make(map[string]*Subscription),
 	}
 	logger.CtxLog.Infof("NWDAF Context initialized with NfId: %s", nwdafContext.NfId)
 }
@@ -29,6 +37,15 @@ func GetSelf() *NWDAFContext {
 type NWDAFContext struct {
 	NfId      string
 	NwdafName string
+
+	nfManagementMu      sync.RWMutex
+	nfServiceInstanceId string
+	nrfUri              string
+	nfProfile           models.NrfNfManagementNfProfile
+	registered          bool
+	registrationUri     string
+	oauth2Required      bool
+	heartBeatTimer      int32
 
 	// Subscriptions storage (NWDAF consumer subscriptions)
 	mu            sync.RWMutex
@@ -73,6 +90,171 @@ type NWDAFContext struct {
 
 	// Sequential correlation ID counter
 	correlationIdCounter atomic.Int64
+}
+
+type NFRegistrationState struct {
+	Registered     bool
+	ResourceURI    string
+	OAuth2Required bool
+	HeartBeatTimer int32
+}
+
+func (c *NWDAFContext) ConfigureNFManagement(
+	nrfUri string,
+	nwdafName string,
+	sbiUri string,
+	sbiScheme string,
+	registerIPv4 string,
+	sbiPort int,
+) error {
+	if c == nil {
+		return fmt.Errorf("NWDAF context is nil")
+	}
+	if nrfUri == "" {
+		return fmt.Errorf("NRF URI is required")
+	}
+	if c.NfId == "" {
+		return fmt.Errorf("NF instance ID is required")
+	}
+	if c.nfServiceInstanceId == "" {
+		c.nfServiceInstanceId = uuid.New().String()
+	}
+	registerIPv4 = strings.TrimSpace(registerIPv4)
+	parsedRegisterIPv4 := net.ParseIP(registerIPv4)
+	if strings.Contains(registerIPv4, ":") || parsedRegisterIPv4 == nil ||
+		parsedRegisterIPv4.To4() == nil || parsedRegisterIPv4.IsUnspecified() {
+		return fmt.Errorf("SBI registration address must be a valid non-wildcard IPv4 address")
+	}
+	if sbiPort <= 0 || sbiPort > 65535 {
+		return fmt.Errorf("SBI port must be between 1 and 65535")
+	}
+
+	var scheme models.UriScheme
+	switch sbiScheme {
+	case string(models.UriScheme_HTTP):
+		scheme = models.UriScheme_HTTP
+	case string(models.UriScheme_HTTPS):
+		scheme = models.UriScheme_HTTPS
+	default:
+		return fmt.Errorf("unsupported SBI scheme %q", sbiScheme)
+	}
+
+	profile := models.NrfNfManagementNfProfile{
+		NfInstanceId:   c.NfId,
+		NfInstanceName: nwdafName,
+		NfType:         models.NrfNfManagementNfType_NWDAF,
+		NfStatus:       models.NrfNfManagementNfStatus_REGISTERED,
+		Ipv4Addresses:  []string{registerIPv4},
+		NwdafInfo: &models.NwdafInfo{
+			NwdafEvents: []models.NwdafEvent{models.NwdafEvent_UE_COMMUNICATION},
+		},
+		NfServices: []models.NrfNfManagementNfService{
+			{
+				ServiceInstanceId: c.nfServiceInstanceId,
+				ServiceName:       models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION,
+				Versions: []models.NfServiceVersion{
+					{
+						ApiVersionInUri: nwdafEventsSubscriptionAPIVersion,
+						ApiFullVersion:  nwdafEventsSubscriptionAPIFullVersion,
+					},
+				},
+				Scheme:          scheme,
+				NfServiceStatus: models.NfServiceStatus_REGISTERED,
+				IpEndPoints: []models.IpEndPoint{
+					{
+						Ipv4Address: registerIPv4,
+						Transport:   models.NrfNfManagementTransportProtocol_TCP,
+						Port:        int32(sbiPort),
+					},
+				},
+				ApiPrefix: sbiUri,
+			},
+		},
+	}
+
+	c.nfManagementMu.Lock()
+	defer c.nfManagementMu.Unlock()
+	c.NwdafName = nwdafName
+	c.nrfUri = nrfUri
+	c.nfProfile = profile
+	c.registered = false
+	c.registrationUri = ""
+	c.oauth2Required = false
+	c.heartBeatTimer = 0
+	return nil
+}
+
+func (c *NWDAFContext) NrfUri() string {
+	if c == nil {
+		return ""
+	}
+	c.nfManagementMu.RLock()
+	defer c.nfManagementMu.RUnlock()
+	return c.nrfUri
+}
+
+func (c *NWDAFContext) NFProfile() models.NrfNfManagementNfProfile {
+	if c == nil {
+		return models.NrfNfManagementNfProfile{}
+	}
+	c.nfManagementMu.RLock()
+	defer c.nfManagementMu.RUnlock()
+	return c.nfProfile
+}
+
+func (c *NWDAFContext) MarkRegistered(resourceURI string) {
+	if c == nil {
+		return
+	}
+	c.nfManagementMu.Lock()
+	defer c.nfManagementMu.Unlock()
+	c.registered = true
+	c.registrationUri = resourceURI
+	c.oauth2Required = false
+}
+
+func (c *NWDAFContext) RecordOAuth2Required(resourceURI string) {
+	if c == nil {
+		return
+	}
+	c.nfManagementMu.Lock()
+	defer c.nfManagementMu.Unlock()
+	c.registered = false
+	c.registrationUri = resourceURI
+	c.oauth2Required = true
+}
+
+func (c *NWDAFContext) RecordHeartBeatTimer(heartBeatTimer int32) {
+	if c == nil {
+		return
+	}
+	c.nfManagementMu.Lock()
+	defer c.nfManagementMu.Unlock()
+	c.heartBeatTimer = heartBeatTimer
+}
+
+func (c *NWDAFContext) MarkDeregistered() {
+	if c == nil {
+		return
+	}
+	c.nfManagementMu.Lock()
+	defer c.nfManagementMu.Unlock()
+	c.registered = false
+	c.registrationUri = ""
+}
+
+func (c *NWDAFContext) RegistrationState() NFRegistrationState {
+	if c == nil {
+		return NFRegistrationState{}
+	}
+	c.nfManagementMu.RLock()
+	defer c.nfManagementMu.RUnlock()
+	return NFRegistrationState{
+		Registered:     c.registered,
+		ResourceURI:    c.registrationUri,
+		OAuth2Required: c.oauth2Required,
+		HeartBeatTimer: c.heartBeatTimer,
+	}
 }
 
 // Subscription represents an individual event subscription

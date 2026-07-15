@@ -615,6 +615,13 @@ func (c *Config) Validate() (bool, error) {
 func (c *Configuration) validate() error {
 	var errs []error
 
+	normalizedNrfURI, nrfErr := normalizeNrfURI(c.NrfUri)
+	if nrfErr != nil {
+		errs = append(errs, nrfErr)
+	} else {
+		c.NrfUri = normalizedNrfURI
+	}
+
 	if c.Sbi == nil {
 		errs = append(errs, errors.New("sbi section is required"))
 	} else if err := c.Sbi.validate(); err != nil {
@@ -694,8 +701,13 @@ func (s *Sbi) validate() error {
 	if !isValidHostValue(s.BindingIPv4) {
 		errs = append(errs, fmt.Errorf("sbi.bindingIPv4 must be a valid host or IP"))
 	}
-	if s.RegisterIPv4 != "" && !isValidHostValue(s.RegisterIPv4) {
-		errs = append(errs, fmt.Errorf("sbi.registerIPv4 must be a valid host or IP"))
+	if s.RegisterIPv4 != "" && !isAdvertisableIPv4(s.RegisterIPv4) {
+		errs = append(errs, fmt.Errorf("sbi.registerIPv4 must be a valid non-wildcard IPv4 address"))
+	}
+	if s.RegisterIPv4 == "" && !isAdvertisableIPv4(s.BindingIPv4) {
+		errs = append(errs, fmt.Errorf(
+			"sbi.registerIPv4 is required when sbi.bindingIPv4 is not an advertisable IPv4 address",
+		))
 	}
 	if s.Port <= 0 || s.Port > 65535 {
 		errs = append(errs, fmt.Errorf("sbi.port must be between 1 and 65535"))
@@ -933,6 +945,47 @@ func validateHTTPURL(fieldName string, raw string) error {
 	return nil
 }
 
+func normalizeNrfURI(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", errors.New("nrfUri is required")
+	}
+
+	parsed, err := url.ParseRequestURI(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("nrfUri must be a valid URL: %w", err)
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	if parsed.Scheme != NwdafSbiDefaultScheme && parsed.Scheme != NwdafSbiTLSScheme {
+		return "", errors.New("nrfUri must use http or https")
+	}
+	if parsed.Hostname() == "" {
+		return "", errors.New("nrfUri must include a host")
+	}
+	if port := parsed.Port(); port != "" {
+		portNumber, portErr := strconv.Atoi(port)
+		if portErr != nil || portNumber < 1 || portNumber > 65535 {
+			return "", errors.New("nrfUri port must be between 1 and 65535")
+		}
+	}
+	if parsed.User != nil {
+		return "", errors.New("nrfUri must not include user information")
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery {
+		return "", errors.New("nrfUri must not include a query")
+	}
+	if parsed.Fragment != "" {
+		return "", errors.New("nrfUri must not include a fragment")
+	}
+	if parsed.RawPath != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return "", errors.New("nrfUri must not include a path")
+	}
+
+	parsed.Path = ""
+	parsed.RawPath = ""
+	return parsed.String(), nil
+}
+
 func validateOwnedCallbackScheme(fieldName string, raw string, expectedScheme string) error {
 	trimmedScheme := strings.ToLower(strings.TrimSpace(expectedScheme))
 	if trimmedScheme == "" {
@@ -991,6 +1044,15 @@ func isWildcardHostValue(value string) bool {
 	default:
 		return false
 	}
+}
+
+func isAdvertisableIPv4(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if strings.Contains(trimmed, ":") {
+		return false
+	}
+	ip := net.ParseIP(trimmed)
+	return ip != nil && ip.To4() != nil && !ip.IsUnspecified()
 }
 
 func ReadConfig(cfgPath string) (*Config, error) {
@@ -1166,4 +1228,11 @@ func (c *Config) GetNwdafName() string {
 		return NwdafDefaultNwdafName
 	}
 	return c.Configuration.NwdafName
+}
+
+func (c *Config) GetNrfUri() string {
+	if c == nil || c.Configuration == nil {
+		return ""
+	}
+	return c.Configuration.NrfUri
 }
