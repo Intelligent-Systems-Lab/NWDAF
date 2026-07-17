@@ -43,7 +43,10 @@ func TestBackendClientCheckReadiness(t *testing.T) {
 		if request.Method != http.MethodGet || request.URL.Path != "/health/ready" {
 			t.Errorf("request = %s %s", request.Method, request.URL.Path)
 		}
-		writer.WriteHeader(http.StatusOK)
+		writer.Header().Set("Content-Type", "application/json")
+		if _, writeErr := writer.Write([]byte(`{"status":"ready"}`)); writeErr != nil {
+			t.Errorf("Write() error = %v", writeErr)
+		}
 	}))
 	t.Cleanup(server.Close)
 
@@ -53,6 +56,100 @@ func TestBackendClientCheckReadiness(t *testing.T) {
 	}
 	if err = backend.CheckReadiness(context.Background()); err != nil {
 		t.Fatalf("CheckReadiness() error = %v", err)
+	}
+}
+
+func TestBackendClientSelectDataSource(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/internal/v1/data-source-selection" {
+			t.Errorf("request = %s %s", request.Method, request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		if _, writeErr := writer.Write([]byte(`{"storageMode":"mongodb"}`)); writeErr != nil {
+			t.Errorf("Write() error = %v", writeErr)
+		}
+	}))
+	t.Cleanup(server.Close)
+	backend, err := NewBackendClient(server.URL, time.Second, server.Client())
+	if err != nil {
+		t.Fatalf("NewBackendClient() error = %v", err)
+	}
+	mode, err := backend.SelectDataSource(context.Background(), []DataSource{
+		DataSourceADRF,
+		DataSourceMongoDB,
+	})
+	if err != nil || mode != StorageModeMongoDB {
+		t.Fatalf("SelectDataSource() = %q, %v", mode, err)
+	}
+}
+
+func TestBackendClientSelectDataSourceRejectsConflictAndInvalidMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		code   string
+	}{
+		{
+			name:   "unsatisfied",
+			status: http.StatusConflict,
+			body:   `{"code":"DATA_SOURCE_REQUIREMENT_UNSATISFIED","message":"missing source"}`,
+			code:   "DATA_SOURCE_REQUIREMENT_UNSATISFIED",
+		},
+		{name: "invalid mode", status: http.StatusOK, body: `{"storageMode":"unknown"}`, code: "INVALID_RESPONSE"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.WriteHeader(test.status)
+				if _, writeErr := writer.Write([]byte(test.body)); writeErr != nil {
+					t.Errorf("Write() error = %v", writeErr)
+				}
+			}))
+			t.Cleanup(server.Close)
+			backend, err := NewBackendClient(server.URL, time.Second, server.Client())
+			if err != nil {
+				t.Fatalf("NewBackendClient() error = %v", err)
+			}
+			_, err = backend.SelectDataSource(context.Background(), nil)
+			var requestErr *BackendRequestError
+			if !errors.As(err, &requestErr) || requestErr.Code != test.code {
+				t.Fatalf("SelectDataSource() error = %T %v", err, err)
+			}
+		})
+	}
+}
+
+func TestBackendClientSelectDataSourceBoundsResponseAndHonorsCancellation(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+		if _, writeErr := writer.Write(
+			[]byte(strings.Repeat("x", maxBackendReadinessBodyBytes+1)),
+		); writeErr != nil {
+			t.Errorf("Write() error = %v", writeErr)
+		}
+	}))
+	t.Cleanup(server.Close)
+	backend, err := NewBackendClient(server.URL, time.Second, server.Client())
+	if err != nil {
+		t.Fatalf("NewBackendClient() error = %v", err)
+	}
+	if _, err = backend.SelectDataSource(context.Background(), nil); err == nil {
+		t.Fatal("SelectDataSource() oversized response error = nil")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = backend.SelectDataSource(ctx, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("SelectDataSource() error = %v", err)
 	}
 }
 

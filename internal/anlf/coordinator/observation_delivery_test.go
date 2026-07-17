@@ -40,3 +40,51 @@ func TestObservationDeliveryRetryKeepsBatchID(t *testing.T) {
 		)
 	}
 }
+
+func TestObservationDeliveryUsesCachedAvailability(t *testing.T) {
+	backend := &fakeAnlfBackendClient{}
+	gate := &fakeAvailabilityGate{usable: false}
+	delivery := NewObservationDelivery(
+		context.Background(),
+		backend,
+		&factory.ObservationDeliveryConfig{MaxRetries: 1},
+		gate,
+	)
+	delivery.retryInterval = time.Millisecond
+
+	delivery.deliver(queuedObservationBatch{
+		sourceID: "corr-1",
+		batch: contract.ObservationBatch{
+			BatchID:      "batch-unavailable",
+			Observations: []contract.SourceObservation{{}},
+		},
+	})
+
+	if backend.sendCalls != 0 {
+		t.Fatalf("send calls = %d, want 0 while backend is unavailable", backend.sendCalls)
+	}
+}
+
+func TestObservationDeliveryReportsTransportFailure(t *testing.T) {
+	backend := &fakeAnlfBackendClient{sendErrors: []error{errors.New("connection reset")}}
+	gate := &fakeAvailabilityGate{usable: true}
+	delivery := NewObservationDelivery(
+		context.Background(),
+		backend,
+		&factory.ObservationDeliveryConfig{},
+		gate,
+	)
+	delivery.maxRetries = 0
+
+	delivery.deliver(queuedObservationBatch{
+		sourceID: "corr-1",
+		batch: contract.ObservationBatch{
+			BatchID:      "batch-failure",
+			Observations: []contract.SourceObservation{{}},
+		},
+	})
+
+	if gate.markCalls != 1 {
+		t.Fatalf("MarkUnavailable calls = %d, want 1", gate.markCalls)
+	}
+}

@@ -109,6 +109,7 @@ func (c *NWDAFContext) ConfigureNFManagement(
 	sbiScheme string,
 	registerIPv4 string,
 	sbiPort int,
+	advertiseEventsSubscription bool,
 ) error {
 	if c == nil {
 		return fmt.Errorf("NWDAF context is nil")
@@ -148,10 +149,12 @@ func (c *NWDAFContext) ConfigureNFManagement(
 		NfType:         models.NrfNfManagementNfType_NWDAF,
 		NfStatus:       models.NrfNfManagementNfStatus_REGISTERED,
 		Ipv4Addresses:  []string{registerIPv4},
-		NwdafInfo: &models.NwdafInfo{
+	}
+	if advertiseEventsSubscription {
+		profile.NwdafInfo = &models.NwdafInfo{
 			NwdafEvents: []models.NwdafEvent{models.NwdafEvent_UE_COMMUNICATION},
-		},
-		NfServices: []models.NrfNfManagementNfService{
+		}
+		profile.NfServices = []models.NrfNfManagementNfService{
 			{
 				ServiceInstanceId: c.nfServiceInstanceId,
 				ServiceName:       models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION,
@@ -172,7 +175,7 @@ func (c *NWDAFContext) ConfigureNFManagement(
 				},
 				ApiPrefix: sbiUri,
 			},
-		},
+		}
 	}
 
 	c.nfManagementMu.Lock()

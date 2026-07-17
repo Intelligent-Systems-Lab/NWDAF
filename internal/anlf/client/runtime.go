@@ -45,7 +45,11 @@ func (c *Client) ApplySubscriptionRuntime(
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("AnLF backend runtime apply failed: status=%d", resp.StatusCode)
+		return nil, &BackendRequestError{
+			Operation:  "apply AnLF backend runtime",
+			StatusCode: resp.StatusCode,
+			Detail:     http.StatusText(resp.StatusCode),
+		}
 	}
 
 	var response contract.ApplySubscriptionRuntimeResponse
@@ -84,7 +88,11 @@ func (c *Client) ReleaseSubscriptionRuntime(ctx context.Context, subscriptionID 
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("AnLF backend runtime release failed: status=%d", resp.StatusCode)
+		return &BackendRequestError{
+			Operation:  "release AnLF backend runtime",
+			StatusCode: resp.StatusCode,
+			Detail:     http.StatusText(resp.StatusCode),
+		}
 	}
 
 	return nil

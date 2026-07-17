@@ -619,6 +619,112 @@ configuration:
 	}
 }
 
+func TestAnlfBackendConfigValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		config  string
+		wantErr string
+		check   func(*testing.T, *factory.AnlfBackendConfig)
+	}{
+		{
+			name: "omitted preserves disabled behavior",
+			config: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+`,
+			check: func(t *testing.T, backend *factory.AnlfBackendConfig) {
+				t.Helper()
+				if backend != nil {
+					t.Fatalf("AnlfBackend = %#v, want nil", backend)
+				}
+			},
+		},
+		{
+			name: "disabled does not require endpoint",
+			config: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+  anlfBackend:
+    enabled: false
+`,
+			check: func(t *testing.T, backend *factory.AnlfBackendConfig) {
+				t.Helper()
+				if backend == nil || backend.Enabled {
+					t.Fatalf("AnlfBackend = %#v, want disabled config", backend)
+				}
+			},
+		},
+		{
+			name: "enabled normalizes endpoint and defaults timeout",
+			config: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+  anlfBackend:
+    enabled: true
+    endpoint: " HTTP://127.0.0.1:9093/ "
+`,
+			check: func(t *testing.T, backend *factory.AnlfBackendConfig) {
+				t.Helper()
+				if backend.Endpoint != "http://127.0.0.1:9093" || backend.RequestTimeout != 5 {
+					t.Fatalf("AnlfBackend = %#v", backend)
+				}
+			},
+		},
+		{
+			name: "enabled requires endpoint",
+			config: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+  anlfBackend:
+    enabled: true
+`,
+			wantErr: "anlfBackend.endpoint is required",
+		},
+		{
+			name: "enabled rejects negative timeout",
+			config: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+  anlfBackend:
+    enabled: true
+    endpoint: http://127.0.0.1:9093
+    requestTimeout: -1
+`,
+			wantErr: "anlfBackend.requestTimeout must be positive",
+		},
+		{
+			name: "enabled rejects endpoint path",
+			config: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+  anlfBackend:
+    enabled: true
+    endpoint: http://127.0.0.1:9093/internal
+`,
+			wantErr: "must not include a path",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := writeTempConfig(t, test.config)
+			cfg, err := factory.ReadConfig(path)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("ReadConfig() error = %v, want containing %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ReadConfig() error = %v", err)
+			}
+			test.check(t, cfg.Configuration.AnlfBackend)
+		})
+	}
+}
+
 func writeTempConfig(t *testing.T, content string) string {
 	t.Helper()
 

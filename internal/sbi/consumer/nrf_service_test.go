@@ -1457,6 +1457,7 @@ func newNFManagementTestContext(t *testing.T, nrfURI string) *nwdaf_context.NWDA
 		"http",
 		"192.0.2.10",
 		8080,
+		true,
 	); err != nil {
 		t.Fatalf("ConfigureNFManagement() error = %v", err)
 	}

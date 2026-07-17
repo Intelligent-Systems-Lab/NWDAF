@@ -315,7 +315,7 @@ func analyticsRuntimeUnavailableProblem() *models.ProblemDetails {
 	return &models.ProblemDetails{
 		Status: http.StatusServiceUnavailable,
 		Title:  http.StatusText(http.StatusServiceUnavailable),
-		Detail: "UE_COMMUNICATION analytics runtime is unavailable",
+		Detail: "requested NWDAF capability is temporarily unavailable",
 	}
 }
 

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 const maxBackendReadinessBodyBytes = 64 * 1024
 
 type BackendRequestError struct {
+	Operation  string
 	StatusCode int
 	Code       string
 	Message    string
@@ -23,15 +25,24 @@ type BackendRequestError struct {
 }
 
 func (e *BackendRequestError) Error() string {
+	operation := e.Operation
+	if operation == "" {
+		operation = "MTLF backend request"
+	}
 	if e.StatusCode == 0 {
-		return fmt.Sprintf("MTLF backend readiness request failed: %s", e.Message)
+		return fmt.Sprintf("%s failed: %s", operation, e.Message)
 	}
 	return fmt.Sprintf(
-		"MTLF backend readiness request failed: status=%d code=%s message=%s",
+		"%s failed: status=%d code=%s message=%s",
+		operation,
 		e.StatusCode,
 		e.Code,
 		e.Message,
 	)
+}
+
+func (e *BackendRequestError) HTTPStatusCode() int {
+	return e.StatusCode
 }
 
 func (e *BackendRequestError) Unwrap() error {
@@ -78,7 +89,7 @@ func NewBackendClient(
 
 func (c *BackendClient) CheckReadiness(parent context.Context) error {
 	if parent == nil {
-		return &BackendRequestError{Message: "parent context is required"}
+		return &BackendRequestError{Operation: "check MTLF backend readiness", Message: "parent context is required"}
 	}
 	ctx, cancel := context.WithTimeout(parent, c.timeout)
 	defer cancel()
@@ -95,23 +106,47 @@ func (c *BackendClient) CheckReadiness(parent context.Context) error {
 	response, err := c.httpClient.Do(request)
 	if err != nil {
 		if ctx.Err() != nil {
-			return &BackendRequestError{Message: ctx.Err().Error(), cause: ctx.Err()}
+			return &BackendRequestError{
+				Operation: "check MTLF backend readiness",
+				Message:   ctx.Err().Error(),
+				cause:     ctx.Err(),
+			}
 		}
-		return &BackendRequestError{Message: err.Error(), cause: err}
+		return &BackendRequestError{
+			Operation: "check MTLF backend readiness",
+			Message:   err.Error(),
+			cause:     err,
+		}
 	}
-	body, readErr := readBackendReadinessBody(response.Body)
+	body, readErr := readBackendResponseBody(response.Body)
 	closeErr := response.Body.Close()
 	if readErr != nil {
 		return &BackendRequestError{
+			Operation:  "check MTLF backend readiness",
 			StatusCode: response.StatusCode,
 			Code:       "RESPONSE_TOO_LARGE",
 			Message:    readErr.Error(),
 		}
 	}
 	if closeErr != nil {
-		return &BackendRequestError{StatusCode: response.StatusCode, Message: closeErr.Error()}
+		return &BackendRequestError{
+			Operation:  "check MTLF backend readiness",
+			StatusCode: response.StatusCode,
+			Message:    closeErr.Error(),
+		}
 	}
 	if response.StatusCode == http.StatusOK {
+		var payload struct {
+			Status string `json:"status"`
+		}
+		if json.Unmarshal(body, &payload) != nil || payload.Status != "ready" {
+			return &BackendRequestError{
+				Operation:  "check MTLF backend readiness",
+				StatusCode: response.StatusCode,
+				Code:       "INVALID_RESPONSE",
+				Message:    "malformed readiness response",
+			}
+		}
 		return nil
 	}
 
@@ -124,13 +159,123 @@ func (c *BackendClient) CheckReadiness(parent context.Context) error {
 		payload.Message = strings.TrimSpace(string(body))
 	}
 	return &BackendRequestError{
+		Operation:  "check MTLF backend readiness",
 		StatusCode: response.StatusCode,
 		Code:       payload.Code,
 		Message:    payload.Message,
 	}
 }
 
-func readBackendReadinessBody(reader io.Reader) ([]byte, error) {
+type DataSource string
+
+const (
+	DataSourceADRF    DataSource = "adrf"
+	DataSourceMongoDB DataSource = "mongodb"
+)
+
+type StorageMode string
+
+const (
+	StorageModeADRF    StorageMode = "adrf"
+	StorageModeMongoDB StorageMode = "mongodb"
+	StorageModeDual    StorageMode = "dual"
+)
+
+type dataSourceSelectionRequest struct {
+	AvailableDataSources []DataSource `json:"availableDataSources"`
+}
+
+type dataSourceSelectionResponse struct {
+	StorageMode StorageMode `json:"storageMode"`
+}
+
+func (c *BackendClient) SelectDataSource(
+	parent context.Context,
+	available []DataSource,
+) (StorageMode, error) {
+	if parent == nil {
+		return "", &BackendRequestError{
+			Operation: "select MTLF backend data source",
+			Message:   "parent context is required",
+		}
+	}
+	body, err := json.Marshal(dataSourceSelectionRequest{AvailableDataSources: available})
+	if err != nil {
+		return "", fmt.Errorf("marshal MTLF backend data-source selection: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(parent, c.timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.endpoint+"/internal/v1/data-source-selection",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return "", fmt.Errorf("create MTLF backend data-source selection request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", &BackendRequestError{
+				Operation: "select MTLF backend data source",
+				Message:   ctx.Err().Error(),
+				cause:     ctx.Err(),
+			}
+		}
+		return "", &BackendRequestError{
+			Operation: "select MTLF backend data source",
+			Message:   err.Error(),
+			cause:     err,
+		}
+	}
+	responseBody, readErr := readBackendResponseBody(response.Body)
+	closeErr := response.Body.Close()
+	if readErr != nil {
+		return "", &BackendRequestError{
+			Operation:  "select MTLF backend data source",
+			StatusCode: response.StatusCode,
+			Code:       "RESPONSE_TOO_LARGE",
+			Message:    readErr.Error(),
+		}
+	}
+	if closeErr != nil {
+		return "", fmt.Errorf("close MTLF backend data-source selection response: %w", closeErr)
+	}
+	if response.StatusCode != http.StatusOK {
+		var payload struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(responseBody, &payload) != nil || payload.Code == "" {
+			payload.Code = "HTTP_ERROR"
+			payload.Message = strings.TrimSpace(string(responseBody))
+		}
+		return "", &BackendRequestError{
+			Operation:  "select MTLF backend data source",
+			StatusCode: response.StatusCode,
+			Code:       payload.Code,
+			Message:    payload.Message,
+		}
+	}
+	var payload dataSourceSelectionResponse
+	if json.Unmarshal(responseBody, &payload) != nil || !validStorageMode(payload.StorageMode) {
+		return "", &BackendRequestError{
+			Operation:  "select MTLF backend data source",
+			StatusCode: response.StatusCode,
+			Code:       "INVALID_RESPONSE",
+			Message:    "invalid storageMode",
+		}
+	}
+	return payload.StorageMode, nil
+}
+
+func validStorageMode(mode StorageMode) bool {
+	return mode == StorageModeADRF || mode == StorageModeMongoDB || mode == StorageModeDual
+}
+
+func readBackendResponseBody(reader io.Reader) ([]byte, error) {
 	body, err := io.ReadAll(io.LimitReader(reader, maxBackendReadinessBodyBytes+1))
 	if err != nil {
 		return nil, err

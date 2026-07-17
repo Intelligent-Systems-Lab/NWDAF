@@ -5,9 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/free5gc/nwdaf/internal/logger"
@@ -15,14 +18,38 @@ import (
 
 type Client struct {
 	endpoint   string
+	timeout    time.Duration
 	httpClient *http.Client
 }
 
-func NewClient(endpoint string) *Client {
+const maxBackendHealthBodyBytes = 64 * 1024
+
+type BackendRequestError struct {
+	Operation  string
+	StatusCode int
+	Detail     string
+}
+
+func (e *BackendRequestError) Error() string {
+	if e.StatusCode == 0 {
+		return fmt.Sprintf("%s: %s", e.Operation, e.Detail)
+	}
+	return fmt.Sprintf("%s: status=%d detail=%s", e.Operation, e.StatusCode, e.Detail)
+}
+
+func (e *BackendRequestError) HTTPStatusCode() int {
+	return e.StatusCode
+}
+
+func NewClient(endpoint string, requestTimeout ...time.Duration) *Client {
+	timeout := 5 * time.Second
+	if len(requestTimeout) > 0 && requestTimeout[0] > 0 {
+		timeout = requestTimeout[0]
+	}
 	return &Client{
-		endpoint: endpoint,
+		endpoint: strings.TrimSuffix(strings.TrimSpace(endpoint), "/"),
+		timeout:  timeout,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
 				MaxIdleConns:        50,
 				MaxIdleConnsPerHost: 10,
@@ -65,9 +92,79 @@ func (c *Client) sendJSON(
 		}
 	}()
 	if resp.StatusCode != expectedStatus {
-		return fmt.Errorf("%s: status=%d", operation, resp.StatusCode)
+		return &BackendRequestError{
+			Operation:  operation,
+			StatusCode: resp.StatusCode,
+			Detail:     http.StatusText(resp.StatusCode),
+		}
 	}
 	return nil
+}
+
+func (c *Client) CheckReadiness(parent context.Context) error {
+	ctx, cancel, err := timeoutContextFromParent(parent, c.timeout, "check AnLF backend readiness")
+	if err != nil {
+		return err
+	}
+	defer cancel()
+
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		c.endpoint+"/health/ready",
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("create AnLF backend readiness request: %w", err)
+	}
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("check AnLF backend readiness: %w", ctx.Err())
+		}
+		return fmt.Errorf("check AnLF backend readiness: %w", err)
+	}
+	body, readErr := readHealthBody(response.Body)
+	closeErr := response.Body.Close()
+	if readErr != nil {
+		return &BackendRequestError{
+			Operation:  "check AnLF backend readiness",
+			StatusCode: response.StatusCode,
+			Detail:     readErr.Error(),
+		}
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close AnLF backend readiness response: %w", closeErr)
+	}
+	if response.StatusCode != http.StatusOK {
+		return &BackendRequestError{
+			Operation:  "check AnLF backend readiness",
+			StatusCode: response.StatusCode,
+			Detail:     strings.TrimSpace(string(body)),
+		}
+	}
+	var payload struct {
+		Status string `json:"status"`
+	}
+	if json.Unmarshal(body, &payload) != nil || payload.Status != "ready" {
+		return &BackendRequestError{
+			Operation:  "check AnLF backend readiness",
+			StatusCode: response.StatusCode,
+			Detail:     "malformed readiness response",
+		}
+	}
+	return nil
+}
+
+func readHealthBody(reader io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(reader, maxBackendHealthBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxBackendHealthBodyBytes {
+		return nil, errors.New("response body exceeds transport limit")
+	}
+	return body, nil
 }
 
 func (c *Client) subscriptionURL(subscriptionID, suffix string) string {

@@ -3,6 +3,8 @@ package coordinator
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"sync"
 
 	"github.com/free5gc/nwdaf/internal/anlf/contract"
@@ -40,23 +42,61 @@ type ObservationSender interface {
 	SendObservations(ctx context.Context, sourceID string, batch contract.ObservationBatch) error
 }
 
+type AvailabilityGate interface {
+	Usable() bool
+	MarkUnavailable(category string)
+}
+
+var ErrBackendUnavailable = errors.New("AnLF backend is unavailable")
+
 type Coordinator struct {
 	nwdaf               NwdafApp
 	backend             BackendRuntimeClient
 	wg                  *sync.WaitGroup
 	observationDelivery *ObservationDelivery
+	availability        AvailabilityGate
 }
 
 func New(
 	nwdaf NwdafApp,
 	backend BackendRuntimeClient,
 	delivery *ObservationDelivery,
+	gates ...AvailabilityGate,
 ) *Coordinator {
-	return &Coordinator{
+	coordinator := &Coordinator{
 		nwdaf:               nwdaf,
 		backend:             backend,
 		observationDelivery: delivery,
 	}
+	if len(gates) > 0 {
+		coordinator.availability = gates[0]
+	}
+	return coordinator
+}
+
+func (a *Coordinator) backendUsable() bool {
+	return a != nil && a.backend != nil && (a.availability == nil || a.availability.Usable())
+}
+
+func (a *Coordinator) reportBackendFailure(err error) {
+	if a == nil {
+		return
+	}
+	reportAvailabilityFailure(a.availability, err)
+}
+
+func reportAvailabilityFailure(availability AvailabilityGate, err error) {
+	if err == nil || availability == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	var statusError interface{ HTTPStatusCode() int }
+	if errors.As(err, &statusError) {
+		statusCode := statusError.HTTPStatusCode()
+		if statusCode >= http.StatusBadRequest && statusCode < http.StatusInternalServerError {
+			return
+		}
+	}
+	availability.MarkUnavailable("operation_failure")
 }
 
 func (a *Coordinator) config() *factory.Config {

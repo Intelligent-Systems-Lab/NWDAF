@@ -25,6 +25,7 @@ type ObservationDelivery struct {
 	requestTimeout time.Duration
 	maxRetries     int
 	retryInterval  time.Duration
+	availability   AvailabilityGate
 	startOnce      sync.Once
 	stopOnce       sync.Once
 	wg             sync.WaitGroup
@@ -34,12 +35,13 @@ func NewObservationDelivery(
 	baseCtx context.Context,
 	backend ObservationSender,
 	cfg *factory.ObservationDeliveryConfig,
+	gates ...AvailabilityGate,
 ) *ObservationDelivery {
 	if baseCtx == nil {
 		baseCtx = context.Background()
 	}
 	workerCtx, cancel := context.WithCancel(baseCtx)
-	return &ObservationDelivery{
+	delivery := &ObservationDelivery{
 		baseCtx:        workerCtx,
 		cancel:         cancel,
 		backend:        backend,
@@ -48,6 +50,10 @@ func NewObservationDelivery(
 		maxRetries:     cfg.MaxRetriesOrDefault(),
 		retryInterval:  time.Duration(cfg.RetryIntervalOrDefault()) * time.Second,
 	}
+	if len(gates) > 0 {
+		delivery.availability = gates[0]
+	}
+	return delivery
 }
 
 func (d *ObservationDelivery) Start() {
@@ -109,9 +115,15 @@ func (d *ObservationDelivery) deliver(item queuedObservationBatch) {
 		if d.baseCtx.Err() != nil {
 			return
 		}
-		requestCtx, cancel := context.WithTimeout(d.baseCtx, d.requestTimeout)
-		err := d.backend.SendObservations(requestCtx, item.sourceID, item.batch)
-		cancel()
+		var err error
+		if d.availability != nil && !d.availability.Usable() {
+			err = ErrBackendUnavailable
+		} else {
+			requestCtx, cancel := context.WithTimeout(d.baseCtx, d.requestTimeout)
+			err = d.backend.SendObservations(requestCtx, item.sourceID, item.batch)
+			cancel()
+			reportAvailabilityFailure(d.availability, err)
+		}
 		if err == nil {
 			return
 		}

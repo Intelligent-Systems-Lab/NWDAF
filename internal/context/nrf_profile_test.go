@@ -24,6 +24,7 @@ func TestConfigureNFManagementBuildsTruthfulPhaseZeroProfile(t *testing.T) {
 		"https",
 		"192.0.2.10",
 		8080,
+		true,
 	)
 	if err != nil {
 		t.Fatalf("ConfigureNFManagement() error = %v", err)
@@ -103,6 +104,29 @@ func TestConfigureNFManagementBuildsTruthfulPhaseZeroProfile(t *testing.T) {
 	}
 }
 
+func TestConfigureNFManagementOmitsEventsCapabilityWhenAnlfBackendDisabled(t *testing.T) {
+	t.Parallel()
+
+	ctx := &NWDAFContext{NfId: "11111111-1111-4111-8111-111111111111"}
+	err := ctx.ConfigureNFManagement(
+		"http://127.0.0.10:8000",
+		"",
+		"NWDAF",
+		"http://192.0.2.10:8080",
+		"http",
+		"192.0.2.10",
+		8080,
+		false,
+	)
+	if err != nil {
+		t.Fatalf("ConfigureNFManagement() error = %v", err)
+	}
+	profile := ctx.NFProfile()
+	if profile.NwdafInfo != nil || len(profile.NfServices) != 0 {
+		t.Fatalf("disabled AnLF profile advertises dependent capability: %+v", profile)
+	}
+}
+
 func TestNFRegistrationStateTransitions(t *testing.T) {
 	t.Parallel()
 
@@ -171,6 +195,7 @@ func TestConfigureNFManagementRejectsNonAdvertisableIPv4(t *testing.T) {
 				"http",
 				registerIPv4,
 				8080,
+				true,
 			)
 			if err == nil || !strings.Contains(err.Error(), "valid non-wildcard IPv4 address") {
 				t.Fatalf("ConfigureNFManagement() error = %v, want invalid advertised IPv4", err)

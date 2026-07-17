@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,6 +56,20 @@ func TestValidateSupportedEvent(t *testing.T) {
 				t.Errorf("validateSupportedEvent() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestAnalyticsRuntimeUnavailableProblemDoesNotExposeBackendIdentity(t *testing.T) {
+	t.Parallel()
+
+	problem := analyticsRuntimeUnavailableProblem()
+	if problem.Status != http.StatusServiceUnavailable ||
+		problem.Title != http.StatusText(http.StatusServiceUnavailable) ||
+		problem.Detail != "requested NWDAF capability is temporarily unavailable" {
+		t.Fatalf("ProblemDetails = %+v", problem)
+	}
+	if problem.Cause != "" || strings.Contains(strings.ToLower(problem.Detail), "backend") {
+		t.Fatalf("ProblemDetails exposes private backend information: %+v", problem)
 	}
 }
 

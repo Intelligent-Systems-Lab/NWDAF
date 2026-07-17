@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -10,6 +11,23 @@ import (
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
+
+type fakeAvailabilityGate struct {
+	usable    bool
+	markCalls int
+}
+
+func (g *fakeAvailabilityGate) Usable() bool { return g.usable }
+
+func (g *fakeAvailabilityGate) MarkUnavailable(string) {
+	g.usable = false
+	g.markCalls++
+}
+
+type backendStatusError int
+
+func (e backendStatusError) Error() string       { return http.StatusText(int(e)) }
+func (e backendStatusError) HTTPStatusCode() int { return int(e) }
 
 type fakeAnlfBackendClient struct {
 	applyCalls      int
@@ -115,6 +133,59 @@ func newTestCoordinator(app testNwdafApp, client *fakeAnlfBackendClient) *Coordi
 	}
 	delivery := NewObservationDelivery(app.ctx, sender, nil)
 	return New(app, runtimeClient, delivery)
+}
+
+func TestAvailabilityGatePreventsLiveBackendRequest(t *testing.T) {
+	nwdaf_context.Init()
+	client := &fakeAnlfBackendClient{}
+	gate := &fakeAvailabilityGate{usable: false}
+	coordinator := New(
+		testNwdafApp{ctx: context.Background()},
+		client,
+		NewObservationDelivery(context.Background(), client, nil),
+		gate,
+	)
+
+	_, err := coordinator.ApplySubscriptionRuntime(contract.ApplySubscriptionRuntimeRequest{})
+	if !errors.Is(err, ErrBackendUnavailable) {
+		t.Fatalf("ApplySubscriptionRuntime() error = %v", err)
+	}
+	if client.applyCalls != 0 {
+		t.Fatalf("backend apply calls = %d, want 0", client.applyCalls)
+	}
+}
+
+func TestBackendFailureClassificationUpdatesAvailability(t *testing.T) {
+	nwdaf_context.Init()
+	tests := []struct {
+		name      string
+		err       error
+		wantMarks int
+	}{
+		{name: "domain 4xx", err: backendStatusError(http.StatusConflict)},
+		{name: "server 5xx", err: backendStatusError(http.StatusServiceUnavailable), wantMarks: 1},
+		{name: "transport", err: errors.New("connection reset"), wantMarks: 1},
+		{name: "shutdown cancellation", err: context.Canceled},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeAnlfBackendClient{applyErr: test.err}
+			gate := &fakeAvailabilityGate{usable: true}
+			coordinator := New(
+				testNwdafApp{ctx: context.Background()},
+				client,
+				NewObservationDelivery(context.Background(), client, nil),
+				gate,
+			)
+			_, applyErr := coordinator.ApplySubscriptionRuntime(contract.ApplySubscriptionRuntimeRequest{})
+			if !errors.Is(applyErr, test.err) && applyErr.Error() != test.err.Error() {
+				t.Fatalf("ApplySubscriptionRuntime() error = %v, want %v", applyErr, test.err)
+			}
+			if gate.markCalls != test.wantMarks {
+				t.Fatalf("MarkUnavailable calls = %d, want %d", gate.markCalls, test.wantMarks)
+			}
+		})
+	}
 }
 
 func addTestSubscription(subscriptionID string) {

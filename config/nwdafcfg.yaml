@@ -45,13 +45,14 @@ configuration:
   anlfBackend:
     enabled: true
     endpoint: http://127.0.0.1:9093  # Local AnLF backend
+    requestTimeout: 5
     observationDelivery:
       queueCapacity: 1024
       requestTimeout: 5
       maxRetries: 3
       retryInterval: 1
 
-  # Private MTLF backend foundation. Phase 1 keeps the current Go/Daisy path active.
+  # Private MTLF backend connection. Standard SBI remains owned by NWDAF Go.
   mtlfBackend:
     enabled: false
     endpoint: http://127.0.0.1:9092

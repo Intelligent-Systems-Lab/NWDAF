@@ -101,12 +101,13 @@ func (a *Coordinator) CompleteSubscriptionRuntime(event *contract.RuntimeComplet
 func (a *Coordinator) ApplySubscriptionRuntime(
 	request contract.ApplySubscriptionRuntimeRequest,
 ) (*contract.ApplySubscriptionRuntimeResponse, error) {
-	if a.backend == nil {
-		return nil, fmt.Errorf("AnLF backend client not initialized")
+	if !a.backendUsable() {
+		return nil, ErrBackendUnavailable
 	}
 
 	response, err := a.backend.ApplySubscriptionRuntime(a.nwdaf.CancelContext(), request)
 	if err != nil {
+		a.reportBackendFailure(err)
 		return nil, err
 	}
 
@@ -216,10 +217,11 @@ func (a *Coordinator) ApplySubscriptionRegistration(subscriptionID string) error
 func (a *Coordinator) ReleaseSubscriptionRuntime(subscriptionID string) error {
 	defer a.removeModelReferenceCorrelation(subscriptionID)
 
-	if a.backend == nil {
+	if !a.backendUsable() {
 		return nil
 	}
 	if err := a.backend.ReleaseSubscriptionRuntime(a.nwdaf.CancelContext(), subscriptionID); err != nil {
+		a.reportBackendFailure(err)
 		return err
 	}
 	return nil
@@ -230,14 +232,15 @@ func (a *Coordinator) SyncObservationBindings(
 	revision int64,
 	bindings []contract.ObservationBinding,
 ) error {
-	if a.backend == nil {
-		return fmt.Errorf("AnLF backend client not initialized")
+	if !a.backendUsable() {
+		return ErrBackendUnavailable
 	}
 	if err := a.backend.SyncObservationBindings(
 		a.nwdaf.CancelContext(),
 		subscriptionID,
 		contract.SyncObservationBindingsRequest{RuntimeRevision: revision, Bindings: bindings},
 	); err != nil {
+		a.reportBackendFailure(err)
 		return err
 	}
 	if subscription := nwdaf_context.GetSelf().GetSubscription(subscriptionID); subscription != nil {
@@ -256,20 +259,24 @@ func (a *Coordinator) SyncModelProvisionBinding(
 	binding contract.ModelProvisionBinding,
 ) error {
 	client, ok := a.backend.(ModelProvisionClient)
-	if !ok {
-		return fmt.Errorf("AnLF backend model provision client not initialized")
+	if !ok || !a.backendUsable() {
+		return ErrBackendUnavailable
 	}
-	return client.SyncModelProvisionBinding(a.nwdaf.CancelContext(), subscriptionID, binding)
+	err := client.SyncModelProvisionBinding(a.nwdaf.CancelContext(), subscriptionID, binding)
+	a.reportBackendFailure(err)
+	return err
 }
 
 func (a *Coordinator) ApplyModelProvisionEvent(
 	event contract.ModelProvisionEvent,
 ) (*contract.ModelProvisionEventResponse, error) {
 	client, ok := a.backend.(ModelProvisionClient)
-	if !ok {
-		return nil, fmt.Errorf("AnLF backend model provision client not initialized")
+	if !ok || !a.backendUsable() {
+		return nil, ErrBackendUnavailable
 	}
-	return client.ApplyModelProvisionEvent(a.nwdaf.CancelContext(), event)
+	response, err := client.ApplyModelProvisionEvent(a.nwdaf.CancelContext(), event)
+	a.reportBackendFailure(err)
+	return response, err
 }
 
 func (a *Coordinator) applyModelReferenceCorrelation(subscriptionID, modelReference string) {

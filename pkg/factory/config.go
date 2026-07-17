@@ -172,7 +172,15 @@ func (m *ModelParams) RingBufferSizeOrDefault() int {
 type AnlfBackendConfig struct {
 	Enabled             bool                       `yaml:"enabled"`
 	Endpoint            string                     `yaml:"endpoint,omitempty"`
+	RequestTimeout      int                        `yaml:"requestTimeout,omitempty"`
 	ObservationDelivery *ObservationDeliveryConfig `yaml:"observationDelivery,omitempty"`
+}
+
+func (c *AnlfBackendConfig) RequestTimeoutOrDefault() int {
+	if c != nil && c.RequestTimeout > 0 {
+		return c.RequestTimeout
+	}
+	return 5
 }
 
 // MtlfBackendConfig configures the private MTLF backend boundary. The backend
@@ -611,6 +619,9 @@ func (c *Config) applyDefaults() {
 	if c.Configuration.MtlfBackend != nil && c.Configuration.MtlfBackend.RequestTimeout == 0 {
 		c.Configuration.MtlfBackend.RequestTimeout = 5
 	}
+	if c.Configuration.AnlfBackend != nil && c.Configuration.AnlfBackend.RequestTimeout == 0 {
+		c.Configuration.AnlfBackend.RequestTimeout = 5
+	}
 
 	if len(c.Configuration.SupportedAnalytics) == 0 {
 		c.Configuration.SupportedAnalytics = []string{NwdafSupportedEventUEComm}
@@ -865,8 +876,14 @@ func (s *SmfConfig) validate() error {
 
 func (m *AnlfBackendConfig) validate() error {
 	var errs []error
-	if err := validateHTTPURL("anlfBackend.endpoint", m.Endpoint); err != nil {
+	endpoint, err := normalizeHTTPOrigin("anlfBackend.endpoint", m.Endpoint)
+	if err != nil {
 		errs = append(errs, err)
+	} else {
+		m.Endpoint = endpoint
+	}
+	if m.RequestTimeout <= 0 {
+		errs = append(errs, errors.New("anlfBackend.requestTimeout must be positive"))
 	}
 	if delivery := m.ObservationDelivery; delivery != nil {
 		if delivery.QueueCapacity < 0 {

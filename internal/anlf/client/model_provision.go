@@ -120,11 +120,11 @@ func (c *Client) applyModelProvisionAttempt(
 	}
 	retry := resp.StatusCode >= http.StatusInternalServerError ||
 		(resp.StatusCode == http.StatusConflict && detail == "STALE_RUNTIME_STATE")
-	return nil, retry, fmt.Errorf(
-		"apply model provision event: status=%d detail=%s",
-		resp.StatusCode,
-		detail,
-	)
+	return nil, retry, &BackendRequestError{
+		Operation:  "apply model provision event",
+		StatusCode: resp.StatusCode,
+		Detail:     detail,
+	}
 }
 
 func waitForRetry(ctx context.Context, delay time.Duration) error {
