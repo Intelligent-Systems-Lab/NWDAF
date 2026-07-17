@@ -51,6 +51,12 @@ configuration:
       maxRetries: 3
       retryInterval: 1
 
+  # Private MTLF backend foundation. Phase 1 keeps the current Go/Daisy path active.
+  mtlfBackend:
+    enabled: false
+    endpoint: http://127.0.0.1:9092
+    requestTimeout: 5
+
   # Group ID to SUPI mapping (substitute for UDM per TS 23.502 §4.15.4.5.2)
   groupMembership:
     groups:

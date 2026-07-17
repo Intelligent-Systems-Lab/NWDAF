@@ -498,6 +498,127 @@ func TestSampleConfigUsesNrfSmfEndpointSource(t *testing.T) {
 	}
 }
 
+func TestMtlfBackendConfigValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		config  string
+		wantErr string
+		check   func(*testing.T, *factory.MtlfBackendConfig)
+	}{
+		{
+			name: "omitted preserves disabled behavior",
+			config: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+`,
+			check: func(t *testing.T, backend *factory.MtlfBackendConfig) {
+				t.Helper()
+				if backend != nil {
+					t.Fatalf("MtlfBackend = %#v, want nil", backend)
+				}
+			},
+		},
+		{
+			name: "disabled does not require endpoint",
+			config: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+  mtlfBackend:
+    enabled: false
+`,
+			check: func(t *testing.T, backend *factory.MtlfBackendConfig) {
+				t.Helper()
+				if backend == nil || backend.Enabled {
+					t.Fatalf("MtlfBackend = %#v, want disabled config", backend)
+				}
+			},
+		},
+		{
+			name: "enabled normalizes endpoint",
+			config: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+  mtlfBackend:
+    enabled: true
+    endpoint: " HTTP://127.0.0.1:9092/ "
+    requestTimeout: 5
+`,
+			check: func(t *testing.T, backend *factory.MtlfBackendConfig) {
+				t.Helper()
+				if backend.Endpoint != "http://127.0.0.1:9092" {
+					t.Fatalf("Endpoint = %q", backend.Endpoint)
+				}
+			},
+		},
+		{
+			name: "enabled requires endpoint",
+			config: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+  mtlfBackend:
+    enabled: true
+    requestTimeout: 5
+`,
+			wantErr: "mtlfBackend.endpoint is required",
+		},
+		{
+			name: "enabled rejects negative timeout",
+			config: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+  mtlfBackend:
+    enabled: true
+    endpoint: http://127.0.0.1:9092
+    requestTimeout: -1
+`,
+			wantErr: "mtlfBackend.requestTimeout must be positive",
+		},
+		{
+			name: "enabled rejects endpoint path",
+			config: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+  mtlfBackend:
+    enabled: true
+    endpoint: http://127.0.0.1:9092/internal
+    requestTimeout: 5
+`,
+			wantErr: "must not include a path",
+		},
+		{
+			name: "enabled rejects endpoint query",
+			config: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+  mtlfBackend:
+    enabled: true
+    endpoint: http://127.0.0.1:9092?mode=test
+    requestTimeout: 5
+`,
+			wantErr: "must not include a query or fragment",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := writeTempConfig(t, test.config)
+			cfg, err := factory.ReadConfig(path)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("ReadConfig() error = %v, want containing %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ReadConfig() error = %v", err)
+			}
+			test.check(t, cfg.Configuration.MtlfBackend)
+		})
+	}
+}
+
 func writeTempConfig(t *testing.T, content string) string {
 	t.Helper()
 

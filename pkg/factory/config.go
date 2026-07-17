@@ -57,6 +57,7 @@ type Configuration struct {
 	Anlf               *AnlfConfig            `yaml:"anlf,omitempty"`
 	ExternalMtlf       *ExternalMtlfConfig    `yaml:"externalMtlf,omitempty"`
 	AnlfBackend        *AnlfBackendConfig     `yaml:"anlfBackend,omitempty"`
+	MtlfBackend        *MtlfBackendConfig     `yaml:"mtlfBackend,omitempty"`
 	GroupMembership    *GroupMembershipConfig `yaml:"groupMembership,omitempty"`
 	Mtlf               *MtlfConfig            `yaml:"mtlf,omitempty"`
 	Adrf               *AdrfConfig            `yaml:"adrf,omitempty"`
@@ -172,6 +173,21 @@ type AnlfBackendConfig struct {
 	Enabled             bool                       `yaml:"enabled"`
 	Endpoint            string                     `yaml:"endpoint,omitempty"`
 	ObservationDelivery *ObservationDeliveryConfig `yaml:"observationDelivery,omitempty"`
+}
+
+// MtlfBackendConfig configures the private MTLF backend boundary. The backend
+// is not a standalone standard NF and does not own standard SBI communication.
+type MtlfBackendConfig struct {
+	Enabled        bool   `yaml:"enabled"`
+	Endpoint       string `yaml:"endpoint,omitempty"`
+	RequestTimeout int    `yaml:"requestTimeout,omitempty"`
+}
+
+func (c *MtlfBackendConfig) RequestTimeoutOrDefault() int {
+	if c != nil && c.RequestTimeout > 0 {
+		return c.RequestTimeout
+	}
+	return 5
 }
 
 type ObservationDeliveryConfig struct {
@@ -592,6 +608,9 @@ func (c *Config) applyDefaults() {
 	if c.Configuration.Mtlf.Server.Port == 0 {
 		c.Configuration.Mtlf.Server.Port = NwdafMtlfDefaultPort
 	}
+	if c.Configuration.MtlfBackend != nil && c.Configuration.MtlfBackend.RequestTimeout == 0 {
+		c.Configuration.MtlfBackend.RequestTimeout = 5
+	}
 
 	if len(c.Configuration.SupportedAnalytics) == 0 {
 		c.Configuration.SupportedAnalytics = []string{NwdafSupportedEventUEComm}
@@ -671,6 +690,11 @@ func (c *Configuration) validate() error {
 	}
 	if c.AnlfBackend != nil && c.AnlfBackend.Enabled {
 		if validateErr := c.AnlfBackend.validate(); validateErr != nil {
+			errs = append(errs, validateErr)
+		}
+	}
+	if c.MtlfBackend != nil && c.MtlfBackend.Enabled {
+		if validateErr := c.MtlfBackend.validate(); validateErr != nil {
 			errs = append(errs, validateErr)
 		}
 	}
@@ -861,6 +885,20 @@ func (m *AnlfBackendConfig) validate() error {
 	return errors.Join(errs...)
 }
 
+func (m *MtlfBackendConfig) validate() error {
+	var errs []error
+	endpoint, err := normalizeHTTPOrigin("mtlfBackend.endpoint", m.Endpoint)
+	if err != nil {
+		errs = append(errs, err)
+	} else {
+		m.Endpoint = endpoint
+	}
+	if m.RequestTimeout <= 0 {
+		errs = append(errs, errors.New("mtlfBackend.requestTimeout must be positive"))
+	}
+	return errors.Join(errs...)
+}
+
 func (m *ExternalMtlfConfig) validate() error {
 	var errs []error
 
@@ -963,6 +1001,42 @@ func validateHTTPURL(fieldName string, raw string) error {
 	}
 
 	return nil
+}
+
+func normalizeHTTPOrigin(fieldName string, raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", fmt.Errorf("%s is required", fieldName)
+	}
+	parsed, err := url.ParseRequestURI(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("%s must be a valid URL: %w", fieldName, err)
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	if parsed.Scheme != NwdafSbiDefaultScheme && parsed.Scheme != NwdafSbiTLSScheme {
+		return "", fmt.Errorf("%s must use http or https", fieldName)
+	}
+	if parsed.Hostname() == "" {
+		return "", fmt.Errorf("%s must include a host", fieldName)
+	}
+	if parsed.User != nil {
+		return "", fmt.Errorf("%s must not include userinfo", fieldName)
+	}
+	if parsed.Path != "" && parsed.Path != "/" {
+		return "", fmt.Errorf("%s must not include a path", fieldName)
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return "", fmt.Errorf("%s must not include a query or fragment", fieldName)
+	}
+	if port := parsed.Port(); port != "" {
+		portNumber, portErr := strconv.Atoi(port)
+		if portErr != nil || portNumber < 1 || portNumber > 65535 {
+			return "", fmt.Errorf("%s port must be between 1 and 65535", fieldName)
+		}
+	}
+	parsed.Path = ""
+	parsed.RawPath = ""
+	return parsed.Scheme + "://" + parsed.Host, nil
 }
 
 func normalizeNrfURI(raw string) (string, error) {
