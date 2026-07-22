@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/mongo/readpref"
 
 	"github.com/free5gc/nwdaf/internal/anlf"
 	anlfclient "github.com/free5gc/nwdaf/internal/anlf/client"
@@ -32,37 +30,33 @@ import (
 	"github.com/free5gc/nwdaf/pkg/app"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/oauth"
-	"github.com/free5gc/util/mongoapi"
 )
 
 var _ app.App = &NwdafApp{}
 
 const nrfDeregistrationTimeout = 5 * time.Second
 
-const mongoHandshakePingTimeout = 2 * time.Second
-
-type mongoPinger interface {
-	Ping(context.Context, *readpref.ReadPref) error
-}
-
 type NwdafApp struct {
-	cfg               *factory.Config
-	nwdafCtx          *nwdaf_context.NWDAFContext
-	ctx               context.Context
-	cancel            context.CancelFunc
-	consumer          *consumer.Consumer
-	nrfManagement     consumer.NFManagementService
-	processor         *processor.Processor
-	sbiServer         *sbi.Server
-	anlfServer        *anlf.Server
-	anlfCoordinator   *coordinator.Coordinator
-	anlfAvailability  *backend.AvailabilityMonitor
-	mtlfAvailability  *backend.AvailabilityMonitor
-	mtlfBackendClient *mtlfclient.BackendClient
-	mongoPinger       mongoPinger
-	mtlfServer        *mtlf.Server
-	wg                sync.WaitGroup
-	deregisterTimeout time.Duration
+	cfg                 *factory.Config
+	nwdafCtx            *nwdaf_context.NWDAFContext
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	consumer            *consumer.Consumer
+	nrfManagement       consumer.NFManagementService
+	processor           *processor.Processor
+	sbiServer           *sbi.Server
+	anlfServer          *anlf.Server
+	anlfCoordinator     *coordinator.Coordinator
+	anlfAvailability    *backend.AvailabilityMonitor
+	mtlfAvailability    *backend.AvailabilityMonitor
+	anlfBackendClient   *anlfclient.Client
+	mtlfBackendClient   *mtlfclient.BackendClient
+	backendSyncMu       sync.RWMutex
+	anlfMongoAvailable  bool
+	mtlfSourceSelection backend.DataSourceSelection
+	mtlfServer          *mtlf.Server
+	wg                  sync.WaitGroup
+	deregisterTimeout   time.Duration
 }
 
 func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
@@ -98,13 +92,6 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		return nil, fmt.Errorf("configure NRF NFManagement context: %w", err)
 	}
 
-	// Initialize GroupResolver for Group ID → SUPI resolution
-	// Per TS 23.502 §4.15.4.5.2: NWDAF must resolve Group IDs before SMF subscription
-	if cfg.Configuration != nil && cfg.Configuration.GroupMembership != nil {
-		groupResolver := nwdaf_context.NewGroupResolver(cfg.Configuration.GroupMembership)
-		nwdaf.nwdafCtx.SetGroupResolver(groupResolver)
-	}
-
 	// Initialize consumer
 	var err error
 	nwdaf.consumer, err = consumer.NewConsumer(nwdaf)
@@ -114,7 +101,6 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 	nwdaf.nrfManagement = nwdaf.consumer
 
 	var anlfBackend coordinator.BackendRuntimeClient
-	var observationBackend coordinator.ObservationSender
 	if cfg.Configuration != nil &&
 		cfg.Configuration.AnlfBackend != nil &&
 		cfg.Configuration.AnlfBackend.Enabled &&
@@ -124,10 +110,8 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 			time.Duration(cfg.Configuration.AnlfBackend.RequestTimeoutOrDefault())*time.Second,
 		)
 		anlfBackend = client
-		observationBackend = client
-		nwdaf.anlfAvailability = backend.NewAvailabilityMonitor(func(ctx context.Context) (backend.ProbeResult, error) {
-			return backend.ProbeResult{}, client.CheckReadiness(ctx)
-		})
+		nwdaf.anlfBackendClient = client
+		nwdaf.anlfAvailability = backend.NewAvailabilityMonitor(nwdaf.probeAnlfBackend)
 	}
 
 	if cfg.Configuration != nil && cfg.Configuration.MtlfBackend != nil &&
@@ -151,20 +135,10 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		daisyClient = mtlfclient.NewClient(cfg.Configuration.Mtlf.Endpoint)
 	}
 
-	var observationConfig *factory.ObservationDeliveryConfig
-	if cfg.Configuration != nil && cfg.Configuration.AnlfBackend != nil {
-		observationConfig = cfg.Configuration.AnlfBackend.ObservationDelivery
-	}
-	observationDelivery := coordinator.NewObservationDelivery(
-		nwdaf.ctx,
-		observationBackend,
-		observationConfig,
-		nwdaf.anlfAvailability,
-	)
 	nwdaf.anlfCoordinator = coordinator.New(
 		nwdaf,
 		anlfBackend,
-		observationDelivery,
+		nil,
 		nwdaf.anlfAvailability,
 	)
 	mtlfService := mtlf.NewMtlfService(nwdaf, daisyClient, nwdaf.consumer.AdrfClient())
@@ -175,10 +149,14 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 	reportDispatcher := notifier.NewReportDispatcher(nwdaf.ctx)
 	anlfProcessor := anlfprocessor.NewProcessor(nwdaf.anlfCoordinator, reportDispatcher)
 	anlfProcessor.SetModelAccuracyWorkflow(mtlfService)
+	anlfProcessor.SetNFDiscoveryProxy(nwdaf.consumer)
+	anlfProcessor.SetSmfEventExposureProxy(nwdaf.consumer)
+	anlfProcessor.SetAdrfStorageProxy(nwdaf.consumer)
 	mtlfProcessor := mtlfprocessor.NewProcessor(mtlfService)
 
 	// Initialize processor
 	nwdaf.processor = processor.NewProcessor(nwdaf, nwdaf.anlfCoordinator, mtlfService)
+	nwdaf.processor.SetEventsSubscriptionBackend(nwdaf.anlfCoordinator)
 
 	// Initialize SBI server
 	nwdaf.sbiServer, err = sbi.NewServer(nwdaf, "")
@@ -250,45 +228,6 @@ func (a *NwdafApp) Start() {
 func (a *NwdafApp) Run() error {
 	logger.InitLog.Infoln("NWDAF starting")
 
-	// Connect to MongoDB
-	if a.cfg.Configuration != nil && a.cfg.Configuration.Mongodb != nil {
-		mongodb := a.cfg.Configuration.Mongodb
-		if err := mongoapi.SetMongoDB(mongodb.Name, mongodb.Url); err != nil {
-			logger.InitLog.Errorf("Fail to connect to MongoDB: %+v", err)
-		} else {
-			a.mongoPinger = mongoapi.Client
-			// SetMongoDB does not verify the actual connection; Ping to confirm.
-			pingCtx, pingCancel := context.WithTimeout(a.ctx, 5*time.Second)
-			defer pingCancel()
-			if pingErr := mongoapi.Client.Ping(pingCtx, nil); pingErr != nil {
-				logger.InitLog.Errorf("MongoDB not reachable (%s): %v", mongodb.Url, pingErr)
-			} else {
-				logger.InitLog.Infof("Successfully connected to MongoDB (%s)", mongodb.Url)
-				nwdaf_context.SetMongoAvailable(true)
-
-				// Initialize Time Series Collection for UPF Traffic Data
-				opts := options.CreateCollection().SetTimeSeriesOptions(
-					options.TimeSeries().
-						SetTimeField("timestamp").
-						SetMetaField("metadata"),
-				)
-				collCtx, collCancel := context.WithTimeout(a.ctx, 5*time.Second)
-				defer collCancel()
-				collErr := mongoapi.Client.Database(mongodb.Name).CreateCollection(
-					collCtx,
-					nwdaf_context.UpfTrafficDataColl,
-					opts,
-				)
-				if collErr != nil {
-					// It's normal if the collection already exists
-					logger.InitLog.Debugf("MongoDB TimeSeries collection creation note: %v", collErr)
-				} else {
-					logger.InitLog.Infof("Created MongoDB TimeSeries collection: %s", nwdaf_context.UpfTrafficDataColl)
-				}
-			}
-		}
-	}
-
 	if err := a.startRuntime(); err != nil {
 		a.cancel()
 		if errors.Is(err, context.Canceled) && a.ctx.Err() != nil {
@@ -352,7 +291,6 @@ func (a *NwdafApp) startRuntime() error {
 	a.wg.Add(1)
 	go a.listenShutdownEvent()
 	a.startBackendAvailabilityMonitors()
-	a.anlfCoordinator.StartObservationDelivery()
 	a.processor.StartMtlfTrainingScheduler(&a.wg)
 	logger.InitLog.Infoln("NWDAF startup complete")
 	return nil
@@ -375,34 +313,123 @@ func (a *NwdafApp) probeMtlfBackend(ctx context.Context) (backend.ProbeResult, e
 	if a.mtlfBackendClient == nil {
 		return backend.ProbeResult{}, errors.New("MTLF backend client is not configured")
 	}
-	if err := a.mtlfBackendClient.CheckReadiness(ctx); err != nil {
-		return backend.ProbeResult{}, err
-	}
-	a.mtlfAvailability.MarkHandshaking()
-	mode, err := a.mtlfBackendClient.SelectDataSource(ctx, a.availableMtlfDataSources(ctx))
+	health, err := a.mtlfBackendClient.CheckReadiness(ctx)
 	if err != nil {
 		return backend.ProbeResult{}, err
 	}
-	return backend.ProbeResult{Selection: string(mode)}, nil
+	a.mtlfAvailability.MarkSyncing(health.ProcessInstanceID)
+	response, err := a.mtlfBackendClient.Sync(ctx, a.buildBackendSyncRequest(backend.KindMTLF))
+	if err != nil {
+		return backend.ProbeResult{}, err
+	}
+	if response.ProcessInstanceID != health.ProcessInstanceID {
+		return backend.ProbeResult{}, errors.New("MTLF backend process changed during sync")
+	}
+	if a.updateMtlfSourceSelection(response.SourceSelection) && a.anlfAvailability != nil {
+		a.anlfAvailability.Refresh()
+	}
+	return backend.ProbeResult{
+		ProcessInstanceID: health.ProcessInstanceID,
+		Selection:         string(response.SourceSelection.EffectiveSource),
+	}, nil
 }
 
-func (a *NwdafApp) availableMtlfDataSources(ctx context.Context) []mtlfclient.DataSource {
-	sources := make([]mtlfclient.DataSource, 0, 2)
-	if a.cfg != nil && a.cfg.Configuration != nil && a.cfg.Configuration.Adrf.AdrfEnabled() &&
-		a.consumer != nil && a.consumer.AdrfClient() != nil {
-		sources = append(sources, mtlfclient.DataSourceADRF)
+func (a *NwdafApp) probeAnlfBackend(ctx context.Context) (backend.ProbeResult, error) {
+	if a.anlfBackendClient == nil {
+		return backend.ProbeResult{}, errors.New("AnLF backend client is not configured")
 	}
-	if a.cfg == nil || a.cfg.Configuration == nil || a.cfg.Configuration.Mongodb == nil ||
-		a.mongoPinger == nil {
-		return sources
+	health, err := a.anlfBackendClient.CheckReadiness(ctx)
+	if err != nil {
+		return backend.ProbeResult{}, err
 	}
-	pingCtx, cancel := context.WithTimeout(ctx, mongoHandshakePingTimeout)
-	err := a.mongoPinger.Ping(pingCtx, nil)
-	cancel()
-	if err == nil {
-		sources = append(sources, mtlfclient.DataSourceMongoDB)
+	a.anlfAvailability.MarkSyncing(health.ProcessInstanceID)
+	response, err := a.anlfBackendClient.Sync(ctx, a.buildBackendSyncRequest(backend.KindAnLF))
+	if err != nil {
+		return backend.ProbeResult{}, err
 	}
-	return sources
+	if response.ProcessInstanceID != health.ProcessInstanceID {
+		return backend.ProbeResult{}, errors.New("AnLF backend process changed during sync")
+	}
+	if a.updateAnlfMongoAvailability(response.MongoDBAvailable) && a.mtlfAvailability != nil {
+		a.mtlfAvailability.Refresh()
+	}
+	return backend.ProbeResult{ProcessInstanceID: health.ProcessInstanceID}, nil
+}
+
+func (a *NwdafApp) buildBackendSyncRequest(kind backend.Kind) backend.SyncRequest {
+	identity := backend.NwdafIdentity{}
+	if a.nwdafCtx != nil {
+		identity.NFInstanceID = a.nwdafCtx.NfId
+	}
+	if a.cfg != nil {
+		identity.APIBaseURI = a.cfg.GetSbiUri()
+		identity.InternalCallbackBaseURI = a.cfg.GetAnlfServerURI()
+	}
+	request := backend.SyncRequest{
+		ContainingNwdaf:        identity,
+		EventsSubscriptions:    []backend.EventsSubscriptionSnapshot{},
+		SmfResources:           []backend.SmfResourceSnapshot{},
+		DataSourceAvailability: a.currentDataSourceAvailability(),
+		MtlfSourceSelection:    a.currentMtlfSourceSelection(),
+	}
+	if kind != backend.KindAnLF || a.nwdafCtx == nil {
+		return request
+	}
+	for _, route := range a.nwdafCtx.GetAllAnalyticsSubscriptionRoutes() {
+		request.EventsSubscriptions = append(
+			request.EventsSubscriptions,
+			backend.EventsSubscriptionSnapshot{
+				SubscriptionID:          route.SubscriptionID,
+				Subscription:            route.AcceptedSubscription,
+				ExternalNotificationURI: route.ExternalNotificationURI,
+			},
+		)
+	}
+	for _, route := range a.nwdafCtx.GetAllSmfPeerResourceRoutes() {
+		request.SmfResources = append(request.SmfResources, backend.SmfResourceSnapshot{
+			CorrelationID:        route.CorrelationID,
+			ResourceLocation:     route.ResourceLocation,
+			TargetAPIBaseURI:     route.TargetAPIBaseURI,
+			NwdafSubscriptionIDs: append([]string(nil), route.NwdafSubscriptionIDs...),
+			PendingCleanup:       route.PendingCleanup,
+			Subscription:         append([]byte(nil), route.AcceptedSubscriptionJSON...),
+		})
+	}
+	return request
+}
+
+func (a *NwdafApp) currentDataSourceAvailability() backend.DataSourceAvailability {
+	availability := backend.DataSourceAvailability{}
+	if a.cfg != nil && a.cfg.Configuration != nil && a.cfg.Configuration.Adrf != nil &&
+		a.cfg.Configuration.Adrf.AdrfEnabled() && a.consumer != nil && a.consumer.AdrfClient() != nil {
+		availability.ADRF = true
+	}
+	a.backendSyncMu.RLock()
+	availability.MongoDB = a.anlfMongoAvailable
+	a.backendSyncMu.RUnlock()
+	return availability
+}
+
+func (a *NwdafApp) currentMtlfSourceSelection() backend.DataSourceSelection {
+	a.backendSyncMu.RLock()
+	defer a.backendSyncMu.RUnlock()
+	return a.mtlfSourceSelection
+}
+
+func (a *NwdafApp) updateAnlfMongoAvailability(available bool) bool {
+	a.backendSyncMu.Lock()
+	defer a.backendSyncMu.Unlock()
+	changed := a.anlfMongoAvailable != available
+	a.anlfMongoAvailable = available
+	return changed
+}
+
+func (a *NwdafApp) updateMtlfSourceSelection(selection backend.DataSourceSelection) bool {
+	a.backendSyncMu.Lock()
+	defer a.backendSyncMu.Unlock()
+	changed := a.mtlfSourceSelection != selection
+	a.mtlfSourceSelection = selection
+	return changed
 }
 
 func (a *NwdafApp) logOAuthCertificateState() {
@@ -469,8 +496,6 @@ func (a *NwdafApp) stopOwnedServers() {
 
 func (a *NwdafApp) terminateProcedure() {
 	logger.MainLog.Infof("Terminating NWDAF...")
-
-	a.anlfCoordinator.StopObservationDelivery()
 
 	a.deregisterFromNrf()
 

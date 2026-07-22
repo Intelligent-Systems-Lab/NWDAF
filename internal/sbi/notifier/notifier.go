@@ -24,6 +24,11 @@ type ReportDispatcher struct {
 func NewReportDispatcher(baseCtx context.Context) *ReportDispatcher {
 	return &ReportDispatcher{
 		baseCtx: baseCtx,
-		client:  &http.Client{Timeout: 10 * time.Second},
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}
 }

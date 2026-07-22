@@ -5,13 +5,45 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"path"
 	"strings"
 	"time"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/openapi/models"
 )
+
+const maxAdrfStandardBodyBytes = 4 * 1024 * 1024
+
+type StandardAdrfResponse struct {
+	StatusCode  int
+	Location    string
+	ContentType string
+	Body        []byte
+}
+
+type StandardAdrfError struct {
+	StatusCode     int
+	ProblemDetails models.ProblemDetails
+}
+
+func (e *StandardAdrfError) Error() string {
+	return fmt.Sprintf("ADRF Data Management request failed: status=%d", e.StatusCode)
+}
+
+func (e *StandardAdrfError) HTTPStatusCode() int {
+	return e.StatusCode
+}
+
+func (e *StandardAdrfError) StandardProblemDetails() *models.ProblemDetails {
+	problem := e.ProblemDetails
+	if problem.Status == 0 {
+		problem.Status = int32(e.StatusCode)
+	}
+	return &problem
+}
 
 const (
 	AdrfDataStoreRecordsPath           = "/nadrf-datamanagement/v1/data-store-records"
@@ -51,6 +83,7 @@ type AdrfDataSubscription struct {
 // to avoid importing processor types.
 type AdrfDataNotification struct {
 	UpfEventNotifs []json.RawMessage `json:"upfEventNotifs"`
+	SmfEventNotifs []json.RawMessage `json:"smfEventNotifs,omitempty"`
 }
 
 // NadrfDataStoreRecord is the request body for StorageRequest (TS 29.575).
@@ -142,6 +175,85 @@ func (c *AdrfClient) StorageRequest(
 	location := resp.Header.Get("Location")
 	storeTransId := path.Base(location)
 	return storeTransId, nil
+}
+
+func (c *AdrfClient) ExecuteStandardStorageRequest(
+	ctx context.Context,
+	body []byte,
+) (*StandardAdrfResponse, error) {
+	requestCtx, cancel, err := timeoutContextFromParent(ctx, adrfStorageTimeout, "ADRF storage request")
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	requestURL := strings.TrimRight(c.endpoint, "/") + AdrfDataStoreRecordsPath
+	request, err := http.NewRequestWithContext(
+		requestCtx,
+		http.MethodPost,
+		requestURL,
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build ADRF storage request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("send ADRF storage request: %w", err)
+	}
+	responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, maxAdrfStandardBodyBytes+1))
+	closeErr := response.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("read ADRF storage response: %w", readErr)
+	}
+	if len(responseBody) > maxAdrfStandardBodyBytes {
+		return nil, fmt.Errorf("ADRF storage response exceeds transport limit")
+	}
+	if closeErr != nil {
+		consumerLog.Debugf("failed to close ADRF storage response: %v", closeErr)
+	}
+	standardResponse := &StandardAdrfResponse{
+		StatusCode:  response.StatusCode,
+		Location:    response.Header.Get("Location"),
+		ContentType: response.Header.Get("Content-Type"),
+		Body:        responseBody,
+	}
+	if response.StatusCode != http.StatusCreated {
+		problem := models.ProblemDetails{
+			Status: int32(response.StatusCode),
+			Title:  http.StatusText(response.StatusCode),
+		}
+		if unmarshalErr := json.Unmarshal(responseBody, &problem); unmarshalErr != nil {
+			problem.Detail = strings.TrimSpace(string(responseBody))
+		}
+		return standardResponse, &StandardAdrfError{
+			StatusCode:     response.StatusCode,
+			ProblemDetails: problem,
+		}
+	}
+	if standardResponse.Location == "" {
+		return nil, fmt.Errorf("malformed ADRF storage response: Location is required")
+	}
+	if !isJSONMediaType(standardResponse.ContentType) {
+		return nil, fmt.Errorf("malformed ADRF storage response: Content-Type must be application/json")
+	}
+	if len(standardResponse.Body) == 0 {
+		return nil, fmt.Errorf("malformed ADRF storage response: representation is required")
+	}
+	var record NadrfDataStoreRecord
+	if decodeErr := json.Unmarshal(standardResponse.Body, &record); decodeErr != nil {
+		return nil, fmt.Errorf("decode ADRF storage representation: %w", decodeErr)
+	}
+	if len(record.DataSub) == 0 || record.DataNotif == nil ||
+		(len(record.DataNotif.UpfEventNotifs) == 0 && len(record.DataNotif.SmfEventNotifs) == 0) {
+		return nil, fmt.Errorf("malformed ADRF storage response: dataSub and a supported dataNotif array are required")
+	}
+	return standardResponse, nil
+}
+
+func isJSONMediaType(value string) bool {
+	mediaType := strings.ToLower(strings.TrimSpace(strings.SplitN(value, ";", 2)[0]))
+	return mediaType == "application/json"
 }
 
 // RetrievalSubscribe creates an ADRF retrieval subscription for a specific SUPI.

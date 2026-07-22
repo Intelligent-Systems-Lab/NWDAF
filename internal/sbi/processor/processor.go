@@ -11,6 +11,7 @@ import (
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/app"
 	"github.com/free5gc/nwdaf/pkg/factory"
+	"github.com/free5gc/openapi/models"
 )
 
 type NwdafApp interface {
@@ -30,12 +31,27 @@ type anlfCoordinator interface {
 	EnqueueObservations(sourceID string, observations []contract.SourceObservation) bool
 }
 
+type eventsSubscriptionBackend interface {
+	CreateEventsSubscription(
+		context.Context,
+		*models.NnwdafEventsSubscription,
+	) (*models.NnwdafEventsSubscription, string, error)
+	ReplaceEventsSubscription(
+		context.Context,
+		string,
+		*models.NnwdafEventsSubscription,
+	) (*models.NnwdafEventsSubscription, error)
+	DeleteEventsSubscription(context.Context, string) error
+	RefreshBackendSync()
+}
+
 type Processor struct {
-	nwdaf      NwdafApp
-	wg         *sync.WaitGroup
-	anlf       anlfCoordinator
-	mtlf       *mtlf.MtlfService
-	adrfBuffer *adrfBuffer
+	nwdaf         NwdafApp
+	wg            *sync.WaitGroup
+	anlf          anlfCoordinator
+	eventsBackend eventsSubscriptionBackend
+	eventsMu      sync.Mutex
+	mtlf          *mtlf.MtlfService
 }
 
 func (p *Processor) config() *factory.Config {
@@ -52,20 +68,12 @@ func NewProcessor(nwdaf NwdafApp, coordinator anlfCoordinator, mtlfService *mtlf
 		mtlf:  mtlfService,
 	}
 
-	// ADRF buffer: forward UPF notifications to ADRF for retrain dataset.
-	if c := p.nwdaf.Consumer(); c != nil {
-		if adrf := c.AdrfClient(); adrf != nil {
-			threshold := 1
-			if cfg := p.nwdaf.Config(); cfg != nil && cfg.Configuration != nil {
-				threshold = cfg.Configuration.Adrf.StorageThresholdOrDefault()
-			}
-			p.adrfBuffer = newAdrfBuffer(threshold, p.nwdaf.CancelContext(), adrf)
-			logger.ProcLog.Infof("ADRF buffer initialized: threshold=%d", threshold)
-		}
-	}
-
 	logger.ProcLog.Info("Processor initialized")
 	return p
+}
+
+func (p *Processor) SetEventsSubscriptionBackend(backend eventsSubscriptionBackend) {
+	p.eventsBackend = backend
 }
 
 // SetWaitGroup stores the application WaitGroup for goroutine lifecycle management.

@@ -54,35 +54,6 @@ func (mr *MockSmfServiceClientMockRecorder) HTTPClient() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HTTPClient", reflect.TypeOf((*MockSmfServiceClient)(nil).HTTPClient))
 }
 
-// SubscribeToSmf mocks base method.
-func (m *MockSmfServiceClient) SubscribeToSmf(ctx context.Context, smfEndpoint string, opts SmfSubscriptionOptions) (string, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SubscribeToSmf", ctx, smfEndpoint, opts)
-	ret0, _ := ret[0].(string)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// SubscribeToSmf indicates an expected call of SubscribeToSmf.
-func (mr *MockSmfServiceClientMockRecorder) SubscribeToSmf(ctx, smfEndpoint, opts any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubscribeToSmf", reflect.TypeOf((*MockSmfServiceClient)(nil).SubscribeToSmf), ctx, smfEndpoint, opts)
-}
-
-// UnsubscribeFromSmf mocks base method.
-func (m *MockSmfServiceClient) UnsubscribeFromSmf(ctx context.Context, smfEndpoint, subscriptionId string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UnsubscribeFromSmf", ctx, smfEndpoint, subscriptionId)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// UnsubscribeFromSmf indicates an expected call of UnsubscribeFromSmf.
-func (mr *MockSmfServiceClientMockRecorder) UnsubscribeFromSmf(ctx, smfEndpoint, subscriptionId any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnsubscribeFromSmf", reflect.TypeOf((*MockSmfServiceClient)(nil).UnsubscribeFromSmf), ctx, smfEndpoint, subscriptionId)
-}
-
 // MockMtlfServiceClient is a mock of MtlfServiceClient interface.
 type MockMtlfServiceClient struct {
 	ctrl     *gomock.Controller

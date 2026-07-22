@@ -10,15 +10,6 @@ import (
 	"github.com/free5gc/nwdaf/internal/anlf/processor"
 )
 
-func (s *Server) runtimeCompletionRoutes() []Route {
-	return []Route{{
-		Name:    "HandleRuntimeCompletion",
-		Method:  http.MethodPost,
-		Pattern: "/subscriptions/:subscriptionId/runtime-completions",
-		APIFunc: s.HandleRuntimeCompletion,
-	}}
-}
-
 func (s *Server) HandleRuntimeCompletion(c *gin.Context) {
 	subscriptionID := c.Param("subscriptionId")
 	var event contract.RuntimeCompletionEvent

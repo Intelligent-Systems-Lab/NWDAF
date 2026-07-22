@@ -1,6 +1,7 @@
 package consumer
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -78,6 +79,86 @@ func TestAdrfClient_StorageRequest(t *testing.T) {
 	}
 	if !gock.IsDone() {
 		t.Fatal("expected ADRF storage request to match gock expectation")
+	}
+}
+
+func TestAdrfClientExecuteStandardStorageRequestPreservesRepresentationAndLocation(t *testing.T) {
+	client := newInterceptedAdrfClient(t)
+	body := []byte(
+		`{"dataSub":[{"smfDataSub":{"notifId":"corr-a"}}],` +
+			`"dataNotif":{"upfEventNotifs":[{"correlationId":"corr-a"}]}}`,
+	)
+	gock.New(testAdrfEndpoint).
+		Post(AdrfDataStoreRecordsPath).
+		BodyString(string(body)).
+		Reply(http.StatusCreated).
+		SetHeader("Location", testAdrfEndpoint+AdrfDataStoreRecordsPath+"/store-a").
+		SetHeader("Content-Type", "application/json").
+		BodyString(string(body))
+
+	response, err := client.ExecuteStandardStorageRequest(context.Background(), body)
+	if err != nil {
+		t.Fatalf("ExecuteStandardStorageRequest() error = %v", err)
+	}
+	if response.StatusCode != http.StatusCreated ||
+		response.Location != testAdrfEndpoint+AdrfDataStoreRecordsPath+"/store-a" ||
+		!bytes.Equal(response.Body, body) {
+		t.Fatalf("response = %+v", response)
+	}
+	if !gock.IsDone() {
+		t.Fatal("expected standard ADRF storage request to match")
+	}
+}
+
+func TestAdrfClientExecuteStandardStorageRequestRejectsMalformedCreatedRepresentation(t *testing.T) {
+	body := []byte(
+		`{"dataSub":[{"smfDataSub":{"notifId":"corr-a"}}],` +
+			`"dataNotif":{"upfEventNotifs":[{"correlationId":"corr-a"}]}}`,
+	)
+
+	for _, test := range []struct {
+		name        string
+		location    string
+		contentType string
+		response    string
+	}{
+		{name: "missing location", contentType: "application/json", response: string(body)},
+		{
+			name:     "missing content type",
+			location: testAdrfEndpoint + AdrfDataStoreRecordsPath + "/store-a",
+			response: string(body),
+		},
+		{
+			name:        "malformed body",
+			location:    testAdrfEndpoint + AdrfDataStoreRecordsPath + "/store-a",
+			contentType: "application/json",
+			response:    "{",
+		},
+		{
+			name:        "missing notification",
+			location:    testAdrfEndpoint + AdrfDataStoreRecordsPath + "/store-a",
+			contentType: "application/json",
+			response:    `{"dataSub":[{}]}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := newInterceptedAdrfClient(t)
+			request := gock.New(testAdrfEndpoint).
+				Post(AdrfDataStoreRecordsPath).
+				Reply(http.StatusCreated)
+			if test.location != "" {
+				request.SetHeader("Location", test.location)
+			}
+			if test.contentType != "" {
+				request.SetHeader("Content-Type", test.contentType)
+			}
+			request.BodyString(test.response)
+
+			response, err := client.ExecuteStandardStorageRequest(context.Background(), body)
+			if err == nil || response != nil {
+				t.Fatalf("response=%+v err=%v, want contract failure", response, err)
+			}
+		})
 	}
 }
 

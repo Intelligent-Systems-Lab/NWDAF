@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/free5gc/nwdaf/internal/anlf/contract"
+	"github.com/free5gc/nwdaf/internal/backend"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
@@ -15,6 +16,7 @@ import (
 type fakeAvailabilityGate struct {
 	usable    bool
 	markCalls int
+	snapshot  backend.Snapshot
 }
 
 func (g *fakeAvailabilityGate) Usable() bool { return g.usable }
@@ -22,6 +24,55 @@ func (g *fakeAvailabilityGate) Usable() bool { return g.usable }
 func (g *fakeAvailabilityGate) MarkUnavailable(string) {
 	g.usable = false
 	g.markCalls++
+}
+
+func (g *fakeAvailabilityGate) Snapshot() backend.Snapshot { return g.snapshot }
+
+func TestReplaceSmfResourceAssociationsRejectsStaleProcessAndMirrorsCurrentProcess(t *testing.T) {
+	nwdaf_context.Init()
+	nwdafContext := nwdaf_context.GetSelf()
+	if !nwdafContext.AddSmfPeerResourceRoute(&nwdaf_context.SmfPeerResourceRoute{
+		SubscriptionID:   "peer-a",
+		ResourceLocation: "http://smf.example/subscriptions/peer-a",
+		TargetAPIBaseURI: "http://smf.example",
+	}) {
+		t.Fatal("could not add SMF peer route")
+	}
+	processID := "fa4f6f99-436a-4381-9f20-dfceaa587480"
+	gate := &fakeAvailabilityGate{
+		usable: true,
+		snapshot: backend.Snapshot{
+			State:             backend.StateUsable,
+			ProcessInstanceID: processID,
+		},
+	}
+	service := New(
+		testNwdafApp{ctx: context.Background()},
+		&fakeAnlfBackendClient{},
+		NewObservationDelivery(context.Background(), nil, nil),
+		gate,
+	)
+	association := backend.SmfResourceAssociation{
+		TargetAPIBaseURI:     "http://smf.example",
+		PeerSubscriptionID:   "peer-a",
+		NwdafSubscriptionIDs: []string{"5b2fcf56-d355-4b2a-90f8-335f3053164a"},
+	}
+	if err := service.ReplaceSmfResourceAssociations(backend.SmfResourceAssociationUpdate{
+		ProcessInstanceID: "8934900d-cd80-4bb7-a077-d795759ad67b",
+		SmfResources:      []backend.SmfResourceAssociation{association},
+	}); !errors.Is(err, ErrStaleBackendProcess) {
+		t.Fatalf("stale update error = %v", err)
+	}
+	if err := service.ReplaceSmfResourceAssociations(backend.SmfResourceAssociationUpdate{
+		ProcessInstanceID: processID,
+		SmfResources:      []backend.SmfResourceAssociation{association},
+	}); err != nil {
+		t.Fatalf("current update error = %v", err)
+	}
+	route, _ := nwdafContext.GetSmfPeerResourceRoute("http://smf.example", "peer-a")
+	if len(route.NwdafSubscriptionIDs) != 1 || route.NwdafSubscriptionIDs[0] != association.NwdafSubscriptionIDs[0] {
+		t.Fatalf("mirrored associations = %v", route.NwdafSubscriptionIDs)
+	}
 }
 
 type backendStatusError int

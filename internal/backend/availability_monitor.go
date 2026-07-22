@@ -14,7 +14,7 @@ type State string
 const (
 	StateUnknown     State = "UNKNOWN"
 	StatePolling     State = "POLLING"
-	StateHandshaking State = "HANDSHAKING"
+	StateSyncing     State = "SYNCING"
 	StateUnavailable State = "UNAVAILABLE"
 	StateUsable      State = "USABLE"
 )
@@ -33,7 +33,8 @@ const (
 )
 
 type ProbeResult struct {
-	Selection string
+	ProcessInstanceID string
+	Selection         string
 }
 
 type Probe func(context.Context) (ProbeResult, error)
@@ -43,6 +44,7 @@ type Snapshot struct {
 	LastSuccessfulProbe time.Time
 	LastFailure         time.Time
 	FailureCategory     string
+	ProcessInstanceID   string
 	Selection           string
 }
 
@@ -111,7 +113,9 @@ func (m *AvailabilityMonitor) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		m.setPolling()
+		if !m.Usable() {
+			m.setPolling()
+		}
 		result, err := m.probe(ctx)
 		if ctx.Err() != nil {
 			return
@@ -125,7 +129,7 @@ func (m *AvailabilityMonitor) Run(ctx context.Context) {
 				failureIndex++
 			}
 		} else {
-			m.setUsable(result.Selection)
+			m.setUsable(result.ProcessInstanceID, result.Selection)
 			failureIndex = 0
 			delay = m.options.successDelay
 		}
@@ -162,13 +166,25 @@ func (m *AvailabilityMonitor) MarkUnavailable(category string) {
 	}
 }
 
-func (m *AvailabilityMonitor) MarkHandshaking() {
+func (m *AvailabilityMonitor) MarkSyncing(processInstanceID string) {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
-	m.snapshot.State = StateHandshaking
+	if m.snapshot.State != StateUsable || m.snapshot.ProcessInstanceID != processInstanceID {
+		m.snapshot.State = StateSyncing
+	}
 	m.mu.Unlock()
+}
+
+func (m *AvailabilityMonitor) Refresh() {
+	if m == nil {
+		return
+	}
+	select {
+	case m.wake <- struct{}{}:
+	default:
+	}
 }
 
 func (m *AvailabilityMonitor) setPolling() {
@@ -182,15 +198,17 @@ func (m *AvailabilityMonitor) setUnavailable(category string) {
 	m.snapshot.State = StateUnavailable
 	m.snapshot.LastFailure = m.options.now()
 	m.snapshot.FailureCategory = category
+	m.snapshot.ProcessInstanceID = ""
 	m.snapshot.Selection = ""
 	m.mu.Unlock()
 }
 
-func (m *AvailabilityMonitor) setUsable(selection string) {
+func (m *AvailabilityMonitor) setUsable(processInstanceID, selection string) {
 	m.mu.Lock()
 	m.snapshot.State = StateUsable
 	m.snapshot.LastSuccessfulProbe = m.options.now()
 	m.snapshot.FailureCategory = ""
+	m.snapshot.ProcessInstanceID = processInstanceID
 	m.snapshot.Selection = selection
 	m.mu.Unlock()
 }

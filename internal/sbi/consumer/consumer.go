@@ -5,6 +5,7 @@ package consumer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -21,8 +22,6 @@ type nwdaf interface {
 }
 
 type SmfServiceClient interface {
-	SubscribeToSmf(ctx context.Context, smfEndpoint string, opts SmfSubscriptionOptions) (string, error)
-	UnsubscribeFromSmf(ctx context.Context, smfEndpoint string, subscriptionId string) error
 	HTTPClient() *http.Client
 }
 
@@ -47,9 +46,6 @@ type AdrfServiceAPI interface {
 }
 
 type ConsumerAPI interface {
-	DiscoverSmfEventExposure(ctx context.Context) ([]string, error)
-	SubscribeToSmf(ctx context.Context, smfEndpoint string, opts SmfSubscriptionOptions) (string, error)
-	UnsubscribeFromSmf(ctx context.Context, smfEndpoint string, subscriptionId string) error
 	SubscribeToMtlf(ctx context.Context, mtlfEndpoint string, opts MtlfSubscriptionOptions) (string, error)
 	UnsubscribeFromMtlf(ctx context.Context, mtlfEndpoint string, subscriptionId string) error
 	AdrfClient() AdrfServiceAPI
@@ -111,32 +107,8 @@ func (c *Consumer) Context() *nwdaf_context.NWDAFContext {
 	return nwdaf_context.GetSelf()
 }
 
-func (c *Consumer) SubscribeToSmf(
-	ctx context.Context,
-	smfEndpoint string,
-	opts SmfSubscriptionOptions,
-) (string, error) {
-	requestCtx, err := c.smfRequestContext(ctx)
-	if err != nil {
-		return "", err
-	}
-	return c.smfService.SubscribeToSmf(requestCtx, smfEndpoint, opts)
-}
-
-func (c *Consumer) UnsubscribeFromSmf(
-	ctx context.Context,
-	smfEndpoint string,
-	subscriptionId string,
-) error {
-	requestCtx, err := c.smfRequestContext(ctx)
-	if err != nil {
-		return err
-	}
-	return c.smfService.UnsubscribeFromSmf(requestCtx, smfEndpoint, subscriptionId)
-}
-
-func (c *Consumer) DiscoverSmfEventExposure(ctx context.Context) ([]string, error) {
-	return c.nrfService.DiscoverSmfEventExposure(ctx, c.Context())
+func (c *Consumer) DiscoverSmfProfiles(ctx context.Context) (*models.SearchResult, error) {
+	return c.nrfService.DiscoverSmfProfiles(ctx, c.Context())
 }
 
 func (c *Consumer) smfRequestContext(ctx context.Context) (context.Context, error) {
@@ -182,6 +154,19 @@ func (c *Consumer) MtlfService() MtlfServiceClient {
 
 func (c *Consumer) AdrfClient() AdrfServiceAPI {
 	return c.Adrf
+}
+
+func (c *Consumer) StoreAdrfDataRecord(
+	ctx context.Context,
+	body []byte,
+) (*StandardAdrfResponse, error) {
+	client, ok := c.Adrf.(interface {
+		ExecuteStandardStorageRequest(context.Context, []byte) (*StandardAdrfResponse, error)
+	})
+	if !ok {
+		return nil, errors.New("ADRF storage transport is unavailable")
+	}
+	return client.ExecuteStandardStorageRequest(ctx, body)
 }
 
 func (c *Consumer) RegisterNFInstance(ctx context.Context) (RegistrationResult, error) {

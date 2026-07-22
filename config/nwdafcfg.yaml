@@ -3,9 +3,6 @@ info:
   description: NWDAF initial configuration
 
 configuration:
-  mongodb:
-    name: free5gc
-    url: mongodb://127.0.0.1:27017
   nwdafName: NWDAF
   sbi:
     scheme: http         # protocol for sbi (http or https)
@@ -26,15 +23,6 @@ configuration:
       registerIPv4: 127.0.0.1
       port: 8090
 
-  # SMF Data Collection
-  smf:
-    enabled: true
-    endpointSource: nrf  # Discover every registered SMF offering nsmf-event-exposure
-    subscriptionDuration: 3600  # seconds
-    notifUris:
-      smf: http://127.0.0.1:8080/collector/notify
-      upf: http://127.0.0.1:8080/collector/upf-notify
-
   # External MTLF Integration
   externalMtlf:
     enabled: false  # Disable MTLF to use static model URL
@@ -46,31 +34,12 @@ configuration:
     enabled: true
     endpoint: http://127.0.0.1:9093  # Local AnLF backend
     requestTimeout: 5
-    observationDelivery:
-      queueCapacity: 1024
-      requestTimeout: 5
-      maxRetries: 3
-      retryInterval: 1
 
   # Private MTLF backend connection. Standard SBI remains owned by NWDAF Go.
   mtlfBackend:
     enabled: false
     endpoint: http://127.0.0.1:9092
     requestTimeout: 5
-
-  # Group ID to SUPI mapping (substitute for UDM per TS 23.502 §4.15.4.5.2)
-  groupMembership:
-    groups:
-      - groupId: "group-test-001"
-        supis:
-          - "imsi-123456789012345"
-          - "imsi-123456789012346"
-          - "imsi-123456789012347"
-      - groupId: "group-test-002"
-        supis:
-          - "imsi-123456789012348"
-          - "imsi-123456789012349"
-          - "imsi-123456789012350"
 
   # MTLF (Daisy FL Framework)
   mtlf:

@@ -8,7 +8,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	backendcontract "github.com/free5gc/nwdaf/internal/backend"
 )
+
+const testMtlfProcessInstanceID = "c11ed8a5-f093-459f-82dd-4a0fb36fb55d"
 
 func TestNewBackendClient(t *testing.T) {
 	t.Parallel()
@@ -36,6 +40,35 @@ func TestNewBackendClient(t *testing.T) {
 	}
 }
 
+func TestBackendClientSync(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/internal/v1/sync" {
+			t.Errorf("request = %s %s", request.Method, request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		if _, writeErr := writer.Write([]byte(
+			`{"processInstanceId":"` + testMtlfProcessInstanceID +
+				`","snapshotAccepted":true,"mongodbAvailable":false,"sourceSelection":{}}`,
+		)); writeErr != nil {
+			t.Errorf("Write() error = %v", writeErr)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := NewBackendClient(server.URL, time.Second, server.Client())
+	if err != nil {
+		t.Fatalf("NewBackendClient() error = %v", err)
+	}
+	response, err := client.Sync(context.Background(), backendcontract.SyncRequest{})
+	if err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if response.ProcessInstanceID != testMtlfProcessInstanceID {
+		t.Fatalf("processInstanceId = %q", response.ProcessInstanceID)
+	}
+}
+
 func TestBackendClientCheckReadiness(t *testing.T) {
 	t.Parallel()
 
@@ -44,7 +77,10 @@ func TestBackendClientCheckReadiness(t *testing.T) {
 			t.Errorf("request = %s %s", request.Method, request.URL.Path)
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		if _, writeErr := writer.Write([]byte(`{"status":"ready"}`)); writeErr != nil {
+		body := []byte(
+			`{"status":"ready","processInstanceId":"` + testMtlfProcessInstanceID + `"}`,
+		)
+		if _, writeErr := writer.Write(body); writeErr != nil {
 			t.Errorf("Write() error = %v", writeErr)
 		}
 	}))
@@ -54,102 +90,12 @@ func TestBackendClientCheckReadiness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBackendClient() error = %v", err)
 	}
-	if err = backend.CheckReadiness(context.Background()); err != nil {
+	health, err := backend.CheckReadiness(context.Background())
+	if err != nil {
 		t.Fatalf("CheckReadiness() error = %v", err)
 	}
-}
-
-func TestBackendClientSelectDataSource(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost || request.URL.Path != "/internal/v1/data-source-selection" {
-			t.Errorf("request = %s %s", request.Method, request.URL.Path)
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		if _, writeErr := writer.Write([]byte(`{"storageMode":"mongodb"}`)); writeErr != nil {
-			t.Errorf("Write() error = %v", writeErr)
-		}
-	}))
-	t.Cleanup(server.Close)
-	backend, err := NewBackendClient(server.URL, time.Second, server.Client())
-	if err != nil {
-		t.Fatalf("NewBackendClient() error = %v", err)
-	}
-	mode, err := backend.SelectDataSource(context.Background(), []DataSource{
-		DataSourceADRF,
-		DataSourceMongoDB,
-	})
-	if err != nil || mode != StorageModeMongoDB {
-		t.Fatalf("SelectDataSource() = %q, %v", mode, err)
-	}
-}
-
-func TestBackendClientSelectDataSourceRejectsConflictAndInvalidMode(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		status int
-		body   string
-		code   string
-	}{
-		{
-			name:   "unsatisfied",
-			status: http.StatusConflict,
-			body:   `{"code":"DATA_SOURCE_REQUIREMENT_UNSATISFIED","message":"missing source"}`,
-			code:   "DATA_SOURCE_REQUIREMENT_UNSATISFIED",
-		},
-		{name: "invalid mode", status: http.StatusOK, body: `{"storageMode":"unknown"}`, code: "INVALID_RESPONSE"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-				writer.WriteHeader(test.status)
-				if _, writeErr := writer.Write([]byte(test.body)); writeErr != nil {
-					t.Errorf("Write() error = %v", writeErr)
-				}
-			}))
-			t.Cleanup(server.Close)
-			backend, err := NewBackendClient(server.URL, time.Second, server.Client())
-			if err != nil {
-				t.Fatalf("NewBackendClient() error = %v", err)
-			}
-			_, err = backend.SelectDataSource(context.Background(), nil)
-			var requestErr *BackendRequestError
-			if !errors.As(err, &requestErr) || requestErr.Code != test.code {
-				t.Fatalf("SelectDataSource() error = %T %v", err, err)
-			}
-		})
-	}
-}
-
-func TestBackendClientSelectDataSourceBoundsResponseAndHonorsCancellation(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusOK)
-		if _, writeErr := writer.Write(
-			[]byte(strings.Repeat("x", maxBackendReadinessBodyBytes+1)),
-		); writeErr != nil {
-			t.Errorf("Write() error = %v", writeErr)
-		}
-	}))
-	t.Cleanup(server.Close)
-	backend, err := NewBackendClient(server.URL, time.Second, server.Client())
-	if err != nil {
-		t.Fatalf("NewBackendClient() error = %v", err)
-	}
-	if _, err = backend.SelectDataSource(context.Background(), nil); err == nil {
-		t.Fatal("SelectDataSource() oversized response error = nil")
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, err = backend.SelectDataSource(ctx, nil)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("SelectDataSource() error = %v", err)
+	if health.ProcessInstanceID != testMtlfProcessInstanceID {
+		t.Fatalf("processInstanceId = %q", health.ProcessInstanceID)
 	}
 }
 
@@ -171,7 +117,7 @@ func TestBackendClientCheckReadinessReturnsTypedStatusError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBackendClient() error = %v", err)
 	}
-	err = backend.CheckReadiness(context.Background())
+	_, err = backend.CheckReadiness(context.Background())
 	var requestErr *BackendRequestError
 	if !errors.As(err, &requestErr) {
 		t.Fatalf("CheckReadiness() error = %T %v", err, err)
@@ -198,7 +144,7 @@ func TestBackendClientCheckReadinessBoundsResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBackendClient() error = %v", err)
 	}
-	err = backend.CheckReadiness(context.Background())
+	_, err = backend.CheckReadiness(context.Background())
 	var requestErr *BackendRequestError
 	if !errors.As(err, &requestErr) || requestErr.Code != "RESPONSE_TOO_LARGE" {
 		t.Fatalf("CheckReadiness() error = %T %v", err, err)
@@ -218,7 +164,7 @@ func TestBackendClientCheckReadinessHonorsTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBackendClient() error = %v", err)
 	}
-	if err = backend.CheckReadiness(context.Background()); err == nil {
+	if _, err = backend.CheckReadiness(context.Background()); err == nil {
 		t.Fatal("CheckReadiness() error = nil")
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -236,7 +182,7 @@ func TestBackendClientCheckReadinessPreservesParentCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err = backend.CheckReadiness(ctx)
+	_, err = backend.CheckReadiness(ctx)
 	var requestErr *BackendRequestError
 	if !errors.As(err, &requestErr) {
 		t.Fatalf("CheckReadiness() error = %T %v", err, err)
@@ -254,7 +200,7 @@ func TestBackendClientCheckReadinessRequiresContext(t *testing.T) {
 		t.Fatalf("NewBackendClient() error = %v", err)
 	}
 	//nolint:staticcheck // This test verifies the client's defensive nil-context handling.
-	if err = backend.CheckReadiness(nil); err == nil {
+	if _, err = backend.CheckReadiness(nil); err == nil {
 		t.Fatal("CheckReadiness() error = nil")
 	}
 }

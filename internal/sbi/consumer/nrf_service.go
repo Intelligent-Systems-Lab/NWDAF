@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"path"
-	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +29,7 @@ import (
 const (
 	initialNRFRegistrationRetry = 2 * time.Second
 	maximumNRFRegistrationRetry = 30 * time.Second
+	httpsScheme                 = "https"
 )
 
 var ErrUnsupportedNRFRedirect = errors.New("NRF redirect is unsupported")
@@ -46,25 +46,6 @@ type NFManagementService interface {
 	DeregisterNFInstance(ctx context.Context) error
 }
 
-type discoveryQueryKey struct {
-	nrfURI          string
-	oauth2Required  bool
-	targetNFType    models.NrfNfManagementNfType
-	requesterNFType models.NrfNfManagementNfType
-	serviceName     models.ServiceName
-}
-
-type discoveryCacheEntry struct {
-	serviceRoots []string
-	expiresAt    time.Time
-}
-
-type discoveryCall struct {
-	done         chan struct{}
-	serviceRoots []string
-	err          error
-}
-
 type NrfService struct {
 	mu                  sync.Mutex
 	nfManagementClients map[string]*NFManagement.APIClient
@@ -74,10 +55,6 @@ type NrfService struct {
 	initialRetryDelay   time.Duration
 	maximumRetryDelay   time.Duration
 	now                 func() time.Time
-
-	discoveryMu       sync.Mutex
-	discoveryCache    map[discoveryQueryKey]discoveryCacheEntry
-	discoveryInFlight map[discoveryQueryKey]*discoveryCall
 }
 
 func newNrfService() *NrfService {
@@ -89,8 +66,6 @@ func newNrfService() *NrfService {
 		initialRetryDelay:   initialNRFRegistrationRetry,
 		maximumRetryDelay:   maximumNRFRegistrationRetry,
 		now:                 time.Now,
-		discoveryCache:      make(map[discoveryQueryKey]discoveryCacheEntry),
-		discoveryInFlight:   make(map[discoveryQueryKey]*discoveryCall),
 	}
 }
 
@@ -199,7 +174,7 @@ func newNRFHTTPClient(nrfURI string) (*http.Client, error) {
 		) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, addr)
 		}
-	case "https":
+	case httpsScheme:
 		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	default:
 		return nil, fmt.Errorf("unsupported NRF URI scheme %q", parsed.Scheme)
@@ -214,109 +189,46 @@ func newNRFHTTPClient(nrfURI string) (*http.Client, error) {
 	}, nil
 }
 
-func (s *NrfService) DiscoverSmfEventExposure(
+type NFDiscoveryError struct {
+	StatusCode     int
+	Location       string
+	ProblemDetails models.ProblemDetails
+}
+
+func (e *NFDiscoveryError) Error() string {
+	return fmt.Sprintf("NRF NF discovery failed: status=%d", e.StatusCode)
+}
+
+func (e *NFDiscoveryError) HTTPStatusCode() int {
+	return e.StatusCode
+}
+
+func (e *NFDiscoveryError) StandardProblemDetails() *models.ProblemDetails {
+	problem := e.ProblemDetails
+	if problem.Status == 0 {
+		problem.Status = int32(e.StatusCode)
+	}
+	return &problem
+}
+
+func (e *NFDiscoveryError) RedirectLocation() string {
+	return e.Location
+}
+
+// DiscoverSmfProfiles performs the standard SMF NFDiscovery query and returns
+// the complete SearchResult. Candidate selection and validity caching belong to
+// the AnLF backend on this boundary.
+func (s *NrfService) DiscoverSmfProfiles(
 	ctx context.Context,
 	nwdafCtx *nwdaf_context.NWDAFContext,
-) ([]string, error) {
-	if ctx == nil {
-		return nil, errors.New("discover SMF Event Exposure requires context")
-	}
+) (*models.SearchResult, error) {
 	if nwdafCtx == nil {
-		return nil, errors.New("discover SMF Event Exposure requires NWDAF context")
+		return nil, errors.New("NWDAF context is unavailable")
 	}
-
-	state := nwdafCtx.RegistrationState()
-	key := discoveryQueryKey{
-		nrfURI:          nwdafCtx.NrfUri(),
-		oauth2Required:  state.OAuth2Required,
-		targetNFType:    models.NrfNfManagementNfType_SMF,
-		requesterNFType: models.NrfNfManagementNfType_NWDAF,
-		serviceName:     models.ServiceName_NSMF_EVENT_EXPOSURE,
-	}
-	if key.nrfURI == "" {
-		return nil, errors.New("discover SMF Event Exposure requires NRF URI")
-	}
-
-	now := time.Now
-	if s.now != nil {
-		now = s.now
-	}
-	s.discoveryMu.Lock()
-	if cached, ok := s.discoveryCache[key]; ok {
-		if now().Before(cached.expiresAt) {
-			roots := append([]string(nil), cached.serviceRoots...)
-			s.discoveryMu.Unlock()
-			consumerLog.Debugf("NRF SMF discovery cache hit: service=%s endpoints=%d", key.serviceName, len(roots))
-			return roots, nil
-		}
-		delete(s.discoveryCache, key)
-		consumerLog.Debugf("NRF SMF discovery cache expired: service=%s", key.serviceName)
-	}
-	if inFlight, ok := s.discoveryInFlight[key]; ok {
-		s.discoveryMu.Unlock()
-		consumerLog.Debugf("NRF SMF discovery waiting for in-flight query: service=%s", key.serviceName)
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("discover SMF Event Exposure canceled while waiting: %w", ctx.Err())
-		case <-inFlight.done:
-			return append([]string(nil), inFlight.serviceRoots...), inFlight.err
-		}
-	}
-	inFlight := &discoveryCall{done: make(chan struct{})}
-	s.discoveryInFlight[key] = inFlight
-	s.discoveryMu.Unlock()
-	consumerLog.Debugf("NRF SMF discovery cache miss: service=%s", key.serviceName)
-
-	var (
-		serviceRoots   []string
-		validityPeriod time.Duration
-		discoveryErr   error
-	)
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			discoveryErr = fmt.Errorf("discover SMF Event Exposure panicked: %v", recovered)
-			s.completeDiscovery(key, inFlight, nil, 0, discoveryErr, now())
-			panic(recovered)
-		}
-		s.completeDiscovery(key, inFlight, serviceRoots, validityPeriod, discoveryErr, now())
-	}()
-
-	serviceRoots, validityPeriod, discoveryErr = s.searchSmfEventExposure(ctx, nwdafCtx)
-	return append([]string(nil), serviceRoots...), discoveryErr
-}
-
-func (s *NrfService) completeDiscovery(
-	key discoveryQueryKey,
-	inFlight *discoveryCall,
-	serviceRoots []string,
-	validityPeriod time.Duration,
-	discoveryErr error,
-	receivedAt time.Time,
-) {
-	s.discoveryMu.Lock()
-	defer s.discoveryMu.Unlock()
-
-	if discoveryErr == nil && validityPeriod > 0 {
-		s.discoveryCache[key] = discoveryCacheEntry{
-			serviceRoots: append([]string(nil), serviceRoots...),
-			expiresAt:    receivedAt.Add(validityPeriod),
-		}
-	}
-	inFlight.serviceRoots = append([]string(nil), serviceRoots...)
-	inFlight.err = discoveryErr
-	delete(s.discoveryInFlight, key)
-	close(inFlight.done)
-}
-
-func (s *NrfService) searchSmfEventExposure(
-	ctx context.Context,
-	nwdafCtx *nwdaf_context.NWDAFContext,
-) ([]string, time.Duration, error) {
 	client, err := s.getNFDiscoveryClient(nwdafCtx.NrfUri())
 	if err != nil {
-		return nil, 0, fmt.Errorf("create NRF NFDiscovery client: %w", err)
+		return nil, fmt.Errorf("create NRF NFDiscovery client: %w", err)
 	}
-
 	requestCtx := ctx
 	if nwdafCtx.RegistrationState().OAuth2Required {
 		requestCtx, err = s.getTokenContext(
@@ -326,91 +238,48 @@ func (s *NrfService) searchSmfEventExposure(
 			models.NrfNfManagementNfType_NRF,
 		)
 		if err != nil {
-			return nil, 0, fmt.Errorf("authorize NRF SMF discovery: %w", err)
+			return nil, fmt.Errorf("authorize NRF SMF discovery: %w", err)
 		}
 	}
-
 	request := &NFDiscovery.SearchNFInstancesRequest{}
 	request.SetTargetNfType(models.NrfNfManagementNfType_SMF)
 	request.SetRequesterNfType(models.NrfNfManagementNfType_NWDAF)
+	request.SetRequesterNfInstanceId(nwdafCtx.NfId)
 	request.SetServiceNames([]models.ServiceName{models.ServiceName_NSMF_EVENT_EXPOSURE})
 
 	response, searchErr := client.NFInstancesStoreApi.SearchNFInstances(requestCtx, request)
 	if searchErr != nil {
 		if ctx.Err() != nil {
-			return nil, 0, fmt.Errorf("NRF SMF discovery canceled: %w", ctx.Err())
+			return nil, fmt.Errorf("NRF SMF discovery canceled: %w", ctx.Err())
 		}
 		var apiErr openapi.GenericOpenAPIError
 		if errors.As(searchErr, &apiErr) {
-			switch apiErr.ErrorStatus {
-			case http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
-				return nil, 0, fmt.Errorf("%w: status=%d", ErrUnsupportedNRFRedirect, apiErr.ErrorStatus)
-			default:
-				return nil, 0, fmt.Errorf("NRF SMF discovery failed: status=%d", apiErr.ErrorStatus)
+			standardError := &NFDiscoveryError{StatusCode: apiErr.ErrorStatus}
+			switch model := apiErr.Model().(type) {
+			case NFDiscovery.SearchNFInstancesError:
+				standardError.Location = model.Location
+				standardError.ProblemDetails = model.ProblemDetails
+			case *NFDiscovery.SearchNFInstancesError:
+				if model != nil {
+					standardError.Location = model.Location
+					standardError.ProblemDetails = model.ProblemDetails
+				}
+			case models.ProblemDetails:
+				standardError.ProblemDetails = model
+			case *models.ProblemDetails:
+				if model != nil {
+					standardError.ProblemDetails = *model
+				}
 			}
+			return nil, standardError
 		}
-		return nil, 0, fmt.Errorf("NRF SMF discovery failed: %w", searchErr)
+		return nil, fmt.Errorf("NRF SMF discovery failed: %w", searchErr)
 	}
 	if response == nil {
-		return nil, 0, errors.New("malformed NRF SMF discovery success: response is nil")
+		return nil, errors.New("malformed NRF SMF discovery success: response is nil")
 	}
-
-	serviceRoots := make([]string, 0, len(response.SearchResult.NfInstances))
-	seen := make(map[string]struct{})
-	for i := range response.SearchResult.NfInstances {
-		root := openapi.GetNFServiceUri(
-			&response.SearchResult.NfInstances[i],
-			models.ServiceName_NSMF_EVENT_EXPOSURE,
-		)
-		root = strings.TrimRight(strings.TrimSpace(root), "/")
-		if !usableServiceRoot(root) {
-			continue
-		}
-		if _, ok := seen[root]; ok {
-			continue
-		}
-		seen[root] = struct{}{}
-		serviceRoots = append(serviceRoots, root)
-	}
-	if len(serviceRoots) == 0 {
-		return nil, 0, errors.New("NRF SMF discovery returned no usable nsmf-event-exposure service roots")
-	}
-
-	consumerLog.Infof(
-		"NRF SMF discovery succeeded: nrfUri=%s profiles=%d endpoints=%d service=%s",
-		safeURIForLog(nwdafCtx.NrfUri()),
-		len(response.SearchResult.NfInstances),
-		len(serviceRoots),
-		models.ServiceName_NSMF_EVENT_EXPOSURE,
-	)
-	validityPeriod := time.Duration(response.SearchResult.ValidityPeriod) * time.Second
-	if response.SearchResult.ValidityPeriod <= 0 {
-		validityPeriod = 0
-	}
-	return serviceRoots, validityPeriod, nil
-}
-
-func usableServiceRoot(raw string) bool {
-	if raw == "" {
-		return false
-	}
-	parsed, err := url.ParseRequestURI(raw)
-	if err != nil || parsed.User != nil || parsed.Hostname() == "" ||
-		parsed.RawQuery != "" || parsed.Fragment != "" {
-		return false
-	}
-	return parsed.Scheme == "http" || parsed.Scheme == "https"
-}
-
-func safeURIForLog(raw string) string {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return "<invalid>"
-	}
-	parsed.User = nil
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	return parsed.String()
+	result := response.SearchResult
+	return &result, nil
 }
 
 func (s *NrfService) RegisterNFInstance(

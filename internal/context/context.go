@@ -1,6 +1,7 @@
 package context
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"strings"
@@ -27,6 +28,8 @@ func Init() {
 		NfId:                uuid.New().String(),
 		nfServiceInstanceId: uuid.New().String(),
 		subscriptions:       make(map[string]*Subscription),
+		analyticsRoutes:     make(map[string]AnalyticsSubscriptionRoute),
+		smfPeerRoutes:       make(map[string]SmfPeerResourceRoute),
 	}
 	logger.CtxLog.Infof("NWDAF Context initialized with NfId: %s", nwdafContext.NfId)
 }
@@ -50,8 +53,11 @@ type NWDAFContext struct {
 	heartBeatTimer      int32
 
 	// Subscriptions storage (NWDAF consumer subscriptions)
-	mu            sync.RWMutex
-	subscriptions map[string]*Subscription
+	mu              sync.RWMutex
+	subscriptions   map[string]*Subscription
+	analyticsRoutes map[string]AnalyticsSubscriptionRoute
+	smfPeerMu       sync.RWMutex
+	smfPeerRoutes   map[string]SmfPeerResourceRoute
 
 	// NWDAF subscription resources: nwdafSubId → []NwdafSubResource
 	// Tracks SMF resources per NWDAF subscription for:
@@ -80,18 +86,226 @@ type NWDAFContext struct {
 	// Tracks ML model state per subscription for ML-based analytics
 	mlModelInfoStore sync.Map
 
-	// --- Group Resolution ---
-
-	// GroupResolver for resolving Group ID → SUPI list
-	// Per TS 23.502 §4.15.4.5.2
-	groupResolver *GroupResolver
-
 	// ADRF SMF info: correlationId → *AdrfSmfInfo
 	// Captures SMF subscription parameters at subscription time for ADRF storage.
 	adrfSmfInfos sync.Map
 
 	// Sequential correlation ID counter
 	correlationIdCounter atomic.Int64
+}
+
+type SmfPeerResourceRoute struct {
+	SubscriptionID           string
+	ResourceLocation         string
+	TargetAPIBaseURI         string
+	CorrelationID            string
+	AcceptedSubscription     models.NsmfEventExposure
+	AcceptedSubscriptionJSON json.RawMessage
+	PendingCleanup           bool
+	NwdafSubscriptionIDs     []string
+}
+
+type SmfPeerResourceAssociation struct {
+	TargetAPIBaseURI     string
+	PeerSubscriptionID   string
+	NwdafSubscriptionIDs []string
+}
+
+func (c *NWDAFContext) AddSmfPeerResourceRoute(route *SmfPeerResourceRoute) bool {
+	if route == nil {
+		return false
+	}
+	key := smfPeerResourceRouteKey(route.TargetAPIBaseURI, route.SubscriptionID)
+	if c == nil || key == "" || route.ResourceLocation == "" {
+		return false
+	}
+	c.smfPeerMu.Lock()
+	defer c.smfPeerMu.Unlock()
+	if c.smfPeerRoutes == nil {
+		c.smfPeerRoutes = make(map[string]SmfPeerResourceRoute)
+	}
+	if _, exists := c.smfPeerRoutes[key]; exists {
+		return false
+	}
+	stored := *route
+	stored.NwdafSubscriptionIDs = append([]string(nil), route.NwdafSubscriptionIDs...)
+	c.smfPeerRoutes[key] = stored
+	return true
+}
+
+func (c *NWDAFContext) GetSmfPeerResourceRoute(
+	targetAPIBaseURI string,
+	id string,
+) (SmfPeerResourceRoute, bool) {
+	if c == nil {
+		return SmfPeerResourceRoute{}, false
+	}
+	c.smfPeerMu.RLock()
+	defer c.smfPeerMu.RUnlock()
+	route, exists := c.smfPeerRoutes[smfPeerResourceRouteKey(targetAPIBaseURI, id)]
+	route.NwdafSubscriptionIDs = append([]string(nil), route.NwdafSubscriptionIDs...)
+	return route, exists
+}
+
+func (c *NWDAFContext) UpdateSmfPeerResourceRoute(route *SmfPeerResourceRoute) bool {
+	if route == nil {
+		return false
+	}
+	key := smfPeerResourceRouteKey(route.TargetAPIBaseURI, route.SubscriptionID)
+	if c == nil || key == "" {
+		return false
+	}
+	c.smfPeerMu.Lock()
+	defer c.smfPeerMu.Unlock()
+	if _, exists := c.smfPeerRoutes[key]; !exists {
+		return false
+	}
+	stored := *route
+	stored.NwdafSubscriptionIDs = append([]string(nil), route.NwdafSubscriptionIDs...)
+	c.smfPeerRoutes[key] = stored
+	return true
+}
+
+func (c *NWDAFContext) ReplaceSmfPeerResourceAssociations(
+	associations []SmfPeerResourceAssociation,
+) bool {
+	if c == nil {
+		return false
+	}
+	c.smfPeerMu.Lock()
+	defer c.smfPeerMu.Unlock()
+
+	updates := make(map[string][]string, len(associations))
+	for _, association := range associations {
+		key := smfPeerResourceRouteKey(
+			association.TargetAPIBaseURI,
+			association.PeerSubscriptionID,
+		)
+		if key == "" {
+			return false
+		}
+		if _, duplicate := updates[key]; duplicate {
+			return false
+		}
+		if _, exists := c.smfPeerRoutes[key]; !exists {
+			return false
+		}
+		updates[key] = append([]string(nil), association.NwdafSubscriptionIDs...)
+	}
+
+	for key := range c.smfPeerRoutes {
+		route := c.smfPeerRoutes[key]
+		route.NwdafSubscriptionIDs = append([]string(nil), updates[key]...)
+		route.PendingCleanup = len(route.NwdafSubscriptionIDs) == 0
+		c.smfPeerRoutes[key] = route
+	}
+	return true
+}
+
+func (c *NWDAFContext) DeleteSmfPeerResourceRoute(targetAPIBaseURI string, id string) bool {
+	if c == nil {
+		return false
+	}
+	key := smfPeerResourceRouteKey(targetAPIBaseURI, id)
+	c.smfPeerMu.Lock()
+	defer c.smfPeerMu.Unlock()
+	if _, exists := c.smfPeerRoutes[key]; !exists {
+		return false
+	}
+	delete(c.smfPeerRoutes, key)
+	return true
+}
+
+func smfPeerResourceRouteKey(targetAPIBaseURI string, id string) string {
+	targetAPIBaseURI = strings.TrimRight(strings.TrimSpace(targetAPIBaseURI), "/")
+	id = strings.TrimSpace(id)
+	if targetAPIBaseURI == "" || id == "" {
+		return ""
+	}
+	return targetAPIBaseURI + "\x00" + id
+}
+
+func (c *NWDAFContext) GetAllSmfPeerResourceRoutes() []*SmfPeerResourceRoute {
+	if c == nil {
+		return nil
+	}
+	c.smfPeerMu.RLock()
+	defer c.smfPeerMu.RUnlock()
+	routes := make([]*SmfPeerResourceRoute, 0, len(c.smfPeerRoutes))
+	for key := range c.smfPeerRoutes {
+		route := c.smfPeerRoutes[key]
+		route.NwdafSubscriptionIDs = append([]string(nil), route.NwdafSubscriptionIDs...)
+		routes = append(routes, &route)
+	}
+	return routes
+}
+
+type AnalyticsSubscriptionRoute struct {
+	SubscriptionID          string
+	ExternalNotificationURI string
+	AcceptedSubscription    models.NnwdafEventsSubscription
+}
+
+func (c *NWDAFContext) AddAnalyticsSubscriptionRoute(route AnalyticsSubscriptionRoute) bool {
+	if c == nil || route.SubscriptionID == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.analyticsRoutes[route.SubscriptionID]; exists {
+		return false
+	}
+	c.analyticsRoutes[route.SubscriptionID] = route
+	return true
+}
+
+func (c *NWDAFContext) UpdateAnalyticsSubscriptionRoute(route AnalyticsSubscriptionRoute) bool {
+	if c == nil || route.SubscriptionID == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.analyticsRoutes[route.SubscriptionID]; !exists {
+		return false
+	}
+	c.analyticsRoutes[route.SubscriptionID] = route
+	return true
+}
+
+func (c *NWDAFContext) GetAnalyticsSubscriptionRoute(id string) (AnalyticsSubscriptionRoute, bool) {
+	if c == nil {
+		return AnalyticsSubscriptionRoute{}, false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	route, exists := c.analyticsRoutes[id]
+	return route, exists
+}
+
+func (c *NWDAFContext) DeleteAnalyticsSubscriptionRoute(id string) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.analyticsRoutes[id]; !exists {
+		return false
+	}
+	delete(c.analyticsRoutes, id)
+	return true
+}
+
+func (c *NWDAFContext) GetAllAnalyticsSubscriptionRoutes() []AnalyticsSubscriptionRoute {
+	if c == nil {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	routes := make([]AnalyticsSubscriptionRoute, 0, len(c.analyticsRoutes))
+	for _, route := range c.analyticsRoutes {
+		routes = append(routes, route)
+	}
+	return routes
 }
 
 type NFRegistrationState struct {
@@ -423,7 +637,7 @@ func (s *Subscription) CompleteReport(reportID string, sequence int64, delivered
 	}
 	const completedReportWindow = 256
 	if len(s.deliveredReportIDs) > completedReportWindow {
-		// IDs are deterministic and old retries are bounded by PyAnLF, so clearing
+		// IDs are deterministic and old retries are bounded by the AnLF backend, so clearing
 		// the bounded process-local cache is preferable to unbounded growth.
 		s.deliveredReportIDs = map[string]struct{}{reportID: {}}
 	}
@@ -523,20 +737,6 @@ func (c *NWDAFContext) GetMlModelInfo(nwdafSubId string) *MlModelInfo {
 func (c *NWDAFContext) DeleteMlModelInfo(nwdafSubId string) {
 	c.mlModelInfoStore.Delete(nwdafSubId)
 	logger.CtxLog.Debugf("Deleted ML model info for subscription %s", nwdafSubId)
-}
-
-// ============================================================================
-// Group Resolver Methods
-// ============================================================================
-
-// SetGroupResolver sets the GroupResolver for Group ID resolution
-func (c *NWDAFContext) SetGroupResolver(resolver *GroupResolver) {
-	c.groupResolver = resolver
-}
-
-// GetGroupResolver returns the GroupResolver
-func (c *NWDAFContext) GetGroupResolver() *GroupResolver {
-	return c.groupResolver
 }
 
 // NewCorrelationId returns a sequential, predictable correlation ID (corr-1, corr-2, ...)

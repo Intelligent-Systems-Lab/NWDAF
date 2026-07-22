@@ -1,8 +1,13 @@
 package processor
 
 import (
+	"context"
+
 	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/internal/anlf/coordinator"
+	"github.com/free5gc/nwdaf/internal/backend"
+	"github.com/free5gc/nwdaf/internal/sbi/consumer"
+	"github.com/free5gc/openapi/models"
 )
 
 type mlModelProvisionWorkflow interface {
@@ -18,19 +23,62 @@ type analyticsReportDispatcher interface {
 	DispatchAnalyticsReport(subscriptionID string, report *contract.AnalyticsReport) error
 }
 
+type eventsSubscriptionNotificationDispatcher interface {
+	DispatchEventsSubscriptionNotifications(
+		[]models.NnwdafEventsSubscriptionNotification,
+		[]byte,
+	) error
+}
+
 type runtimeCompletionWorkflow interface {
 	CompleteSubscriptionRuntime(event *contract.RuntimeCompletionEvent) error
 }
 
+type nfDiscoveryProxy interface {
+	DiscoverSmfProfiles(context.Context) (*models.SearchResult, error)
+}
+
+type smfEventExposureProxy interface {
+	CreateSmfEventExposure(context.Context, string, []byte) (*consumer.StandardSmfResponse, error)
+	ReadSmfEventExposure(context.Context, string, string) (*consumer.StandardSmfResponse, error)
+	ReplaceSmfEventExposure(context.Context, string, string, []byte) (*consumer.StandardSmfResponse, error)
+	DeleteSmfEventExposure(context.Context, string, string) (*consumer.StandardSmfResponse, error)
+}
+
+type adrfStorageProxy interface {
+	StoreAdrfDataRecord(context.Context, []byte) (*consumer.StandardAdrfResponse, error)
+}
+
+type smfAssociationMirror interface {
+	ReplaceSmfResourceAssociations(backend.SmfResourceAssociationUpdate) error
+}
+
 type Processor struct {
-	workflow           mlModelProvisionWorkflow
-	accuracyWorkflow   modelAccuracyWorkflow
-	reportDispatcher   analyticsReportDispatcher
-	completionWorkflow runtimeCompletionWorkflow
+	workflow               mlModelProvisionWorkflow
+	accuracyWorkflow       modelAccuracyWorkflow
+	reportDispatcher       analyticsReportDispatcher
+	notificationDispatcher eventsSubscriptionNotificationDispatcher
+	completionWorkflow     runtimeCompletionWorkflow
+	nfDiscovery            nfDiscoveryProxy
+	smfEventExposure       smfEventExposureProxy
+	adrfStorage            adrfStorageProxy
+	associationMirror      smfAssociationMirror
 }
 
 func (p *Processor) SetModelAccuracyWorkflow(workflow modelAccuracyWorkflow) {
 	p.accuracyWorkflow = workflow
+}
+
+func (p *Processor) SetNFDiscoveryProxy(proxy nfDiscoveryProxy) {
+	p.nfDiscovery = proxy
+}
+
+func (p *Processor) SetSmfEventExposureProxy(proxy smfEventExposureProxy) {
+	p.smfEventExposure = proxy
+}
+
+func (p *Processor) SetAdrfStorageProxy(proxy adrfStorageProxy) {
+	p.adrfStorage = proxy
 }
 
 func NewProcessor(
@@ -38,11 +86,26 @@ func NewProcessor(
 	dispatchers ...analyticsReportDispatcher,
 ) *Processor {
 	processor := &Processor{workflow: workflow}
+	if associationMirror, ok := workflow.(smfAssociationMirror); ok {
+		processor.associationMirror = associationMirror
+	}
 	if completionWorkflow, ok := workflow.(runtimeCompletionWorkflow); ok {
 		processor.completionWorkflow = completionWorkflow
 	}
 	if len(dispatchers) > 0 {
 		processor.reportDispatcher = dispatchers[0]
+		if notificationDispatcher, ok := dispatchers[0].(eventsSubscriptionNotificationDispatcher); ok {
+			processor.notificationDispatcher = notificationDispatcher
+		}
 	}
 	return processor
+}
+
+func (p *Processor) ReplaceSmfResourceAssociations(
+	update backend.SmfResourceAssociationUpdate,
+) error {
+	if p.associationMirror == nil {
+		return coordinator.ErrBackendUnavailable
+	}
+	return p.associationMirror.ReplaceSmfResourceAssociations(update)
 }

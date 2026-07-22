@@ -23,11 +23,11 @@ import (
 	"testing"
 	"time"
 
-	"go.mongodb.org/mongo-driver/mongo/readpref"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
 	"github.com/free5gc/nwdaf/internal/backend"
+	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	mtlfclient "github.com/free5gc/nwdaf/internal/mtlf/client"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
@@ -35,39 +35,43 @@ import (
 	"github.com/free5gc/openapi/models"
 )
 
+func TestBuildBackendSyncRequestIncludesSmfResourceAssociations(t *testing.T) {
+	nwdaf_context.Init()
+	nwdafContext := nwdaf_context.GetSelf()
+	if !nwdafContext.AddSmfPeerResourceRoute(&nwdaf_context.SmfPeerResourceRoute{
+		SubscriptionID:           "peer-a",
+		ResourceLocation:         "http://smf.example/subscriptions/peer-a",
+		TargetAPIBaseURI:         "http://smf.example",
+		CorrelationID:            "corr-a",
+		NwdafSubscriptionIDs:     []string{"sub-a", "sub-b"},
+		AcceptedSubscriptionJSON: json.RawMessage(`{"subId":"peer-a"}`),
+	}) {
+		t.Fatal("could not add SMF peer route")
+	}
+	app := &NwdafApp{
+		nwdafCtx: nwdafContext,
+		cfg: &factory.Config{Configuration: &factory.Configuration{
+			Sbi: &factory.Sbi{Scheme: "http", RegisterIPv4: "127.0.0.1", Port: 8000},
+			Anlf: &factory.AnlfConfig{Server: &factory.AuxiliaryServerConfig{
+				RegisterIPv4: "127.0.0.1", Port: 9091,
+			}},
+		}},
+	}
+
+	snapshot := app.buildBackendSyncRequest(backend.KindAnLF)
+	if len(snapshot.SmfResources) != 1 {
+		t.Fatalf("SMF resources = %d", len(snapshot.SmfResources))
+	}
+	if got := snapshot.SmfResources[0].NwdafSubscriptionIDs; len(got) != 2 || got[0] != "sub-a" || got[1] != "sub-b" {
+		t.Fatalf("SMF resource associations = %v", got)
+	}
+}
+
 type fakeNFManagement struct {
 	registerFn   func(context.Context) (consumer.RegistrationResult, error)
 	deregisterFn func(context.Context) error
 	registers    int
 	deregisters  int
-}
-
-type fakeMongoPinger struct {
-	mu  sync.Mutex
-	err error
-}
-
-type blockingMongoPinger struct {
-	started chan struct{}
-	once    sync.Once
-}
-
-func (p *blockingMongoPinger) Ping(ctx context.Context, _ *readpref.ReadPref) error {
-	p.once.Do(func() { close(p.started) })
-	<-ctx.Done()
-	return ctx.Err()
-}
-
-func (p *fakeMongoPinger) Ping(context.Context, *readpref.ReadPref) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.err
-}
-
-func (p *fakeMongoPinger) setError(err error) {
-	p.mu.Lock()
-	p.err = err
-	p.mu.Unlock()
 }
 
 func (f *fakeNFManagement) RegisterNFInstance(ctx context.Context) (consumer.RegistrationResult, error) {
@@ -169,103 +173,111 @@ func TestBackendMonitorsRunIndependentlyAndStopWithAppContext(t *testing.T) {
 	waitForWaitGroup(t, &app.wg)
 }
 
-func TestMtlfProbeRecomputesMongoSourceInventory(t *testing.T) {
-	var inventories [][]mtlfclient.DataSource
+func TestMtlfProbeUsesUnifiedSyncDataSourceAvailability(t *testing.T) {
+	var inventories []backend.DataSourceAvailability
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
 		case "/health/ready":
-			if _, writeErr := writer.Write([]byte(`{"status":"ready"}`)); writeErr != nil {
+			if _, writeErr := writer.Write([]byte(
+				`{"status":"ready","processInstanceId":"c11ed8a5-f093-459f-82dd-4a0fb36fb55d"}`,
+			)); writeErr != nil {
 				t.Errorf("Write() error = %v", writeErr)
 			}
-		case "/internal/v1/data-source-selection":
-			var payload struct {
-				Available []mtlfclient.DataSource `json:"availableDataSources"`
-			}
+		case "/internal/v1/sync":
+			var payload backend.SyncRequest
 			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
-				t.Errorf("decode handshake: %v", err)
+				t.Errorf("decode sync: %v", err)
 			}
-			inventories = append(inventories, payload.Available)
-			if _, writeErr := writer.Write([]byte(`{"storageMode":"mongodb"}`)); writeErr != nil {
+			inventories = append(inventories, payload.DataSourceAvailability)
+			if _, writeErr := writer.Write([]byte(
+				`{"processInstanceId":"c11ed8a5-f093-459f-82dd-4a0fb36fb55d",` +
+					`"snapshotAccepted":true,"mongodbAvailable":false,"sourceSelection":{}}`,
+			)); writeErr != nil {
 				t.Errorf("Write() error = %v", writeErr)
 			}
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}
 	}))
-	t.Cleanup(server.Close)
+	t.Cleanup(func() {
+		server.CloseClientConnections()
+		server.Close()
+	})
 	client, err := mtlfclient.NewBackendClient(server.URL, time.Second, server.Client())
 	if err != nil {
 		t.Fatalf("NewBackendClient() error = %v", err)
 	}
-	pinger := &fakeMongoPinger{}
 	app := &NwdafApp{
 		cfg: &factory.Config{Configuration: &factory.Configuration{
-			Mongodb: &factory.Mongodb{Name: "free5gc", Url: "mongodb://127.0.0.1:27017"},
-			Adrf:    &factory.AdrfConfig{Url: "http://127.0.0.1:9888"},
+			Adrf: &factory.AdrfConfig{Url: "http://127.0.0.1:9888"},
 		}},
 		mtlfBackendClient: client,
-		mongoPinger:       pinger,
 		consumer: &consumer.Consumer{
 			Adrf: consumer.NewAdrfClient("http://127.0.0.1:9888"),
 		},
 	}
-
+	app.anlfMongoAvailable = true
 	if _, err = app.probeMtlfBackend(context.Background()); err != nil {
 		t.Fatalf("first probe error = %v", err)
 	}
-	pinger.setError(errors.New("mongo unavailable"))
+	app.anlfMongoAvailable = false
 	if _, err = app.probeMtlfBackend(context.Background()); err != nil {
 		t.Fatalf("second probe error = %v", err)
 	}
-	pinger.setError(nil)
-	if _, err = app.probeMtlfBackend(context.Background()); err != nil {
-		t.Fatalf("recovery probe error = %v", err)
-	}
-	if len(inventories) != 3 || len(inventories[0]) != 2 ||
-		inventories[0][0] != mtlfclient.DataSourceADRF ||
-		inventories[0][1] != mtlfclient.DataSourceMongoDB ||
-		len(inventories[1]) != 1 || inventories[1][0] != mtlfclient.DataSourceADRF ||
-		len(inventories[2]) != 2 || inventories[2][1] != mtlfclient.DataSourceMongoDB {
-		t.Fatalf("handshake inventories = %v", inventories)
+	if len(inventories) != 2 || !inventories[0].ADRF || !inventories[0].MongoDB ||
+		!inventories[1].ADRF || inventories[1].MongoDB {
+		t.Fatalf("sync inventories = %v", inventories)
 	}
 }
 
-func TestMtlfMonitorCancellationInterruptsMongoPing(t *testing.T) {
+func TestMtlfMonitorCancellationInterruptsSyncRequest(t *testing.T) {
+	syncStarted := make(chan struct{})
+	releaseSync := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/health/ready" {
+		switch request.URL.Path {
+		case "/health/ready":
+			writer.Header().Set("Content-Type", "application/json")
+			if _, writeErr := writer.Write([]byte(
+				`{"status":"ready","processInstanceId":"c11ed8a5-f093-459f-82dd-4a0fb36fb55d"}`,
+			)); writeErr != nil {
+				t.Errorf("Write() error = %v", writeErr)
+			}
+		case "/internal/v1/sync":
+			close(syncStarted)
+			select {
+			case <-request.Context().Done():
+			case <-releaseSync:
+			}
+			writer.WriteHeader(http.StatusGatewayTimeout)
+		default:
 			writer.WriteHeader(http.StatusNotFound)
-			return
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		if _, writeErr := writer.Write([]byte(`{"status":"ready"}`)); writeErr != nil {
-			t.Errorf("Write() error = %v", writeErr)
 		}
 	}))
-	t.Cleanup(server.Close)
+	t.Cleanup(func() {
+		server.CloseClientConnections()
+		server.Close()
+	})
 	client, err := mtlfclient.NewBackendClient(server.URL, time.Second, server.Client())
 	if err != nil {
 		t.Fatalf("NewBackendClient() error = %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	pinger := &blockingMongoPinger{started: make(chan struct{})}
 	app := &NwdafApp{
-		ctx: ctx,
-		cfg: &factory.Config{Configuration: &factory.Configuration{
-			Mongodb: &factory.Mongodb{Name: "free5gc", Url: "mongodb://127.0.0.1:27017"},
-		}},
+		ctx:               ctx,
+		cfg:               &factory.Config{Configuration: &factory.Configuration{}},
 		mtlfBackendClient: client,
-		mongoPinger:       pinger,
 	}
 	app.mtlfAvailability = backend.NewAvailabilityMonitor(app.probeMtlfBackend)
 	app.startBackendAvailabilityMonitors()
 	select {
-	case <-pinger.started:
+	case <-syncStarted:
 	case <-time.After(time.Second):
-		t.Fatal("Mongo handshake ping did not start")
+		t.Fatal("backend sync request did not start")
 	}
 	cancel()
 	waitForWaitGroup(t, &app.wg)
+	close(releaseSync)
 }
 
 func TestStartOwnedServersStartsAndStopsHttpsSbiListener(t *testing.T) {

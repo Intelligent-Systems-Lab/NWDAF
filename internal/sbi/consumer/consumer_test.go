@@ -13,21 +13,7 @@ import (
 )
 
 type testSmfService struct {
-	subscribeCalled   bool
-	unsubscribeCalled bool
-	subscriptionID    string
-	err               error
-	httpClient        *http.Client
-}
-
-func (s *testSmfService) SubscribeToSmf(_ context.Context, _ string, _ SmfSubscriptionOptions) (string, error) {
-	s.subscribeCalled = true
-	return s.subscriptionID, s.err
-}
-
-func (s *testSmfService) UnsubscribeFromSmf(_ context.Context, _ string, _ string) error {
-	s.unsubscribeCalled = true
-	return s.err
+	httpClient *http.Client
 }
 
 func (s *testSmfService) HTTPClient() *http.Client {
@@ -144,38 +130,26 @@ func TestNsmfServiceHTTPClient(t *testing.T) {
 }
 
 func TestConsumerDelegatesToInjectedServices(t *testing.T) {
-	smfService := &testSmfService{
-		subscriptionID: "smf-sub-1",
-		httpClient:     &http.Client{},
-	}
+	smfService := &testSmfService{httpClient: &http.Client{}}
 	mtlfService := &testMtlfService{
 		subscriptionID: "mtlf-sub-1",
 		httpClient:     &http.Client{},
 	}
 	c := newConsumerWithServices(nil, smfService, mtlfService, nil)
 
-	if _, err := c.SubscribeToSmf(context.Background(), "http://smf", SmfSubscriptionOptions{}); err != nil {
-		t.Fatalf("SubscribeToSmf returned error: %v", err)
-	}
 	if _, err := c.SubscribeToMtlf(context.Background(), "http://mtlf", MtlfSubscriptionOptions{}); err != nil {
 		t.Fatalf("SubscribeToMtlf returned error: %v", err)
-	}
-	if err := c.UnsubscribeFromSmf(context.Background(), "http://smf", "smf-sub-1"); err != nil {
-		t.Fatalf("UnsubscribeFromSmf returned error: %v", err)
 	}
 	if err := c.UnsubscribeFromMtlf(context.Background(), "http://mtlf", "mtlf-sub-1"); err != nil {
 		t.Fatalf("UnsubscribeFromMtlf returned error: %v", err)
 	}
 
-	if !smfService.subscribeCalled || !smfService.unsubscribeCalled {
-		t.Fatal("expected SMF service delegation to be invoked")
-	}
 	if !mtlfService.subscribeCalled || !mtlfService.unsubscribeCalled {
 		t.Fatal("expected MTLF service delegation to be invoked")
 	}
 }
 
-func TestConsumerRequestsSmfTokenBeforeRawPostAndDelete(t *testing.T) {
+func TestConsumerRequestsSmfTokenForStandardRequest(t *testing.T) {
 	var requestOrder []string
 	var tokenScopes []string
 	server := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -202,18 +176,19 @@ func TestConsumerRequestsSmfTokenBeforeRawPostAndDelete(t *testing.T) {
 				t.Errorf("encode SMF access token response: %v", err)
 			}
 		case SmfEventExposurePath:
-			requestOrder = append(requestOrder, "subscribe")
+			requestOrder = append(requestOrder, "create")
 			if got := r.Header.Get("Authorization"); got != "Bearer smf-service-token" {
 				t.Errorf("subscription Authorization = %q", got)
 			}
 			w.Header().Set("Location", SmfEventExposurePath+"/smf-sub-1")
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
-		case SmfEventExposurePath + "/smf-sub-1":
-			requestOrder = append(requestOrder, "unsubscribe")
-			if got := r.Header.Get("Authorization"); got != "Bearer smf-service-token" {
-				t.Errorf("unsubscription Authorization = %q", got)
+			if err := json.NewEncoder(w).Encode(models.NsmfEventExposure{
+				SubId: "smf-sub-1", NotifId: "corr-a", NotifUri: "http://py/callback",
+				EventSubs: []models.SmfEventExposureEventSubscription{{Event: SmfEvent_UPF_EVENT}},
+			}); err != nil {
+				t.Errorf("encode create response: %v", err)
 			}
-			w.WriteHeader(http.StatusNoContent)
 		default:
 			http.NotFound(w, r)
 		}
@@ -229,20 +204,18 @@ func TestConsumerRequestsSmfTokenBeforeRawPostAndDelete(t *testing.T) {
 	}
 	consumerClient.smfService.(*NsmfService).httpClient = server.Client()
 
-	if _, err = consumerClient.SubscribeToSmf(context.Background(), server.URL, SmfSubscriptionOptions{}); err != nil {
-		t.Fatalf("SubscribeToSmf() error = %v", err)
+	body := []byte(
+		`{"notifId":"corr-a","notifUri":"http://py/callback",` +
+			`"eventSubs":[{"event":"UPF_EVENT"}]}`,
+	)
+	if _, err = consumerClient.CreateSmfEventExposure(context.Background(), server.URL, body); err != nil {
+		t.Fatalf("CreateSmfEventExposure() error = %v", err)
 	}
-	if err = consumerClient.UnsubscribeFromSmf(context.Background(), server.URL, "smf-sub-1"); err != nil {
-		t.Fatalf("UnsubscribeFromSmf() error = %v", err)
-	}
-	wantOrder := []string{"token", "subscribe", "token", "unsubscribe"}
+	wantOrder := []string{"token", "create"}
 	if !slices.Equal(requestOrder, wantOrder) {
 		t.Fatalf("request order = %v, want %v", requestOrder, wantOrder)
 	}
-	wantScopes := []string{
-		string(models.ServiceName_NSMF_EVENT_EXPOSURE),
-		string(models.ServiceName_NSMF_EVENT_EXPOSURE),
-	}
+	wantScopes := []string{string(models.ServiceName_NSMF_EVENT_EXPOSURE)}
 	if !slices.Equal(tokenScopes, wantScopes) {
 		t.Fatalf("token scopes = %v, want %v", tokenScopes, wantScopes)
 	}

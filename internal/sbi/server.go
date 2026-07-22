@@ -64,8 +64,6 @@ type processorAPI interface {
 		req *models.NnwdafEventsSubscription,
 	) (*models.NnwdafEventsSubscription, *models.ProblemDetails)
 	HandleDeleteSubscription(subscriptionID string) *models.ProblemDetails
-	HandleSmfNotification(notification *models.NsmfEventExposureNotification) error
-	HandleUpfNotification(notification *processor.UpfNotificationData) error
 	HandleAdrfRetrievalNotify(notifCorrID string, fetchCorrIDs []string, terminationReq bool)
 }
 

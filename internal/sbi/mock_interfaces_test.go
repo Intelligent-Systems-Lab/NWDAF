@@ -13,7 +13,6 @@ import (
 	context "context"
 	reflect "reflect"
 
-	processor "github.com/free5gc/nwdaf/internal/sbi/processor"
 	models "github.com/free5gc/openapi/models"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -83,20 +82,6 @@ func (mr *MockprocessorAPIMockRecorder) HandleDeleteSubscription(subscriptionID 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleDeleteSubscription", reflect.TypeOf((*MockprocessorAPI)(nil).HandleDeleteSubscription), subscriptionID)
 }
 
-// HandleSmfNotification mocks base method.
-func (m *MockprocessorAPI) HandleSmfNotification(notification *models.NsmfEventExposureNotification) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HandleSmfNotification", notification)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// HandleSmfNotification indicates an expected call of HandleSmfNotification.
-func (mr *MockprocessorAPIMockRecorder) HandleSmfNotification(notification any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleSmfNotification", reflect.TypeOf((*MockprocessorAPI)(nil).HandleSmfNotification), notification)
-}
-
 // HandleUpdateSubscription mocks base method.
 func (m *MockprocessorAPI) HandleUpdateSubscription(ctx context.Context, subscriptionID string, req *models.NnwdafEventsSubscription) (*models.NnwdafEventsSubscription, *models.ProblemDetails) {
 	m.ctrl.T.Helper()
@@ -110,18 +95,4 @@ func (m *MockprocessorAPI) HandleUpdateSubscription(ctx context.Context, subscri
 func (mr *MockprocessorAPIMockRecorder) HandleUpdateSubscription(ctx, subscriptionID, req any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleUpdateSubscription", reflect.TypeOf((*MockprocessorAPI)(nil).HandleUpdateSubscription), ctx, subscriptionID, req)
-}
-
-// HandleUpfNotification mocks base method.
-func (m *MockprocessorAPI) HandleUpfNotification(notification *processor.UpfNotificationData) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "HandleUpfNotification", notification)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// HandleUpfNotification indicates an expected call of HandleUpfNotification.
-func (mr *MockprocessorAPIMockRecorder) HandleUpfNotification(notification any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleUpfNotification", reflect.TypeOf((*MockprocessorAPI)(nil).HandleUpfNotification), notification)
 }

@@ -172,104 +172,6 @@ configuration:
 			wantErr: "sbi.port",
 		},
 		{
-			name: "smf enabled requires endpoint source",
-			yaml: `
-configuration:
-  smf:
-    enabled: true
-`,
-			wantErr: "smf.endpointSource is required",
-		},
-		{
-			name: "smf configured source requires endpoints",
-			yaml: `
-configuration:
-  smf:
-    enabled: true
-    endpointSource: configured
-    notifUris:
-      smf: http://127.0.0.1:8080/collector/notify
-      upf: http://127.0.0.1:8080/collector/upf-notify
-`,
-			wantErr: "smf.endpoints",
-		},
-		{
-			name: "smf configured source validates endpoints",
-			yaml: `
-configuration:
-  smf:
-    enabled: true
-    endpointSource: configured
-    endpoints:
-      - not-a-url
-    notifUris:
-      smf: http://127.0.0.1:8080/collector/notify
-      upf: http://127.0.0.1:8080/collector/upf-notify
-`,
-			wantErr: "smf.endpoints[0]",
-		},
-		{
-			name: "smf nrf source does not require endpoints",
-			yaml: `
-configuration:
-  nrfUri: http://127.0.0.10:8000
-  smf:
-    enabled: true
-    endpointSource: nrf
-    notifUris:
-      smf: http://127.0.0.1:8080/collector/notify
-      upf: http://127.0.0.1:8080/collector/upf-notify
-`,
-		},
-		{
-			name: "smf nrf source ignores legacy endpoints",
-			yaml: `
-configuration:
-  nrfUri: http://127.0.0.10:8000
-  smf:
-    enabled: true
-    endpointSource: nrf
-    endpoints:
-      - not-a-url
-    notifUris:
-      smf: http://127.0.0.1:8080/collector/notify
-      upf: http://127.0.0.1:8080/collector/upf-notify
-`,
-		},
-		{
-			name: "smf rejects unknown endpoint source",
-			yaml: `
-configuration:
-  smf:
-    enabled: true
-    endpointSource: merged
-    notifUris:
-      smf: http://127.0.0.1:8080/collector/notify
-      upf: http://127.0.0.1:8080/collector/upf-notify
-`,
-			wantErr: "smf.endpointSource must be",
-		},
-		{
-			name: "owned collector callback scheme must match sbi scheme",
-			yaml: `
-configuration:
-  sbi:
-    scheme: https
-    tls:
-      pem: cert/nwdaf.pem
-      key: cert/nwdaf.key
-  smf:
-    enabled: true
-    endpointSource: configured
-    endpoints:
-      - http://127.0.0.1:8081
-    notifUris:
-      smf: http://127.0.0.1:8080/collector/notify
-      upf: https://127.0.0.1:8080/collector/upf-notify
-`,
-			wantErr: "smf.notifUris.smf scheme must match sbi.scheme (https)",
-		},
-		{
 			name: "anlf backend enabled requires endpoint",
 			yaml: `
 configuration:
@@ -479,22 +381,6 @@ func TestConfigSbiGettersFallbackRegisterIP(t *testing.T) {
 	}
 	if got := cfg.GetSbiUri(); got != "http://127.0.0.9:9090" {
 		t.Fatalf("GetSbiUri() = %q, want %q", got, "http://127.0.0.9:9090")
-	}
-}
-
-func TestSampleConfigUsesNrfSmfEndpointSource(t *testing.T) {
-	cfg, err := factory.ReadConfig(filepath.Join("..", "..", "config", "nwdafcfg.yaml"))
-	if err != nil {
-		t.Fatalf("ReadConfig(sample) error = %v", err)
-	}
-	if cfg.Configuration.Smf == nil {
-		t.Fatal("sample SMF config is nil")
-	}
-	if got := cfg.Configuration.Smf.EndpointSource; got != factory.SmfEndpointSourceNRF {
-		t.Fatalf("sample smf.endpointSource = %q, want %q", got, factory.SmfEndpointSourceNRF)
-	}
-	if len(cfg.Configuration.Smf.Endpoints) != 0 {
-		t.Fatalf("sample smf.endpoints = %v, want none in NRF mode", cfg.Configuration.Smf.Endpoints)
 	}
 }
 

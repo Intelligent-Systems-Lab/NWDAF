@@ -24,7 +24,7 @@ func TestAvailabilityMonitorProbesImmediatelyAndUsesBoundedBackoff(t *testing.T)
 			if attempts < 4 {
 				return ProbeResult{}, errors.New("unavailable")
 			}
-			return ProbeResult{Selection: "mongodb"}, nil
+			return ProbeResult{ProcessInstanceID: "process-a", Selection: "mongodb"}, nil
 		},
 		availabilityMonitorOptions{
 			failureDelays:  []time.Duration{time.Second, 2 * time.Second, 5 * time.Second},
@@ -52,7 +52,8 @@ func TestAvailabilityMonitorProbesImmediatelyAndUsesBoundedBackoff(t *testing.T)
 	}
 	<-done
 	snapshot := monitor.Snapshot()
-	if snapshot.State != StateUsable || snapshot.Selection != "mongodb" {
+	if snapshot.State != StateUsable || snapshot.ProcessInstanceID != "process-a" ||
+		snapshot.Selection != "mongodb" {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 }
@@ -134,13 +135,30 @@ func TestAvailabilityMonitorCancellationInterruptsWait(t *testing.T) {
 	}
 }
 
-func TestAvailabilityMonitorCanExposeHandshakeProgress(t *testing.T) {
+func TestAvailabilityMonitorCanExposeSyncProgress(t *testing.T) {
 	t.Parallel()
 
 	monitor := NewAvailabilityMonitor(func(context.Context) (ProbeResult, error) { return ProbeResult{}, nil })
-	monitor.MarkHandshaking()
-	if snapshot := monitor.Snapshot(); snapshot.State != StateHandshaking {
-		t.Fatalf("snapshot state = %q, want %q", snapshot.State, StateHandshaking)
+	monitor.MarkSyncing("process-a")
+	if snapshot := monitor.Snapshot(); snapshot.State != StateSyncing {
+		t.Fatalf("snapshot state = %q, want %q", snapshot.State, StateSyncing)
+	}
+}
+
+func TestAvailabilityMonitorDoesNotFlapDuringUsableRefresh(t *testing.T) {
+	t.Parallel()
+
+	monitor := NewAvailabilityMonitor(func(context.Context) (ProbeResult, error) {
+		return ProbeResult{ProcessInstanceID: "process-a"}, nil
+	})
+	monitor.setUsable("process-a", "")
+	monitor.MarkSyncing("process-a")
+	if snapshot := monitor.Snapshot(); snapshot.State != StateUsable {
+		t.Fatalf("snapshot state = %q, want %q", snapshot.State, StateUsable)
+	}
+	monitor.MarkSyncing("process-b")
+	if snapshot := monitor.Snapshot(); snapshot.State != StateSyncing {
+		t.Fatalf("snapshot state after restart = %q, want %q", snapshot.State, StateSyncing)
 	}
 }
 

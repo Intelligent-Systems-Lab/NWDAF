@@ -10,15 +10,6 @@ import (
 	"github.com/free5gc/nwdaf/internal/anlf/processor"
 )
 
-func (s *Server) analyticsReportRoutes() []Route {
-	return []Route{{
-		Name:    "HandleAnalyticsReport",
-		Method:  http.MethodPost,
-		Pattern: "/subscriptions/:subscriptionId/analytics-reports",
-		APIFunc: s.HandleAnalyticsReport,
-	}}
-}
-
 func (s *Server) HandleAnalyticsReport(c *gin.Context) {
 	subscriptionID := c.Param("subscriptionId")
 	var report contract.AnalyticsReport

@@ -113,20 +113,10 @@ func (m *MtlfService) runAdrfRetrainWorkflow(
 		return
 	}
 
-	// Build SUPI→groupId reverse map once; used per record in runFetchLoop
-	resolver := nwdafCtx.GetGroupResolver()
-	supiToGroup := make(map[string]string, len(seenSupis))
-	for _, gid := range resolver.GetAllGroups() {
-		supis, err := resolver.ResolveGroupId(gid)
-		if err != nil {
-			continue
-		}
-		for _, s := range supis {
-			if seenSupis[s] {
-				supiToGroup[s] = gid
-			}
-		}
-	}
+	// Group-scoped retraining is migrated with the Phase 5 backend-owned
+	// retrieval flow. Do not retain an AnLF collection mapping in Go solely for
+	// this legacy path.
+	supiToGroup := make(map[string]string)
 
 	// Build time period
 	now := time.Now().UTC()

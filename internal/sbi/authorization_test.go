@@ -198,7 +198,7 @@ func TestNewServerWiresEventsSubscriptionAuthorizationOnly(t *testing.T) {
 	collectorRequest.Header.Set("Content-Type", "application/json")
 	collectorRecorder := httptest.NewRecorder()
 	server.router.ServeHTTP(collectorRecorder, collectorRequest)
-	if collectorRecorder.Code != http.StatusBadRequest {
-		t.Fatalf("collector status = %d, want 400 without producer authorization", collectorRecorder.Code)
+	if collectorRecorder.Code != http.StatusNotFound {
+		t.Fatalf("retired collector status = %d, want 404", collectorRecorder.Code)
 	}
 }

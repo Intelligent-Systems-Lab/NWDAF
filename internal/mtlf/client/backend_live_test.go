@@ -17,17 +17,7 @@ func TestLiveMtlfBackendReadiness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBackendClient() error = %v", err)
 	}
-	if err = backend.CheckReadiness(context.Background()); err != nil {
+	if _, err = backend.CheckReadiness(context.Background()); err != nil {
 		t.Fatalf("CheckReadiness() error = %v", err)
-	}
-	mode, err := backend.SelectDataSource(
-		context.Background(),
-		[]DataSource{DataSourceMongoDB},
-	)
-	if err != nil {
-		t.Fatalf("SelectDataSource() error = %v", err)
-	}
-	if mode != StorageModeMongoDB {
-		t.Fatalf("SelectDataSource() mode = %q, want %q", mode, StorageModeMongoDB)
 	}
 }

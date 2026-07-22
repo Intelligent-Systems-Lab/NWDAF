@@ -9,15 +9,48 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/free5gc/nwdaf/internal/backend"
 )
+
+const testAnlfProcessInstanceID = "5f5db241-1e7e-42c8-9bb0-35653f8ef6d4"
 
 func TestLiveAnlfBackendReadiness(t *testing.T) {
 	endpoint := os.Getenv("ANLF_BACKEND_LIVE_ENDPOINT")
 	if endpoint == "" {
 		t.Skip("ANLF_BACKEND_LIVE_ENDPOINT is not set")
 	}
-	if err := NewClient(endpoint, 5*time.Second).CheckReadiness(context.Background()); err != nil {
+	if _, err := NewClient(endpoint, 5*time.Second).CheckReadiness(context.Background()); err != nil {
 		t.Fatalf("CheckReadiness() error = %v", err)
+	}
+}
+
+func TestClientSyncRequiresAcceptedSnapshotFromSameProcess(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/internal/v1/sync" {
+			t.Errorf("request = %s %s", request.Method, request.URL.Path)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		if _, err := writer.Write([]byte(
+			`{"processInstanceId":"` + testAnlfProcessInstanceID +
+				`","snapshotAccepted":true,"mongodbAvailable":true,"sourceSelection":{}}`,
+		)); err != nil {
+			t.Errorf("Write() error = %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	response, err := NewClient(server.URL, time.Second).Sync(
+		context.Background(),
+		backend.SyncRequest{},
+	)
+	if err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if response.ProcessInstanceID != testAnlfProcessInstanceID || !response.MongoDBAvailable {
+		t.Fatalf("Sync() response = %+v", response)
 	}
 }
 
@@ -29,14 +62,21 @@ func TestClientCheckReadiness(t *testing.T) {
 			t.Errorf("request = %s %s", request.Method, request.URL.Path)
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		if _, err := writer.Write([]byte(`{"status":"ready"}`)); err != nil {
+		body := []byte(
+			`{"status":"ready","processInstanceId":"` + testAnlfProcessInstanceID + `"}`,
+		)
+		if _, err := writer.Write(body); err != nil {
 			t.Errorf("Write() error = %v", err)
 		}
 	}))
 	t.Cleanup(server.Close)
 
-	if err := NewClient(server.URL, time.Second).CheckReadiness(context.Background()); err != nil {
+	health, err := NewClient(server.URL, time.Second).CheckReadiness(context.Background())
+	if err != nil {
 		t.Fatalf("CheckReadiness() error = %v", err)
+	}
+	if health.ProcessInstanceID != testAnlfProcessInstanceID {
+		t.Fatalf("processInstanceId = %q", health.ProcessInstanceID)
 	}
 }
 
@@ -62,7 +102,7 @@ func TestClientCheckReadinessRejectsFailureAndMalformedResponses(t *testing.T) {
 				}
 			}))
 			t.Cleanup(server.Close)
-			if err := NewClient(server.URL, time.Second).CheckReadiness(context.Background()); err == nil {
+			if _, err := NewClient(server.URL, time.Second).CheckReadiness(context.Background()); err == nil {
 				t.Fatal("CheckReadiness() error = nil")
 			}
 		})
@@ -78,14 +118,14 @@ func TestClientCheckReadinessHonorsTimeoutAndCancellation(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	err := NewClient(server.URL, 20*time.Millisecond).CheckReadiness(context.Background())
+	_, err := NewClient(server.URL, 20*time.Millisecond).CheckReadiness(context.Background())
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("timeout error = %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err = NewClient(server.URL, time.Second).CheckReadiness(ctx)
+	_, err = NewClient(server.URL, time.Second).CheckReadiness(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation error = %v", err)
 	}

@@ -15,18 +15,16 @@ import (
 )
 
 const (
-	NwdafDefaultConfigPath      = "./config/nwdafcfg.yaml"
-	NwdafSbiDefaultScheme       = "http"
-	NwdafSbiTLSScheme           = "https"
-	NwdafSbiDefaultIPv4         = "127.0.0.1"
-	NwdafSbiDefaultPort         = 8080
-	NwdafAnlfDefaultPort        = 8090
-	NwdafMtlfDefaultPort        = 8091
-	NwdafDefaultNwdafName       = "NWDAF"
-	NwdafEventsSubResUriPrefix  = "/nnwdaf-eventssubscription/v1"
-	NwdafSupportedEventUEComm   = "UE_COMMUNICATION"
-	SmfEndpointSourceNRF        = "nrf"
-	SmfEndpointSourceConfigured = "configured"
+	NwdafDefaultConfigPath     = "./config/nwdafcfg.yaml"
+	NwdafSbiDefaultScheme      = "http"
+	NwdafSbiTLSScheme          = "https"
+	NwdafSbiDefaultIPv4        = "127.0.0.1"
+	NwdafSbiDefaultPort        = 8080
+	NwdafAnlfDefaultPort       = 8090
+	NwdafMtlfDefaultPort       = 8091
+	NwdafDefaultNwdafName      = "NWDAF"
+	NwdafEventsSubResUriPrefix = "/nnwdaf-eventssubscription/v1"
+	NwdafSupportedEventUEComm  = "UE_COMMUNICATION"
 )
 
 var NwdafConfig *Config
@@ -47,33 +45,17 @@ type Info struct {
 }
 
 type Configuration struct {
-	Mongodb            *Mongodb               `yaml:"mongodb,omitempty"`
-	NwdafName          string                 `yaml:"nwdafName,omitempty"`
-	Sbi                *Sbi                   `yaml:"sbi,omitempty"`
-	NrfUri             string                 `yaml:"nrfUri,omitempty"`
-	NrfCertPem         string                 `yaml:"nrfCertPem,omitempty"`
-	SupportedAnalytics []string               `yaml:"supportedAnalytics,omitempty"`
-	Smf                *SmfConfig             `yaml:"smf,omitempty"`
-	Anlf               *AnlfConfig            `yaml:"anlf,omitempty"`
-	ExternalMtlf       *ExternalMtlfConfig    `yaml:"externalMtlf,omitempty"`
-	AnlfBackend        *AnlfBackendConfig     `yaml:"anlfBackend,omitempty"`
-	MtlfBackend        *MtlfBackendConfig     `yaml:"mtlfBackend,omitempty"`
-	GroupMembership    *GroupMembershipConfig `yaml:"groupMembership,omitempty"`
-	Mtlf               *MtlfConfig            `yaml:"mtlf,omitempty"`
-	Adrf               *AdrfConfig            `yaml:"adrf,omitempty"`
-}
-
-// GroupMembershipConfig maps Group IDs to SUPI lists (substitute for UDM)
-// Per TS 23.502 §4.15.4.5.2: NWDAF should query UDM for group membership
-// This config provides a static mapping when UDM is not available
-type GroupMembershipConfig struct {
-	Groups []GroupDefinition `yaml:"groups"`
-}
-
-// GroupDefinition defines a group and its member SUPIs
-type GroupDefinition struct {
-	GroupId string   `yaml:"groupId"`
-	Supis   []string `yaml:"supis"`
+	NwdafName          string              `yaml:"nwdafName,omitempty"`
+	Sbi                *Sbi                `yaml:"sbi,omitempty"`
+	NrfUri             string              `yaml:"nrfUri,omitempty"`
+	NrfCertPem         string              `yaml:"nrfCertPem,omitempty"`
+	SupportedAnalytics []string            `yaml:"supportedAnalytics,omitempty"`
+	Anlf               *AnlfConfig         `yaml:"anlf,omitempty"`
+	ExternalMtlf       *ExternalMtlfConfig `yaml:"externalMtlf,omitempty"`
+	AnlfBackend        *AnlfBackendConfig  `yaml:"anlfBackend,omitempty"`
+	MtlfBackend        *MtlfBackendConfig  `yaml:"mtlfBackend,omitempty"`
+	Mtlf               *MtlfConfig         `yaml:"mtlf,omitempty"`
+	Adrf               *AdrfConfig         `yaml:"adrf,omitempty"`
 }
 
 // ExternalMtlfConfig configuration for External MTLF (ML Model Training Logical Function) integration
@@ -526,26 +508,6 @@ func (a *AdrfConfig) WatchdogTimeoutOrDefault() int {
 	return a.WatchdogTimeout
 }
 
-// SmfConfig configuration for SMF data collection
-type SmfConfig struct {
-	Enabled              bool       `yaml:"enabled"`
-	EndpointSource       string     `yaml:"endpointSource,omitempty"`
-	Endpoints            []string   `yaml:"endpoints,omitempty"`
-	SubscriptionDuration int        `yaml:"subscriptionDuration,omitempty"` // seconds
-	NotifUris            *NotifUris `yaml:"notifUris,omitempty"`
-}
-
-// NotifUris contains notification URIs for data collection callbacks
-type NotifUris struct {
-	Smf string `yaml:"smf,omitempty"` // Callback URI for SMF notifications
-	Upf string `yaml:"upf,omitempty"` // Callback URI for UPF notifications
-}
-
-type Mongodb struct {
-	Name string `yaml:"name"`
-	Url  string `yaml:"url"`
-}
-
 type Sbi struct {
 	Scheme       string `yaml:"scheme"`
 	RegisterIPv4 string `yaml:"registerIPv4,omitempty"`
@@ -679,26 +641,6 @@ func (c *Configuration) validate() error {
 	} else {
 		c.SupportedAnalytics = normalizedAnalytics
 	}
-	if c.Smf != nil && c.Smf.Enabled {
-		if validateErr := c.Smf.validate(); validateErr != nil {
-			errs = append(errs, validateErr)
-		} else if c.Sbi != nil && c.Smf.NotifUris != nil {
-			if schemeErr := validateOwnedCallbackScheme(
-				"smf.notifUris.smf",
-				c.Smf.NotifUris.Smf,
-				c.Sbi.Scheme,
-			); schemeErr != nil {
-				errs = append(errs, schemeErr)
-			}
-			if schemeErr := validateOwnedCallbackScheme(
-				"smf.notifUris.upf",
-				c.Smf.NotifUris.Upf,
-				c.Sbi.Scheme,
-			); schemeErr != nil {
-				errs = append(errs, schemeErr)
-			}
-		}
-	}
 	if c.AnlfBackend != nil && c.AnlfBackend.Enabled {
 		if validateErr := c.AnlfBackend.validate(); validateErr != nil {
 			errs = append(errs, validateErr)
@@ -823,49 +765,6 @@ func (s *AuxiliaryServerConfig) validate(fieldPrefix string) error {
 			"%s.registerIPv4 is required when bindingIPv4 is a wildcard address",
 			fieldPrefix,
 		))
-	}
-
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-	return nil
-}
-
-func (s *SmfConfig) validate() error {
-	var errs []error
-
-	s.EndpointSource = strings.ToLower(strings.TrimSpace(s.EndpointSource))
-	switch s.EndpointSource {
-	case SmfEndpointSourceConfigured:
-		if len(s.Endpoints) == 0 {
-			errs = append(errs, errors.New(
-				"smf.endpoints must contain at least one endpoint when smf.endpointSource is configured",
-			))
-		}
-		for i, endpoint := range s.Endpoints {
-			if err := validateHTTPURL(fmt.Sprintf("smf.endpoints[%d]", i), endpoint); err != nil {
-				errs = append(errs, err)
-			}
-		}
-	case SmfEndpointSourceNRF:
-	case "":
-		errs = append(errs, errors.New("smf.endpointSource is required when smf.enabled is true"))
-	default:
-		errs = append(errs, fmt.Errorf(
-			"smf.endpointSource must be %q or %q",
-			SmfEndpointSourceNRF,
-			SmfEndpointSourceConfigured,
-		))
-	}
-	if s.NotifUris == nil {
-		errs = append(errs, errors.New("smf.notifUris is required when smf.enabled is true"))
-	} else {
-		if err := validateHTTPURL("smf.notifUris.smf", s.NotifUris.Smf); err != nil {
-			errs = append(errs, err)
-		}
-		if err := validateHTTPURL("smf.notifUris.upf", s.NotifUris.Upf); err != nil {
-			errs = append(errs, err)
-		}
 	}
 
 	if len(errs) > 0 {
@@ -1095,28 +994,6 @@ func normalizeNrfURI(raw string) (string, error) {
 	parsed.Path = ""
 	parsed.RawPath = ""
 	return parsed.String(), nil
-}
-
-func validateOwnedCallbackScheme(fieldName string, raw string, expectedScheme string) error {
-	trimmedScheme := strings.ToLower(strings.TrimSpace(expectedScheme))
-	if trimmedScheme == "" {
-		trimmedScheme = NwdafSbiDefaultScheme
-	}
-
-	trimmedURL := strings.TrimSpace(raw)
-	if trimmedURL == "" {
-		return nil
-	}
-
-	parsed, err := url.ParseRequestURI(trimmedURL)
-	if err != nil {
-		return fmt.Errorf("%s must be a valid URL: %w", fieldName, err)
-	}
-	if parsed.Scheme != trimmedScheme {
-		return fmt.Errorf("%s scheme must match sbi.scheme (%s)", fieldName, trimmedScheme)
-	}
-
-	return nil
 }
 
 func isValidHostValue(value string) bool {

@@ -67,9 +67,13 @@ func NewServer(cfg *factory.Config, processor processorAPI) (*Server, error) {
 		processor: processor,
 	}
 	s.router.Use(gin.Recovery())
-	routes := append(s.mlModelNotifyRoutes(), s.analyticsReportRoutes()...)
+	routes := s.mlModelNotifyRoutes()
 	routes = append(routes, s.modelAccuracyReportRoutes()...)
-	routes = append(routes, s.runtimeCompletionRoutes()...)
+	routes = append(routes, s.eventsSubscriptionNotificationRoutes()...)
+	routes = append(routes, s.nfDiscoveryRoutes()...)
+	routes = append(routes, s.smfEventExposureRoutes()...)
+	routes = append(routes, s.adrfStorageRoutes()...)
+	routes = append(routes, s.smfResourceAssociationRoutes()...)
 	applyRoutes(s.router.Group(""), routes)
 
 	httpServer, err := httpwrapper.NewHttp2Server(
