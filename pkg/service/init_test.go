@@ -67,6 +67,122 @@ func TestBuildBackendSyncRequestIncludesSmfResourceAssociations(t *testing.T) {
 	}
 }
 
+func TestBuildBackendSyncRequestEncodesEmptySmfResourceAssociationsAsArray(t *testing.T) {
+	nwdaf_context.Init()
+	nwdafContext := nwdaf_context.GetSelf()
+	if !nwdafContext.AddSmfPeerResourceRoute(&nwdaf_context.SmfPeerResourceRoute{
+		SubscriptionID:   "peer-without-associations",
+		ResourceLocation: "http://smf.example/subscriptions/peer-without-associations",
+		TargetAPIBaseURI: "http://smf.example",
+		CorrelationID:    "corr-without-associations",
+	}) {
+		t.Fatal("could not add SMF peer route")
+	}
+	app := &NwdafApp{nwdafCtx: nwdafContext}
+
+	snapshot := app.buildBackendSyncRequest(backend.KindAnLF)
+	if len(snapshot.SmfResources) != 1 {
+		t.Fatalf("SMF resources = %d", len(snapshot.SmfResources))
+	}
+	if snapshot.SmfResources[0].NwdafSubscriptionIDs == nil {
+		t.Fatal("SMF resource associations are nil, want an empty JSON array")
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal sync snapshot: %v", err)
+	}
+	if !bytes.Contains(encoded, []byte(`"nwdafSubscriptionIds":[]`)) {
+		t.Fatalf("sync snapshot does not contain an empty association array: %s", encoded)
+	}
+}
+
+func TestBuildBackendSyncRequestProjectsMLModelResourcesToTheirOwners(t *testing.T) {
+	nwdaf_context.Init()
+	nwdafContext := nwdaf_context.GetSelf()
+	for _, route := range []nwdaf_context.MLModelProvisionSubscriptionRoute{
+		{
+			SubscriptionID:         "provision-anlf",
+			AcceptedRepresentation: json.RawMessage(`{"owner":"anlf"}`),
+			BackendRepresentation:  json.RawMessage(`{"owner":"mtlf","callback":"go"}`),
+			Initiator:              nwdaf_context.MLModelRoutePartyAnLFBackend,
+			Destination:            nwdaf_context.MLModelRoutePartyAnLFBackend,
+		},
+		{
+			SubscriptionID:         "provision-external",
+			AcceptedRepresentation: json.RawMessage(`{"owner":"external"}`),
+			BackendRepresentation:  json.RawMessage(`{"owner":"mtlf","callback":"go"}`),
+			Initiator:              nwdaf_context.MLModelRoutePartyExternal,
+			Destination:            nwdaf_context.MLModelRoutePartyExternal,
+		},
+	} {
+		if !nwdafContext.AddMLModelProvisionSubscriptionRoute(route) {
+			t.Fatalf("could not add provision route %s", route.SubscriptionID)
+		}
+	}
+	for _, route := range []nwdaf_context.MLModelMonitorRegistrationRoute{
+		{
+			RegistrationID:         "registration-anlf",
+			AcceptedRepresentation: json.RawMessage(`{"owner":"anlf"}`),
+			BackendRepresentation:  json.RawMessage(`{"owner":"mtlf"}`),
+			Initiator:              nwdaf_context.MLModelRoutePartyAnLFBackend,
+		},
+		{
+			RegistrationID:         "registration-external",
+			AcceptedRepresentation: json.RawMessage(`{"owner":"external"}`),
+			BackendRepresentation:  json.RawMessage(`{"owner":"mtlf"}`),
+			Initiator:              nwdaf_context.MLModelRoutePartyExternal,
+		},
+	} {
+		if !nwdafContext.AddMLModelMonitorRegistrationRoute(route) {
+			t.Fatalf("could not add registration route %s", route.RegistrationID)
+		}
+	}
+	for _, route := range []nwdaf_context.MLModelMonitorSubscriptionRoute{
+		{
+			SubscriptionID:         "monitor-mtlf",
+			AcceptedRepresentation: json.RawMessage(`{"owner":"mtlf"}`),
+			BackendRepresentation:  json.RawMessage(`{"owner":"anlf","callback":"go"}`),
+			Destination:            nwdaf_context.MLModelRoutePartyMTLFBackend,
+		},
+		{
+			SubscriptionID:         "monitor-external",
+			AcceptedRepresentation: json.RawMessage(`{"owner":"external"}`),
+			BackendRepresentation:  json.RawMessage(`{"owner":"anlf","callback":"go"}`),
+			Destination:            nwdaf_context.MLModelRoutePartyExternal,
+		},
+	} {
+		if !nwdafContext.AddMLModelMonitorSubscriptionRoute(route) {
+			t.Fatalf("could not add monitor route %s", route.SubscriptionID)
+		}
+	}
+	app := &NwdafApp{nwdafCtx: nwdafContext}
+
+	anlfSnapshot := app.buildBackendSyncRequest(backend.KindAnLF)
+	if len(anlfSnapshot.MLModelProvisionSubscriptions) != 1 ||
+		anlfSnapshot.MLModelProvisionSubscriptions[0].SubscriptionID != "provision-anlf" {
+		t.Fatalf("AnLF provision snapshots = %+v", anlfSnapshot.MLModelProvisionSubscriptions)
+	}
+	if len(anlfSnapshot.MLModelMonitorRegistrations) != 1 ||
+		anlfSnapshot.MLModelMonitorRegistrations[0].RegistrationID != "registration-anlf" {
+		t.Fatalf("AnLF registration snapshots = %+v", anlfSnapshot.MLModelMonitorRegistrations)
+	}
+	if len(anlfSnapshot.MLModelMonitorSubscriptions) != 2 {
+		t.Fatalf("AnLF monitor snapshots = %+v", anlfSnapshot.MLModelMonitorSubscriptions)
+	}
+
+	mtlfSnapshot := app.buildBackendSyncRequest(backend.KindMTLF)
+	if len(mtlfSnapshot.MLModelProvisionSubscriptions) != 2 {
+		t.Fatalf("MTLF provision snapshots = %+v", mtlfSnapshot.MLModelProvisionSubscriptions)
+	}
+	if len(mtlfSnapshot.MLModelMonitorRegistrations) != 2 {
+		t.Fatalf("MTLF registration snapshots = %+v", mtlfSnapshot.MLModelMonitorRegistrations)
+	}
+	if len(mtlfSnapshot.MLModelMonitorSubscriptions) != 1 ||
+		mtlfSnapshot.MLModelMonitorSubscriptions[0].SubscriptionID != "monitor-mtlf" {
+		t.Fatalf("MTLF monitor snapshots = %+v", mtlfSnapshot.MLModelMonitorSubscriptions)
+	}
+}
+
 type fakeNFManagement struct {
 	registerFn   func(context.Context) (consumer.RegistrationResult, error)
 	deregisterFn func(context.Context) error
@@ -106,7 +222,6 @@ func TestStartOwnedServersStartsAndStopsAllListeners(t *testing.T) {
 
 	assertPortOpen(t, cfg.GetSbiBindingAddr())
 	assertPortOpen(t, cfg.GetAnlfServerBindingAddr())
-	assertPortOpen(t, cfg.GetMtlfServerBindingAddr())
 
 	app.stopOwnedServers()
 	waitForWaitGroup(t, &app.wg)
@@ -302,7 +417,6 @@ func TestStartOwnedServersStartsAndStopsHttpsSbiListener(t *testing.T) {
 
 	assertTLSPortOpen(t, cfg.GetSbiBindingAddr())
 	assertPortOpen(t, cfg.GetAnlfServerBindingAddr())
-	assertPortOpen(t, cfg.GetMtlfServerBindingAddr())
 
 	app.stopOwnedServers()
 	waitForWaitGroup(t, &app.wg)
@@ -327,7 +441,6 @@ func TestStartOwnedServersCleansUpOnAuxiliaryBindFailure(t *testing.T) {
 	}
 
 	assertPortClosedEventually(t, cfg.GetAnlfServerBindingAddr())
-	assertPortClosedEventually(t, cfg.GetMtlfServerBindingAddr())
 	waitForWaitGroup(t, &app.wg)
 }
 
@@ -347,7 +460,6 @@ func TestStartOwnedServersCleansUpOnMissingHttpsTLSConfig(t *testing.T) {
 	}
 
 	assertPortClosedEventually(t, cfg.GetAnlfServerBindingAddr())
-	assertPortClosedEventually(t, cfg.GetMtlfServerBindingAddr())
 	waitForWaitGroup(t, &app.wg)
 }
 
@@ -371,8 +483,7 @@ func TestStartRuntimeRegistersBeforeStartingOwnedListeners(t *testing.T) {
 	fake := &fakeNFManagement{
 		registerFn: func(context.Context) (consumer.RegistrationResult, error) {
 			registrationObservedClosedListeners = !portIsOpen(cfg.GetSbiBindingAddr()) &&
-				!portIsOpen(cfg.GetAnlfServerBindingAddr()) &&
-				!portIsOpen(cfg.GetMtlfServerBindingAddr())
+				!portIsOpen(cfg.GetAnlfServerBindingAddr())
 			return consumer.RegistrationResult{ResourceURI: "http://nrf/nnrf-nfm/v1/nf-instances/id"}, nil
 		},
 	}
@@ -386,7 +497,6 @@ func TestStartRuntimeRegistersBeforeStartingOwnedListeners(t *testing.T) {
 	}
 	assertPortOpen(t, cfg.GetSbiBindingAddr())
 	assertPortOpen(t, cfg.GetAnlfServerBindingAddr())
-	assertPortOpen(t, cfg.GetMtlfServerBindingAddr())
 
 	app.Terminate()
 	waitForWaitGroup(t, &app.wg)
@@ -411,8 +521,7 @@ func TestStartRuntimeLeavesListenersClosedOnRegistrationFailure(t *testing.T) {
 	if startErr := app.startRuntime(); startErr == nil {
 		t.Fatal("startRuntime() error = nil, want registration failure")
 	}
-	if portIsOpen(cfg.GetSbiBindingAddr()) || portIsOpen(cfg.GetAnlfServerBindingAddr()) ||
-		portIsOpen(cfg.GetMtlfServerBindingAddr()) {
+	if portIsOpen(cfg.GetSbiBindingAddr()) || portIsOpen(cfg.GetAnlfServerBindingAddr()) {
 		t.Fatal("owned listener opened after terminal registration failure")
 	}
 	if fake.deregisters != 0 {
@@ -446,8 +555,7 @@ func TestRunTreatsRegistrationCancellationAsGracefulShutdown(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("registration did not start")
 	}
-	if portIsOpen(cfg.GetSbiBindingAddr()) || portIsOpen(cfg.GetAnlfServerBindingAddr()) ||
-		portIsOpen(cfg.GetMtlfServerBindingAddr()) {
+	if portIsOpen(cfg.GetSbiBindingAddr()) || portIsOpen(cfg.GetAnlfServerBindingAddr()) {
 		t.Fatal("owned listener opened while NRF registration was in progress")
 	}
 	cancel()
@@ -506,8 +614,7 @@ func TestStartRuntimeKeepsListenersClosedUntilRegistrationRecovers(t *testing.T)
 		case <-time.After(time.Second):
 			t.Fatalf("registration attempt %d was not observed", wantAttempt)
 		}
-		if portIsOpen(cfg.GetSbiBindingAddr()) || portIsOpen(cfg.GetAnlfServerBindingAddr()) ||
-			portIsOpen(cfg.GetMtlfServerBindingAddr()) {
+		if portIsOpen(cfg.GetSbiBindingAddr()) || portIsOpen(cfg.GetAnlfServerBindingAddr()) {
 			t.Fatalf("owned listener opened during registration attempt %d", wantAttempt)
 		}
 		advanceRegistration <- struct{}{}
@@ -523,7 +630,6 @@ func TestStartRuntimeKeepsListenersClosedUntilRegistrationRecovers(t *testing.T)
 	}
 	assertPortOpen(t, cfg.GetSbiBindingAddr())
 	assertPortOpen(t, cfg.GetAnlfServerBindingAddr())
-	assertPortOpen(t, cfg.GetMtlfServerBindingAddr())
 
 	app.Terminate()
 	waitForWaitGroup(t, &app.wg)
@@ -556,8 +662,7 @@ func TestStartRuntimeCleansUpMalformedRegistrationSuccess(t *testing.T) {
 	if app.nwdafCtx.RegistrationState().Registered {
 		t.Fatal("registration remained active after malformed-success cleanup")
 	}
-	if portIsOpen(cfg.GetSbiBindingAddr()) || portIsOpen(cfg.GetAnlfServerBindingAddr()) ||
-		portIsOpen(cfg.GetMtlfServerBindingAddr()) {
+	if portIsOpen(cfg.GetSbiBindingAddr()) || portIsOpen(cfg.GetAnlfServerBindingAddr()) {
 		t.Fatal("owned listener opened after malformed registration success")
 	}
 }
@@ -587,8 +692,7 @@ func TestStartRuntimeContinuesAfterOAuth2RequiredRegistration(t *testing.T) {
 	if !state.Registered || !state.OAuth2Required || state.ResourceURI != resourceURI {
 		t.Fatalf("registration state = %+v", state)
 	}
-	if !portIsOpen(cfg.GetSbiBindingAddr()) || !portIsOpen(cfg.GetAnlfServerBindingAddr()) ||
-		!portIsOpen(cfg.GetMtlfServerBindingAddr()) {
+	if !portIsOpen(cfg.GetSbiBindingAddr()) || !portIsOpen(cfg.GetAnlfServerBindingAddr()) {
 		t.Fatal("owned listener did not open after OAuth-required registration response")
 	}
 
@@ -670,7 +774,6 @@ func TestStartRuntimeDeregistersAfterPostRegistrationListenerFailure(t *testing.
 		t.Fatal("SBI was not reachable during listener-failure rollback deregistration")
 	}
 	assertPortClosedEventually(t, cfg.GetSbiBindingAddr())
-	assertPortClosedEventually(t, cfg.GetMtlfServerBindingAddr())
 }
 
 func TestStartRuntimeOAuthRollbackUsesProtectedDeregistration(t *testing.T) {
@@ -752,7 +855,6 @@ func TestStartRuntimeOAuthRollbackUsesProtectedDeregistration(t *testing.T) {
 		t.Fatal("registration remained active after protected rollback deregistration")
 	}
 	assertPortClosedEventually(t, cfg.GetSbiBindingAddr())
-	assertPortClosedEventually(t, cfg.GetMtlfServerBindingAddr())
 }
 
 func TestTerminateDeregistersWhileSbiIsReachable(t *testing.T) {
@@ -810,7 +912,6 @@ func TestTerminateBoundsDeregistrationFailureAndStillStopsListeners(t *testing.T
 	}
 	assertPortClosedEventually(t, cfg.GetSbiBindingAddr())
 	assertPortClosedEventually(t, cfg.GetAnlfServerBindingAddr())
-	assertPortClosedEventually(t, cfg.GetMtlfServerBindingAddr())
 }
 
 func newLifecycleTestConfig(t *testing.T, sbiPort, anlfPort, mtlfPort int) *factory.Config {

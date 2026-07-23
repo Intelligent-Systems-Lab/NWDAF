@@ -103,6 +103,22 @@ func NewServer(nwdaf nwdafApp, tlsKeyLogPath string) (*Server, error) {
 	})
 	applyRoutes(eventsSubGroup, eventsSubRoutes)
 
+	provisionGroup := s.router.Group(factory.NwdafMLModelProvisionResURIPrefix)
+	provisionAuthorization := newRouterAuthorizationCheck(
+		models.ServiceName_NNWDAF_MLMODELPROVISION,
+	)
+	provisionGroup.Use(func(c *gin.Context) {
+		provisionAuthorization.Check(c, s.Context())
+	})
+	applyRoutes(provisionGroup, s.getMLModelProvisionRoutes())
+
+	monitorGroup := s.router.Group(factory.NwdafMLModelMonitorResURIPrefix)
+	monitorAuthorization := newRouterAuthorizationCheck(mlModelMonitorServiceName)
+	monitorGroup.Use(func(c *gin.Context) {
+		monitorAuthorization.Check(c, s.Context())
+	})
+	applyRoutes(monitorGroup, s.getMLModelMonitorRoutes())
+
 	// Collector routes (for SMF callbacks)
 	collectorRoutes := s.getCollectorRoutes()
 	collectorGroup := s.router.Group("/collector")

@@ -25,6 +25,8 @@ func TestConfigureNFManagementBuildsTruthfulPhaseZeroProfile(t *testing.T) {
 		"192.0.2.10",
 		8080,
 		true,
+		false,
+		false,
 	)
 	if err != nil {
 		t.Fatalf("ConfigureNFManagement() error = %v", err)
@@ -117,6 +119,8 @@ func TestConfigureNFManagementOmitsEventsCapabilityWhenAnlfBackendDisabled(t *te
 		"192.0.2.10",
 		8080,
 		false,
+		false,
+		false,
 	)
 	if err != nil {
 		t.Fatalf("ConfigureNFManagement() error = %v", err)
@@ -196,10 +200,86 @@ func TestConfigureNFManagementRejectsNonAdvertisableIPv4(t *testing.T) {
 				registerIPv4,
 				8080,
 				true,
+				false,
+				false,
 			)
 			if err == nil || !strings.Contains(err.Error(), "valid non-wildcard IPv4 address") {
 				t.Fatalf("ConfigureNFManagement() error = %v, want invalid advertised IPv4", err)
 			}
 		})
+	}
+}
+
+func TestConfigureNFManagementAdvertisesDistinctMLModelServices(t *testing.T) {
+	t.Parallel()
+
+	ctx := &NWDAFContext{
+		NfId:                              "11111111-1111-4111-8111-111111111111",
+		nfServiceInstanceId:               "22222222-2222-4222-8222-222222222222",
+		mlModelProvisionServiceInstanceID: "33333333-3333-4333-8333-333333333333",
+		mlModelMonitorServiceInstanceID:   "44444444-4444-4444-8444-444444444444",
+	}
+	if err := ctx.ConfigureNFManagement(
+		"http://127.0.0.10:8000",
+		"",
+		"NWDAF",
+		"http://192.0.2.10:8080",
+		"http",
+		"192.0.2.10",
+		8080,
+		true,
+		true,
+		true,
+	); err != nil {
+		t.Fatalf("ConfigureNFManagement() error = %v", err)
+	}
+	profile := ctx.NFProfile()
+	if len(profile.NfServices) != 3 {
+		t.Fatalf("NfServices length = %d, want 3", len(profile.NfServices))
+	}
+	want := map[models.ServiceName]string{
+		models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION: "22222222-2222-4222-8222-222222222222",
+		models.ServiceName_NNWDAF_MLMODELPROVISION:   "33333333-3333-4333-8333-333333333333",
+		nwdafMLModelMonitorServiceName:               "44444444-4444-4444-8444-444444444444",
+	}
+	for _, service := range profile.NfServices {
+		if service.ServiceInstanceId != want[service.ServiceName] {
+			t.Fatalf("service %s instance ID = %s", service.ServiceName, service.ServiceInstanceId)
+		}
+		delete(want, service.ServiceName)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing services: %v", want)
+	}
+	if profile.NwdafInfo == nil || len(profile.NwdafInfo.MlAnalyticsList) != 1 ||
+		len(profile.NwdafInfo.MlAnalyticsList[0].MlAnalyticsIds) != 1 ||
+		profile.NwdafInfo.MlAnalyticsList[0].MlAnalyticsIds[0] !=
+			models.NwdafEvent_UE_COMMUNICATION {
+		t.Fatalf("ML analytics profile = %+v", profile.NwdafInfo)
+	}
+}
+
+func TestConfigureNFManagementAdvertisesMLAnalyticsWithoutEventsCapability(t *testing.T) {
+	t.Parallel()
+
+	ctx := &NWDAFContext{NfId: "11111111-1111-4111-8111-111111111111"}
+	if err := ctx.ConfigureNFManagement(
+		"http://127.0.0.10:8000",
+		"",
+		"NWDAF",
+		"http://192.0.2.10:8080",
+		"http",
+		"192.0.2.10",
+		8080,
+		false,
+		true,
+		false,
+	); err != nil {
+		t.Fatalf("ConfigureNFManagement() error = %v", err)
+	}
+	profile := ctx.NFProfile()
+	if profile.NwdafInfo == nil || len(profile.NwdafInfo.NwdafEvents) != 0 ||
+		len(profile.NwdafInfo.MlAnalyticsList) != 1 {
+		t.Fatalf("ML-only NwdafInfo = %+v", profile.NwdafInfo)
 	}
 }

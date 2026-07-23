@@ -142,7 +142,7 @@ func TestEventsSubscriptionAuthorizationAllowsHandler(t *testing.T) {
 	}
 }
 
-func TestNewServerWiresEventsSubscriptionAuthorizationOnly(t *testing.T) {
+func TestNewServerWiresAuthorizationForAllPublicNwdafServices(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)
 
@@ -172,6 +172,14 @@ func TestNewServerWiresEventsSubscriptionAuthorizationOnly(t *testing.T) {
 		{method: http.MethodPost, path: factory.NwdafEventsSubResUriPrefix + "/subscriptions"},
 		{method: http.MethodPut, path: factory.NwdafEventsSubResUriPrefix + "/subscriptions/sub-1"},
 		{method: http.MethodDelete, path: factory.NwdafEventsSubResUriPrefix + "/subscriptions/sub-1"},
+		{method: http.MethodPost, path: factory.NwdafMLModelProvisionResURIPrefix + "/subscriptions"},
+		{method: http.MethodPut, path: factory.NwdafMLModelProvisionResURIPrefix + "/subscriptions/sub-1"},
+		{method: http.MethodDelete, path: factory.NwdafMLModelProvisionResURIPrefix + "/subscriptions/sub-1"},
+		{method: http.MethodPost, path: factory.NwdafMLModelMonitorResURIPrefix + "/registrations"},
+		{method: http.MethodDelete, path: factory.NwdafMLModelMonitorResURIPrefix + "/registrations/reg-1"},
+		{method: http.MethodPost, path: factory.NwdafMLModelMonitorResURIPrefix + "/subscriptions"},
+		{method: http.MethodPut, path: factory.NwdafMLModelMonitorResURIPrefix + "/subscriptions/sub-1"},
+		{method: http.MethodDelete, path: factory.NwdafMLModelMonitorResURIPrefix + "/subscriptions/sub-1"},
 	}
 	for _, request := range protectedRequests {
 		recorder := httptest.NewRecorder()

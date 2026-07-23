@@ -12,15 +12,6 @@ import (
 	"github.com/free5gc/openapi/models"
 )
 
-func (s *Server) modelAccuracyReportRoutes() []Route {
-	return []Route{{
-		Name:    "ModelAccuracyReport",
-		Method:  http.MethodPost,
-		Pattern: "/model-accuracy-reports",
-		APIFunc: s.HandleModelAccuracyReport,
-	}}
-}
-
 func (s *Server) HandleModelAccuracyReport(c *gin.Context) {
 	var report contract.ModelAccuracyReport
 	if err := c.ShouldBindJSON(&report); err != nil {

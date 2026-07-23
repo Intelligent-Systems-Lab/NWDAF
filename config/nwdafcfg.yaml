@@ -37,94 +37,9 @@ configuration:
 
   # Private MTLF backend connection. Standard SBI remains owned by NWDAF Go.
   mtlfBackend:
-    enabled: false
+    enabled: true
     endpoint: http://127.0.0.1:9092
     requestTimeout: 5
-
-  # MTLF (Daisy FL Framework)
-  mtlf:
-    enabled: true               # Master switch for all Daisy FL features
-    server:
-      bindingIPv4: 127.0.0.1
-      registerIPv4: 127.0.0.1
-      port: 8091
-    endpoint: http://127.0.0.1:9887
-    triggerOnStartup: false      # Trigger training once after NWDAF startup
-    triggerDelay: 10            # seconds to wait before startup trigger
-    modelProvider:
-      providerId: local
-      bootstrapModelUniqueId: 1
-    accuracyPolicy:
-      enabled: true            # Trigger retraining on accuracy degradation
-      primaryMetric: WAPE       # decision metric for retrain policy
-      recentBufferSize: 12      # per-scope retained report history
-      minBufferSamples: 5       # samples required before enabling z-score gate
-      minStd: 0.14              # floor on std to avoid unstable z-scores
-      fixedFloor: 0.05          # degradation eligibility floor in primary metric space
-      zScoreThreshold: 1.3      # relative anomaly threshold
-      decisionWindowSize: 5     # evaluate the latest M decision rounds
-      requiredHitsInWindow: 3   # require N hits inside the latest M rounds
-      scopeStateTTL: 600        # seconds before inactive scope state is GC'd
-      consecutiveBreaches: 3    # required consecutive triggered rounds
-      degradationPolicy:
-        minDecisionTrafficScale: 1024
-      chronicPolicy:
-        enabled: false          # disable chronic path on the current transition-only testbed line
-        metric: WAPE            # first implementation supports WAPE/NRMSE/MAE
-        aggregator: percentile  # mean | percentile
-        percentile: 75          # use 50 to represent median
-        threshold: 0.97         # chronic metric threshold used in recent replay experiments
-        minDecisionTrafficScale: 1024   # minimum traffic scale before chronic path is considered
-      lowTrafficOverpredictionPolicy:
-        enabled: false
-        maxActualTrafficScale: 1024
-        minPredictedTrafficScale: 4096
-        predictionOvershootRatio: 4.0
-    task:
-      TID: "nwdaf_fl_training"
-      NUM_ROUNDS: 30
-      ES_PATIENCE: 2    # early stopping: halt after N rounds without val loss improvement
-      LR_PATIENCE: 2    # reduce LR by 0.5x after N rounds without improvement
-      INITIAL_LR: 0.001
-      EVALUATE_INTERVAL: 1
-      EVALUATE_INIT_MODEL_MASTER: true
-      MIN_WAITING_TIME_MASTER: 5
-      MODEL_PATH: "model/model.npy"
-      OPERATORS:
-        MASTER_SERVER_OPERATOR: ["daisyfl.operator.base.base_server_logic", "BaseServerLogic"]
-        CLIENT_OPERATOR: ["daisyfl.operator.base.base_client_logic", "BaseClientLogic"]
-      STRATEGIES:
-        MASTER_STRATEGY: ["custom_strategy", "EarlyStoppingFedAvg"]
-      METRICS_HANDLERS:
-        MASTER_METRICS_HANDLER: ["daisyfl.metrics_handler.flat_metrics_handler", "FlatMetricsHandler"]
-      SAVE_MODEL: true
-      MODEL_META:
-        model:
-          input_size: 10
-          output_size: 2
-          num_channels: [32, 64, 64, 64]
-          kernel_size: 2
-          dropout: 0.2
-        inference:
-          seq_length: 30
-          out_seq_len: 1
-          feature_order:
-            - total_vol
-            - ul_vol
-            - dl_vol
-            - total_nb_pkts
-            - ul_nb_pkts
-            - dl_nb_pkts
-            - ul_thr
-            - dl_thr
-            - ul_pkt_thr
-            - dl_pkt_thr
-          output_fields:
-            - ul_vol
-            - dl_vol
-          preprocessing: log1p_standard_scaler
-        training:
-          local_epochs: 3
 
   # ADRF (Analytics Data Repository Function) — TS 29.575
   adrf:

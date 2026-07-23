@@ -13,8 +13,10 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/free5gc/nwdaf/internal/anlf/contract"
+	"github.com/free5gc/nwdaf/internal/backend"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/pkg/factory"
+	"github.com/free5gc/openapi/models"
 	"github.com/free5gc/util/httpwrapper"
 	logger_util "github.com/free5gc/util/logger"
 )
@@ -52,11 +54,60 @@ type processorAPI interface {
 	HandleRuntimeCompletion(event *contract.RuntimeCompletionEvent) error
 }
 
+type mlModelGateway interface {
+	HandleCreateMLModelProvisionFromBackend(
+		context.Context,
+		[]byte,
+	) (*backend.StandardResponse, *models.ProblemDetails)
+	HandleReplaceMLModelProvisionFromBackend(
+		context.Context,
+		string,
+		[]byte,
+	) (*backend.StandardResponse, *models.ProblemDetails)
+	HandleDeleteMLModelProvisionFromBackend(
+		context.Context,
+		string,
+	) (*backend.StandardResponse, *models.ProblemDetails)
+	HandleMLModelProvisionNotification(
+		context.Context,
+		string,
+		[]byte,
+	) (*backend.StandardResponse, *models.ProblemDetails)
+	HandleCreateMLModelMonitorRegistrationFromBackend(
+		context.Context,
+		[]byte,
+	) (*backend.StandardResponse, *models.ProblemDetails)
+	HandleDeleteMLModelMonitorRegistrationFromBackend(
+		context.Context,
+		string,
+	) (*backend.StandardResponse, *models.ProblemDetails)
+	HandleCreateMLModelMonitorSubscriptionFromBackend(
+		context.Context,
+		[]byte,
+		string,
+	) (*backend.StandardResponse, *models.ProblemDetails)
+	HandleReplaceMLModelMonitorSubscriptionFromBackend(
+		context.Context,
+		string,
+		[]byte,
+	) (*backend.StandardResponse, *models.ProblemDetails)
+	HandleDeleteMLModelMonitorSubscriptionFromBackend(
+		context.Context,
+		string,
+	) (*backend.StandardResponse, *models.ProblemDetails)
+	HandleMLModelMonitorNotification(
+		context.Context,
+		string,
+		[]byte,
+	) (*backend.StandardResponse, *models.ProblemDetails)
+}
+
 type Server struct {
 	httpServer *http.Server
 	listener   net.Listener
 	router     *gin.Engine
 	processor  processorAPI
+	mlModel    mlModelGateway
 }
 
 func NewServer(cfg *factory.Config, processor processorAPI) (*Server, error) {
@@ -67,13 +118,12 @@ func NewServer(cfg *factory.Config, processor processorAPI) (*Server, error) {
 		processor: processor,
 	}
 	s.router.Use(gin.Recovery())
-	routes := s.mlModelNotifyRoutes()
-	routes = append(routes, s.modelAccuracyReportRoutes()...)
-	routes = append(routes, s.eventsSubscriptionNotificationRoutes()...)
+	routes := s.eventsSubscriptionNotificationRoutes()
 	routes = append(routes, s.nfDiscoveryRoutes()...)
 	routes = append(routes, s.smfEventExposureRoutes()...)
 	routes = append(routes, s.adrfStorageRoutes()...)
 	routes = append(routes, s.smfResourceAssociationRoutes()...)
+	routes = append(routes, s.mlModelGatewayRoutes()...)
 	applyRoutes(s.router.Group(""), routes)
 
 	httpServer, err := httpwrapper.NewHttp2Server(
@@ -88,6 +138,10 @@ func NewServer(cfg *factory.Config, processor processorAPI) (*Server, error) {
 	s.httpServer = httpServer
 
 	return s, nil
+}
+
+func (s *Server) SetMLModelGateway(gateway mlModelGateway) {
+	s.mlModel = gateway
 }
 
 func (s *Server) Run(wg *sync.WaitGroup) error {

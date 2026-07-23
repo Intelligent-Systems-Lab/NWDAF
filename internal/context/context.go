@@ -19,17 +19,27 @@ import (
 var nwdafContext *NWDAFContext
 
 const (
-	nwdafEventsSubscriptionAPIVersion     = "v1"
-	nwdafEventsSubscriptionAPIFullVersion = "1.0.0"
+	nwdafEventsSubscriptionAPIVersion                        = "v1"
+	nwdafEventsSubscriptionAPIFullVersion                    = "1.0.0"
+	nwdafMLModelProvisionAPIVersion                          = "v1"
+	nwdafMLModelProvisionAPIFullVersion                      = "1.1.4"
+	nwdafMLModelMonitorAPIVersion                            = "v1"
+	nwdafMLModelMonitorAPIFullVersion                        = "1.0.2"
+	nwdafMLModelMonitorServiceName        models.ServiceName = "nnwdaf-mlmodelmonitor"
 )
 
 func Init() {
 	nwdafContext = &NWDAFContext{
-		NfId:                uuid.New().String(),
-		nfServiceInstanceId: uuid.New().String(),
-		subscriptions:       make(map[string]*Subscription),
-		analyticsRoutes:     make(map[string]AnalyticsSubscriptionRoute),
-		smfPeerRoutes:       make(map[string]SmfPeerResourceRoute),
+		NfId:                              uuid.New().String(),
+		nfServiceInstanceId:               uuid.New().String(),
+		mlModelProvisionServiceInstanceID: uuid.New().String(),
+		mlModelMonitorServiceInstanceID:   uuid.New().String(),
+		subscriptions:                     make(map[string]*Subscription),
+		analyticsRoutes:                   make(map[string]AnalyticsSubscriptionRoute),
+		smfPeerRoutes:                     make(map[string]SmfPeerResourceRoute),
+		mlModelProvisionRoutes:            make(map[string]MLModelProvisionSubscriptionRoute),
+		mlModelRegistrationRoutes:         make(map[string]MLModelMonitorRegistrationRoute),
+		mlModelMonitorRoutes:              make(map[string]MLModelMonitorSubscriptionRoute),
 	}
 	logger.CtxLog.Infof("NWDAF Context initialized with NfId: %s", nwdafContext.NfId)
 }
@@ -42,22 +52,28 @@ type NWDAFContext struct {
 	NfId      string
 	NwdafName string
 
-	nfManagementMu      sync.RWMutex
-	nfServiceInstanceId string
-	nrfUri              string
-	nrfCertPem          string
-	nfProfile           models.NrfNfManagementNfProfile
-	registered          bool
-	registrationUri     string
-	oauth2Required      bool
-	heartBeatTimer      int32
+	nfManagementMu                    sync.RWMutex
+	nfServiceInstanceId               string
+	mlModelProvisionServiceInstanceID string
+	mlModelMonitorServiceInstanceID   string
+	nrfUri                            string
+	nrfCertPem                        string
+	nfProfile                         models.NrfNfManagementNfProfile
+	registered                        bool
+	registrationUri                   string
+	oauth2Required                    bool
+	heartBeatTimer                    int32
 
 	// Subscriptions storage (NWDAF consumer subscriptions)
-	mu              sync.RWMutex
-	subscriptions   map[string]*Subscription
-	analyticsRoutes map[string]AnalyticsSubscriptionRoute
-	smfPeerMu       sync.RWMutex
-	smfPeerRoutes   map[string]SmfPeerResourceRoute
+	mu                        sync.RWMutex
+	subscriptions             map[string]*Subscription
+	analyticsRoutes           map[string]AnalyticsSubscriptionRoute
+	smfPeerMu                 sync.RWMutex
+	smfPeerRoutes             map[string]SmfPeerResourceRoute
+	mlModelRouteMu            sync.RWMutex
+	mlModelProvisionRoutes    map[string]MLModelProvisionSubscriptionRoute
+	mlModelRegistrationRoutes map[string]MLModelMonitorRegistrationRoute
+	mlModelMonitorRoutes      map[string]MLModelMonitorSubscriptionRoute
 
 	// NWDAF subscription resources: nwdafSubId → []NwdafSubResource
 	// Tracks SMF resources per NWDAF subscription for:
@@ -324,6 +340,8 @@ func (c *NWDAFContext) ConfigureNFManagement(
 	registerIPv4 string,
 	sbiPort int,
 	advertiseEventsSubscription bool,
+	advertiseMLModelProvision bool,
+	advertiseMLModelMonitor bool,
 ) error {
 	if c == nil {
 		return fmt.Errorf("NWDAF context is nil")
@@ -336,6 +354,12 @@ func (c *NWDAFContext) ConfigureNFManagement(
 	}
 	if c.nfServiceInstanceId == "" {
 		c.nfServiceInstanceId = uuid.New().String()
+	}
+	if c.mlModelProvisionServiceInstanceID == "" {
+		c.mlModelProvisionServiceInstanceID = uuid.New().String()
+	}
+	if c.mlModelMonitorServiceInstanceID == "" {
+		c.mlModelMonitorServiceInstanceID = uuid.New().String()
 	}
 	registerIPv4 = strings.TrimSpace(registerIPv4)
 	parsedRegisterIPv4 := net.ParseIP(registerIPv4)
@@ -364,32 +388,56 @@ func (c *NWDAFContext) ConfigureNFManagement(
 		NfStatus:       models.NrfNfManagementNfStatus_REGISTERED,
 		Ipv4Addresses:  []string{registerIPv4},
 	}
+	if advertiseEventsSubscription || advertiseMLModelProvision {
+		profile.NwdafInfo = &models.NwdafInfo{}
+		if advertiseEventsSubscription {
+			profile.NwdafInfo.NwdafEvents = []models.NwdafEvent{
+				models.NwdafEvent_UE_COMMUNICATION,
+			}
+		}
+		if advertiseMLModelProvision {
+			profile.NwdafInfo.MlAnalyticsList = []models.MlAnalyticsInfo{{
+				MlAnalyticsIds: []models.NwdafEvent{
+					models.NwdafEvent_UE_COMMUNICATION,
+				},
+			}}
+		}
+	}
 	if advertiseEventsSubscription {
-		profile.NwdafInfo = &models.NwdafInfo{
-			NwdafEvents: []models.NwdafEvent{models.NwdafEvent_UE_COMMUNICATION},
-		}
-		profile.NfServices = []models.NrfNfManagementNfService{
-			{
-				ServiceInstanceId: c.nfServiceInstanceId,
-				ServiceName:       models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION,
-				Versions: []models.NfServiceVersion{
-					{
-						ApiVersionInUri: nwdafEventsSubscriptionAPIVersion,
-						ApiFullVersion:  nwdafEventsSubscriptionAPIFullVersion,
-					},
-				},
-				Scheme:          scheme,
-				NfServiceStatus: models.NfServiceStatus_REGISTERED,
-				IpEndPoints: []models.IpEndPoint{
-					{
-						Ipv4Address: registerIPv4,
-						Transport:   models.NrfNfManagementTransportProtocol_TCP,
-						Port:        int32(sbiPort),
-					},
-				},
-				ApiPrefix: sbiUri,
-			},
-		}
+		profile.NfServices = append(profile.NfServices, buildNwdafService(
+			c.nfServiceInstanceId,
+			models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION,
+			nwdafEventsSubscriptionAPIVersion,
+			nwdafEventsSubscriptionAPIFullVersion,
+			scheme,
+			registerIPv4,
+			sbiPort,
+			sbiUri,
+		))
+	}
+	if advertiseMLModelProvision {
+		profile.NfServices = append(profile.NfServices, buildNwdafService(
+			c.mlModelProvisionServiceInstanceID,
+			models.ServiceName_NNWDAF_MLMODELPROVISION,
+			nwdafMLModelProvisionAPIVersion,
+			nwdafMLModelProvisionAPIFullVersion,
+			scheme,
+			registerIPv4,
+			sbiPort,
+			sbiUri,
+		))
+	}
+	if advertiseMLModelMonitor {
+		profile.NfServices = append(profile.NfServices, buildNwdafService(
+			c.mlModelMonitorServiceInstanceID,
+			nwdafMLModelMonitorServiceName,
+			nwdafMLModelMonitorAPIVersion,
+			nwdafMLModelMonitorAPIFullVersion,
+			scheme,
+			registerIPv4,
+			sbiPort,
+			sbiUri,
+		))
 	}
 
 	c.nfManagementMu.Lock()
@@ -403,6 +451,34 @@ func (c *NWDAFContext) ConfigureNFManagement(
 	c.oauth2Required = false
 	c.heartBeatTimer = 0
 	return nil
+}
+
+func buildNwdafService(
+	serviceInstanceID string,
+	serviceName models.ServiceName,
+	apiVersion string,
+	apiFullVersion string,
+	scheme models.UriScheme,
+	registerIPv4 string,
+	sbiPort int,
+	sbiURI string,
+) models.NrfNfManagementNfService {
+	return models.NrfNfManagementNfService{
+		ServiceInstanceId: serviceInstanceID,
+		ServiceName:       serviceName,
+		Versions: []models.NfServiceVersion{{
+			ApiVersionInUri: apiVersion,
+			ApiFullVersion:  apiFullVersion,
+		}},
+		Scheme:          scheme,
+		NfServiceStatus: models.NfServiceStatus_REGISTERED,
+		IpEndPoints: []models.IpEndPoint{{
+			Ipv4Address: registerIPv4,
+			Transport:   models.NrfNfManagementTransportProtocol_TCP,
+			Port:        int32(sbiPort),
+		}},
+		ApiPrefix: sbiURI,
+	}
 }
 
 func (c *NWDAFContext) NrfUri() string {

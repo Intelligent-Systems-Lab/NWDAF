@@ -15,16 +15,18 @@ import (
 )
 
 const (
-	NwdafDefaultConfigPath     = "./config/nwdafcfg.yaml"
-	NwdafSbiDefaultScheme      = "http"
-	NwdafSbiTLSScheme          = "https"
-	NwdafSbiDefaultIPv4        = "127.0.0.1"
-	NwdafSbiDefaultPort        = 8080
-	NwdafAnlfDefaultPort       = 8090
-	NwdafMtlfDefaultPort       = 8091
-	NwdafDefaultNwdafName      = "NWDAF"
-	NwdafEventsSubResUriPrefix = "/nnwdaf-eventssubscription/v1"
-	NwdafSupportedEventUEComm  = "UE_COMMUNICATION"
+	NwdafDefaultConfigPath            = "./config/nwdafcfg.yaml"
+	NwdafSbiDefaultScheme             = "http"
+	NwdafSbiTLSScheme                 = "https"
+	NwdafSbiDefaultIPv4               = "127.0.0.1"
+	NwdafSbiDefaultPort               = 8080
+	NwdafAnlfDefaultPort              = 8090
+	NwdafMtlfDefaultPort              = 8091
+	NwdafDefaultNwdafName             = "NWDAF"
+	NwdafEventsSubResUriPrefix        = "/nnwdaf-eventssubscription/v1"
+	NwdafMLModelProvisionResURIPrefix = "/nnwdaf-mlmodelprovision/v1"
+	NwdafMLModelMonitorResURIPrefix   = "/nnwdaf-mlmodelmonitor/v1"
+	NwdafSupportedEventUEComm         = "UE_COMMUNICATION"
 )
 
 var NwdafConfig *Config

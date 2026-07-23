@@ -11,6 +11,8 @@ type Kind string
 const (
 	KindAnLF Kind = "ANLF"
 	KindMTLF Kind = "MTLF"
+
+	MonitorRegistrationIDHeader = "X-NWDAF-Monitor-Registration-Id"
 )
 
 type DataSource string
@@ -67,12 +69,35 @@ type DataSourceSelection struct {
 	EffectiveSource DataSource `json:"effectiveSource,omitempty"`
 }
 
+type MLModelProvisionSubscriptionSnapshot struct {
+	SubscriptionID string          `json:"subscriptionId"`
+	Representation json.RawMessage `json:"representation"`
+	Initiator      string          `json:"initiator"`
+	Destination    string          `json:"destination"`
+}
+
+type MLModelMonitorRegistrationSnapshot struct {
+	RegistrationID string          `json:"registrationId"`
+	Representation json.RawMessage `json:"representation"`
+	Initiator      string          `json:"initiator"`
+}
+
+type MLModelMonitorSubscriptionSnapshot struct {
+	SubscriptionID    string          `json:"subscriptionId"`
+	Representation    json.RawMessage `json:"representation"`
+	Destination       string          `json:"destination"`
+	OwnerRegistration string          `json:"ownerRegistrationId,omitempty"`
+}
+
 type SyncRequest struct {
-	ContainingNwdaf        NwdafIdentity                `json:"containingNwdaf"`
-	EventsSubscriptions    []EventsSubscriptionSnapshot `json:"eventsSubscriptions"`
-	SmfResources           []SmfResourceSnapshot        `json:"smfResources"`
-	DataSourceAvailability DataSourceAvailability       `json:"dataSourceAvailability"`
-	MtlfSourceSelection    DataSourceSelection          `json:"mtlfSourceSelection"`
+	ContainingNwdaf               NwdafIdentity                          `json:"containingNwdaf"`
+	EventsSubscriptions           []EventsSubscriptionSnapshot           `json:"eventsSubscriptions"`
+	SmfResources                  []SmfResourceSnapshot                  `json:"smfResources"`
+	DataSourceAvailability        DataSourceAvailability                 `json:"dataSourceAvailability"`
+	MtlfSourceSelection           DataSourceSelection                    `json:"mtlfSourceSelection"`
+	MLModelProvisionSubscriptions []MLModelProvisionSubscriptionSnapshot `json:"mlModelProvisionSubscriptions"`
+	MLModelMonitorRegistrations   []MLModelMonitorRegistrationSnapshot   `json:"mlModelMonitorRegistrations"`
+	MLModelMonitorSubscriptions   []MLModelMonitorSubscriptionSnapshot   `json:"mlModelMonitorSubscriptions"`
 }
 
 type SyncResponse struct {

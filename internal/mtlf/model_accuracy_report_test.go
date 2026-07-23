@@ -1,12 +1,9 @@
 package mtlf
 
 import (
-	"bytes"
 	"context"
-	"io"
 	"net"
 	"net/http"
-	"reflect"
 	"strconv"
 	"sync"
 	"testing"
@@ -48,7 +45,7 @@ func TestHandleModelAccuracyReportDeduplicatesAndRejectsStaleGeneration(t *testi
 	}
 }
 
-func TestPyAnLFAccuracyJSONReachesMtlfWithoutUnitConversion(t *testing.T) {
+func TestLegacyAccuracyRouteIsNotRegistered(t *testing.T) {
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("reserve AnLF port: %v", err)
@@ -63,17 +60,8 @@ func TestPyAnLFAccuracyJSONReachesMtlfWithoutUnitConversion(t *testing.T) {
 			BindingIPv4: "127.0.0.1",
 			Port:        port,
 		}},
-		Mtlf: &factory.MtlfConfig{AccuracyPolicy: &factory.AccuracyMonitorConfig{
-			PrimaryMetric:    "sMAPE",
-			MinBufferSamples: 8,
-			DegradationPolicy: &factory.DegradationPolicyConfig{
-				MinDecisionTrafficScale: 1,
-			},
-		}},
 	}}
-	service := newTestMtlfService(cfg)
 	processor := anlfprocessor.NewProcessor(nil)
-	processor.SetModelAccuracyWorkflow(service)
 	server, err := anlfserver.NewServer(cfg, processor)
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -87,23 +75,13 @@ func TestPyAnLFAccuracyJSONReachesMtlfWithoutUnitConversion(t *testing.T) {
 		serverWG.Wait()
 	}()
 
-	// This is the canonical payload asserted by PyAnLF's accuracy serialization test.
-	payload := []byte(`{
-		"report_id":"report-stable","report_sequence":1,"generated_at":"2026-07-14T01:02:03Z",
-		"model_identity":{"provider_id":"provider","model_unique_id":1},"generation":1,
-		"monitoring_context":{"analytics_event":"UE_COMMUNICATION","target_ue":{},"event_filter":{},"scope_id":"scope"},
-		"accuracy_information":{"metrics":{"sMAPE":0.1},"deviation":0.1,"sample_count":1,"inference_count":1,
-		"actual_traffic_scale":10.0,"predicted_traffic_scale":11.0,
-		"window_start":"2026-07-14T01:02:03Z","window_end":"2026-07-14T01:02:03Z"},
-		"retrain_context":{"subscription_ids":["sub"],"observation_source_ids":["source"]}
-	}`)
 	requestCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	request, err := http.NewRequestWithContext(
 		requestCtx,
 		http.MethodPost,
 		"http://127.0.0.1:"+strconv.Itoa(port)+"/model-accuracy-reports",
-		bytes.NewReader(payload),
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("create accuracy report request: %v", err)
@@ -118,44 +96,7 @@ func TestPyAnLFAccuracyJSONReachesMtlfWithoutUnitConversion(t *testing.T) {
 			t.Errorf("close accuracy report response: %v", closeErr)
 		}
 	}()
-	if response.StatusCode != http.StatusNoContent {
-		body, readErr := io.ReadAll(response.Body)
-		if readErr != nil {
-			t.Fatalf("read accuracy report response: %v", readErr)
-		}
-		t.Fatalf("status = %d, body = %s", response.StatusCode, body)
-	}
-
-	modelIdentity := contract.ModelIdentity{ProviderID: "provider", ModelUniqueID: 1}
-	storedValue, ok := service.accuracyReportContexts.Load(modelIdentity.Key())
-	if !ok {
-		t.Fatal("MTLF did not retain the PyAnLF report context")
-	}
-	stored := storedValue.(contract.ModelAccuracyReport)
-	if stored.ReportSequence != 1 || stored.Generation != 1 ||
-		stored.MonitoringContext.AnalyticsEvent != "UE_COMMUNICATION" ||
-		stored.MonitoringContext.ScopeID != "scope" ||
-		stored.AccuracyInformation.Deviation != 0.1 ||
-		stored.AccuracyInformation.SampleCount != 1 ||
-		stored.AccuracyInformation.InferenceCount != 1 ||
-		stored.AccuracyInformation.ActualTrafficScale != 10 ||
-		stored.AccuracyInformation.PredictedTrafficScale != 11 ||
-		stored.AccuracyInformation.Metrics["sMAPE"] != 0.1 {
-		t.Fatalf("stored report changed contract values: %+v", stored)
-	}
-	if !reflect.DeepEqual(stored.RetrainContext.SubscriptionIDs, []string{"sub"}) ||
-		!reflect.DeepEqual(stored.RetrainContext.ObservationSourceIDs, []string{"source"}) {
-		t.Fatalf("stored retrain context = %+v", stored.RetrainContext)
-	}
-
-	scope := service.stateStore.GetOrCreateScope(modelIdentity.Key(), "scope", 20, 5)
-	observations := scope.recentObservations.Snapshot()
-	if len(observations) != 1 {
-		t.Fatalf("MTLF observations = %d, want 1", len(observations))
-	}
-	observation := observations[0]
-	if observation.SampleCount != 1 || observation.TrafficScale != 10 ||
-		observation.PredictedTrafficScale != 11 || observation.Metrics["sMAPE"] != 0.1 {
-		t.Fatalf("MTLF policy observation changed contract units: %+v", observation)
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("legacy accuracy route status = %d, want 404", response.StatusCode)
 	}
 }

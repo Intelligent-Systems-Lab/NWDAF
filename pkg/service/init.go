@@ -14,7 +14,6 @@ import (
 
 	"github.com/free5gc/nwdaf/internal/anlf"
 	anlfclient "github.com/free5gc/nwdaf/internal/anlf/client"
-	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/internal/anlf/coordinator"
 	anlfprocessor "github.com/free5gc/nwdaf/internal/anlf/processor"
 	"github.com/free5gc/nwdaf/internal/backend"
@@ -22,7 +21,6 @@ import (
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/mtlf"
 	mtlfclient "github.com/free5gc/nwdaf/internal/mtlf/client"
-	mtlfprocessor "github.com/free5gc/nwdaf/internal/mtlf/processor"
 	"github.com/free5gc/nwdaf/internal/sbi"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/internal/sbi/notifier"
@@ -88,6 +86,11 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		cfg.GetSbiPort(),
 		cfg.Configuration != nil && cfg.Configuration.AnlfBackend != nil &&
 			cfg.Configuration.AnlfBackend.Enabled,
+		cfg.Configuration != nil && cfg.Configuration.MtlfBackend != nil &&
+			cfg.Configuration.MtlfBackend.Enabled,
+		cfg.Configuration != nil && cfg.Configuration.AnlfBackend != nil &&
+			cfg.Configuration.AnlfBackend.Enabled &&
+			cfg.Configuration.MtlfBackend != nil && cfg.Configuration.MtlfBackend.Enabled,
 	); err != nil {
 		return nil, fmt.Errorf("configure NRF NFManagement context: %w", err)
 	}
@@ -127,36 +130,28 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		nwdaf.mtlfAvailability = backend.NewAvailabilityMonitor(nwdaf.probeMtlfBackend)
 	}
 
-	var daisyClient mtlf.DaisyAPI
-	if cfg.Configuration != nil &&
-		cfg.Configuration.Mtlf != nil &&
-		cfg.Configuration.Mtlf.Enabled &&
-		cfg.Configuration.Mtlf.Endpoint != "" {
-		daisyClient = mtlfclient.NewClient(cfg.Configuration.Mtlf.Endpoint)
-	}
-
 	nwdaf.anlfCoordinator = coordinator.New(
 		nwdaf,
 		anlfBackend,
 		nil,
 		nwdaf.anlfAvailability,
 	)
-	mtlfService := mtlf.NewMtlfService(nwdaf, daisyClient, nwdaf.consumer.AdrfClient())
-	mtlfService.SetOnModelProvisionEvent(func(event contract.ModelProvisionEvent) error {
-		_, eventErr := nwdaf.anlfCoordinator.ApplyModelProvisionEvent(event)
-		return eventErr
-	})
+	mtlfService := mtlf.NewMtlfService(nwdaf, nil, nwdaf.consumer.AdrfClient())
 	reportDispatcher := notifier.NewReportDispatcher(nwdaf.ctx)
 	anlfProcessor := anlfprocessor.NewProcessor(nwdaf.anlfCoordinator, reportDispatcher)
-	anlfProcessor.SetModelAccuracyWorkflow(mtlfService)
 	anlfProcessor.SetNFDiscoveryProxy(nwdaf.consumer)
 	anlfProcessor.SetSmfEventExposureProxy(nwdaf.consumer)
 	anlfProcessor.SetAdrfStorageProxy(nwdaf.consumer)
-	mtlfProcessor := mtlfprocessor.NewProcessor(mtlfService)
 
 	// Initialize processor
 	nwdaf.processor = processor.NewProcessor(nwdaf, nwdaf.anlfCoordinator, mtlfService)
 	nwdaf.processor.SetEventsSubscriptionBackend(nwdaf.anlfCoordinator)
+	nwdaf.processor.SetMLModelBackends(
+		nwdaf.mtlfBackendClient,
+		nwdaf.anlfBackendClient,
+		nwdaf.mtlfAvailability,
+		nwdaf.anlfAvailability,
+	)
 
 	// Initialize SBI server
 	nwdaf.sbiServer, err = sbi.NewServer(nwdaf, "")
@@ -167,11 +162,7 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 	if err != nil {
 		return nil, err
 	}
-	nwdaf.mtlfServer, err = mtlf.NewServer(cfg, mtlfProcessor)
-	if err != nil {
-		return nil, err
-	}
-
+	nwdaf.anlfServer.SetMLModelGateway(nwdaf.processor)
 	return nwdaf, nil
 }
 
@@ -291,7 +282,6 @@ func (a *NwdafApp) startRuntime() error {
 	a.wg.Add(1)
 	go a.listenShutdownEvent()
 	a.startBackendAvailabilityMonitors()
-	a.processor.StartMtlfTrainingScheduler(&a.wg)
 	logger.InitLog.Infoln("NWDAF startup complete")
 	return nil
 }
@@ -320,6 +310,7 @@ func (a *NwdafApp) probeMtlfBackend(ctx context.Context) (backend.ProbeResult, e
 	a.mtlfAvailability.MarkSyncing(health.ProcessInstanceID)
 	response, err := a.mtlfBackendClient.Sync(ctx, a.buildBackendSyncRequest(backend.KindMTLF))
 	if err != nil {
+		logger.InitLog.Warnf("MTLF backend sync failed: %v", err)
 		return backend.ProbeResult{}, err
 	}
 	if response.ProcessInstanceID != health.ProcessInstanceID {
@@ -345,6 +336,7 @@ func (a *NwdafApp) probeAnlfBackend(ctx context.Context) (backend.ProbeResult, e
 	a.anlfAvailability.MarkSyncing(health.ProcessInstanceID)
 	response, err := a.anlfBackendClient.Sync(ctx, a.buildBackendSyncRequest(backend.KindAnLF))
 	if err != nil {
+		logger.InitLog.Warnf("AnLF backend sync failed: %v", err)
 		return backend.ProbeResult{}, err
 	}
 	if response.ProcessInstanceID != health.ProcessInstanceID {
@@ -366,34 +358,91 @@ func (a *NwdafApp) buildBackendSyncRequest(kind backend.Kind) backend.SyncReques
 		identity.InternalCallbackBaseURI = a.cfg.GetAnlfServerURI()
 	}
 	request := backend.SyncRequest{
-		ContainingNwdaf:        identity,
-		EventsSubscriptions:    []backend.EventsSubscriptionSnapshot{},
-		SmfResources:           []backend.SmfResourceSnapshot{},
-		DataSourceAvailability: a.currentDataSourceAvailability(),
-		MtlfSourceSelection:    a.currentMtlfSourceSelection(),
+		ContainingNwdaf:               identity,
+		EventsSubscriptions:           []backend.EventsSubscriptionSnapshot{},
+		SmfResources:                  []backend.SmfResourceSnapshot{},
+		DataSourceAvailability:        a.currentDataSourceAvailability(),
+		MtlfSourceSelection:           a.currentMtlfSourceSelection(),
+		MLModelProvisionSubscriptions: []backend.MLModelProvisionSubscriptionSnapshot{},
+		MLModelMonitorRegistrations:   []backend.MLModelMonitorRegistrationSnapshot{},
+		MLModelMonitorSubscriptions:   []backend.MLModelMonitorSubscriptionSnapshot{},
 	}
-	if kind != backend.KindAnLF || a.nwdafCtx == nil {
+	if a.nwdafCtx == nil {
 		return request
 	}
-	for _, route := range a.nwdafCtx.GetAllAnalyticsSubscriptionRoutes() {
-		request.EventsSubscriptions = append(
-			request.EventsSubscriptions,
-			backend.EventsSubscriptionSnapshot{
-				SubscriptionID:          route.SubscriptionID,
-				Subscription:            route.AcceptedSubscription,
-				ExternalNotificationURI: route.ExternalNotificationURI,
+	for _, route := range a.nwdafCtx.GetAllMLModelProvisionSubscriptionRoutes() {
+		if kind == backend.KindAnLF &&
+			route.Initiator != nwdaf_context.MLModelRoutePartyAnLFBackend {
+			continue
+		}
+		representation := route.BackendRepresentation
+		if kind == backend.KindAnLF {
+			representation = route.AcceptedRepresentation
+		}
+		request.MLModelProvisionSubscriptions = append(
+			request.MLModelProvisionSubscriptions,
+			backend.MLModelProvisionSubscriptionSnapshot{
+				SubscriptionID: route.SubscriptionID,
+				Representation: append([]byte(nil), representation...),
+				Initiator:      string(route.Initiator),
+				Destination:    string(route.Destination),
 			},
 		)
 	}
-	for _, route := range a.nwdafCtx.GetAllSmfPeerResourceRoutes() {
-		request.SmfResources = append(request.SmfResources, backend.SmfResourceSnapshot{
-			CorrelationID:        route.CorrelationID,
-			ResourceLocation:     route.ResourceLocation,
-			TargetAPIBaseURI:     route.TargetAPIBaseURI,
-			NwdafSubscriptionIDs: append([]string(nil), route.NwdafSubscriptionIDs...),
-			PendingCleanup:       route.PendingCleanup,
-			Subscription:         append([]byte(nil), route.AcceptedSubscriptionJSON...),
-		})
+	if kind == backend.KindAnLF {
+		for _, route := range a.nwdafCtx.GetAllAnalyticsSubscriptionRoutes() {
+			request.EventsSubscriptions = append(
+				request.EventsSubscriptions,
+				backend.EventsSubscriptionSnapshot{
+					SubscriptionID:          route.SubscriptionID,
+					Subscription:            route.AcceptedSubscription,
+					ExternalNotificationURI: route.ExternalNotificationURI,
+				},
+			)
+		}
+		for _, route := range a.nwdafCtx.GetAllSmfPeerResourceRoutes() {
+			request.SmfResources = append(request.SmfResources, backend.SmfResourceSnapshot{
+				CorrelationID:        route.CorrelationID,
+				ResourceLocation:     route.ResourceLocation,
+				TargetAPIBaseURI:     route.TargetAPIBaseURI,
+				NwdafSubscriptionIDs: append([]string{}, route.NwdafSubscriptionIDs...),
+				PendingCleanup:       route.PendingCleanup,
+				Subscription:         append([]byte(nil), route.AcceptedSubscriptionJSON...),
+			})
+		}
+	}
+	for _, route := range a.nwdafCtx.GetAllMLModelMonitorRegistrationRoutes() {
+		if kind == backend.KindAnLF &&
+			route.Initiator != nwdaf_context.MLModelRoutePartyAnLFBackend {
+			continue
+		}
+		request.MLModelMonitorRegistrations = append(
+			request.MLModelMonitorRegistrations,
+			backend.MLModelMonitorRegistrationSnapshot{
+				RegistrationID: route.RegistrationID,
+				Representation: append([]byte(nil), route.AcceptedRepresentation...),
+				Initiator:      string(route.Initiator),
+			},
+		)
+	}
+	for _, route := range a.nwdafCtx.GetAllMLModelMonitorSubscriptionRoutes() {
+		if kind == backend.KindMTLF &&
+			route.Destination != nwdaf_context.MLModelRoutePartyMTLFBackend {
+			continue
+		}
+		representation := route.BackendRepresentation
+		if kind == backend.KindMTLF {
+			representation = route.AcceptedRepresentation
+		}
+		request.MLModelMonitorSubscriptions = append(
+			request.MLModelMonitorSubscriptions,
+			backend.MLModelMonitorSubscriptionSnapshot{
+				SubscriptionID:    route.SubscriptionID,
+				Representation:    append([]byte(nil), representation...),
+				Destination:       string(route.Destination),
+				OwnerRegistration: route.OwnerRegistrationID,
+			},
+		)
 	}
 	return request
 }
@@ -476,8 +525,10 @@ func (a *NwdafApp) startOwnedServers() error {
 	if err := a.anlfServer.Run(&a.wg); err != nil {
 		return err
 	}
-	if err := a.mtlfServer.Run(&a.wg); err != nil {
-		return err
+	if a.mtlfServer != nil {
+		if err := a.mtlfServer.Run(&a.wg); err != nil {
+			return err
+		}
 	}
 	return nil
 }
