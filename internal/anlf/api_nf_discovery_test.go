@@ -9,11 +9,12 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/free5gc/nwdaf/internal/anlf/contract"
+	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/openapi/models"
 )
 
 type nfDiscoveryProcessorStub struct {
-	result *models.SearchResult
+	result *consumer.NFDiscoveryResult
 	err    error
 	calls  int
 }
@@ -33,14 +34,20 @@ func (*nfDiscoveryProcessorStub) HandleRuntimeCompletion(*contract.RuntimeComple
 	return nil
 }
 
-func (s *nfDiscoveryProcessorStub) HandleSmfNFDiscovery(context.Context) (*models.SearchResult, error) {
+func (s *nfDiscoveryProcessorStub) HandleNFDiscovery(
+	context.Context, consumer.NFDiscoveryQuery,
+) (*consumer.NFDiscoveryResult, error) {
 	s.calls++
 	return s.result, s.err
 }
 
 func TestHandleSmfNFDiscoveryRequiresStandardQuery(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	processor := &nfDiscoveryProcessorStub{result: &models.SearchResult{ValidityPeriod: 10}}
+	processor := &nfDiscoveryProcessorStub{
+		result: &consumer.NFDiscoveryResult{
+			SearchResult: models.SearchResult{ValidityPeriod: 10},
+		},
+	}
 	server := &Server{processor: processor}
 
 	invalidRecorder := httptest.NewRecorder()

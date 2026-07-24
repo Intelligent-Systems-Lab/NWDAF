@@ -3,18 +3,20 @@ package anlf
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	anlfprocessor "github.com/free5gc/nwdaf/internal/anlf/processor"
+	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/internal/util"
 	"github.com/free5gc/openapi/models"
 )
 
 type nfDiscoveryProcessor interface {
-	HandleSmfNFDiscovery(context.Context) (*models.SearchResult, error)
+	HandleNFDiscovery(context.Context, consumer.NFDiscoveryQuery) (*consumer.NFDiscoveryResult, error)
 }
 
 func (s *Server) nfDiscoveryRoutes() []Route {
@@ -27,7 +29,8 @@ func (s *Server) nfDiscoveryRoutes() []Route {
 }
 
 func (s *Server) HandleSmfNFDiscovery(c *gin.Context) {
-	if problem := validateSmfDiscoveryQuery(c); problem != nil {
+	query, problem := validateNFDiscoveryQuery(c)
+	if problem != nil {
 		util.GinProblemJson(c, problem)
 		return
 	}
@@ -36,8 +39,9 @@ func (s *Server) HandleSmfNFDiscovery(c *gin.Context) {
 		util.GinProblemJson(c, nfDiscoveryUnavailableProblem())
 		return
 	}
-	result, err := processor.HandleSmfNFDiscovery(c.Request.Context())
+	result, err := processor.HandleNFDiscovery(c.Request.Context(), query)
 	if err == nil && result != nil {
+		c.Header("Cache-Control", fmt.Sprintf("max-age=%d", result.ValidityPeriod))
 		c.JSON(http.StatusOK, result)
 		return
 	}
@@ -70,26 +74,35 @@ func (s *Server) HandleSmfNFDiscovery(c *gin.Context) {
 	})
 }
 
-func validateSmfDiscoveryQuery(c *gin.Context) *models.ProblemDetails {
+func validateNFDiscoveryQuery(c *gin.Context) (consumer.NFDiscoveryQuery, *models.ProblemDetails) {
 	targetType := c.Query("target-nf-type")
 	requesterType := c.Query("requester-nf-type")
 	serviceNames := strings.Split(c.Query("service-names"), ",")
-	serviceFound := false
+	acceptedService := ""
 	for _, serviceName := range serviceNames {
-		if strings.TrimSpace(serviceName) == string(models.ServiceName_NSMF_EVENT_EXPOSURE) {
-			serviceFound = true
-			break
+		name := strings.TrimSpace(serviceName)
+		if name == string(models.ServiceName_NSMF_EVENT_EXPOSURE) ||
+			name == "nadrf-datamanagement" {
+			acceptedService = name
 		}
 	}
-	if targetType == string(models.NrfNfManagementNfType_SMF) &&
-		requesterType == string(models.NrfNfManagementNfType_NWDAF) && serviceFound {
-		return nil
+	targetAccepted := targetType == string(models.NrfNfManagementNfType_SMF) ||
+		targetType == "ADRF"
+	if targetAccepted && requesterType == string(models.NrfNfManagementNfType_NWDAF) &&
+		acceptedService != "" &&
+		(targetType != "SMF" || acceptedService == "nsmf-event-exposure") &&
+		(targetType != "ADRF" || acceptedService == "nadrf-datamanagement") {
+		return consumer.NFDiscoveryQuery{
+			TargetNFType:    models.NrfNfManagementNfType(targetType),
+			RequesterNFType: models.NrfNfManagementNfType(requesterType),
+			ServiceNames:    []models.ServiceName{models.ServiceName(acceptedService)},
+		}, nil
 	}
-	return &models.ProblemDetails{
+	return consumer.NFDiscoveryQuery{}, &models.ProblemDetails{
 		Status: http.StatusBadRequest,
 		Title:  http.StatusText(http.StatusBadRequest),
 		Cause:  "MANDATORY_QUERY_PARAM_INCORRECT",
-		Detail: "target-nf-type=SMF, requester-nf-type=NWDAF and service-names containing nsmf-event-exposure are required",
+		Detail: "a supported target NF type and matching service name with requester-nf-type=NWDAF are required",
 	}
 }
 

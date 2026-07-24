@@ -227,6 +227,41 @@ func (c *BackendClient) Sync(
 	return &payload, nil
 }
 
+func (c *BackendClient) DeliverAdrfRetrievalNotification(
+	parent context.Context,
+	body []byte,
+) (*backend.StandardResponse, error) {
+	return backend.ExecuteStandardRequest(
+		parent,
+		c.httpClient,
+		c.timeout,
+		http.MethodPost,
+		c.endpoint+"/internal/v1/adrf-data-management/retrieval-notifications",
+		body,
+		"deliver ADRF retrieval notification",
+		backend.StandardOperationContract{
+			SuccessValidators: map[int]func([]byte) error{
+				http.StatusNoContent: func(body []byte) error {
+					if len(body) != 0 {
+						return errors.New("204 response must not contain a body")
+					}
+					return nil
+				},
+			},
+			ErrorStatuses: backend.ErrorStatuses(
+				http.StatusBadRequest,
+				http.StatusNotFound,
+				http.StatusRequestEntityTooLarge,
+				http.StatusUnsupportedMediaType,
+				http.StatusTooManyRequests,
+				http.StatusInternalServerError,
+				http.StatusBadGateway,
+				http.StatusServiceUnavailable,
+			),
+		},
+	)
+}
+
 func readBackendResponseBody(reader io.Reader) ([]byte, error) {
 	body, err := io.ReadAll(io.LimitReader(reader, maxBackendReadinessBodyBytes+1))
 	if err != nil {

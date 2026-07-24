@@ -288,8 +288,8 @@ func TestBackendMonitorsRunIndependentlyAndStopWithAppContext(t *testing.T) {
 	waitForWaitGroup(t, &app.wg)
 }
 
-func TestMtlfProbeUsesUnifiedSyncDataSourceAvailability(t *testing.T) {
-	var inventories []backend.DataSourceAvailability
+func TestMtlfProbeUsesUnifiedTrainingDataSource(t *testing.T) {
+	var sources []backend.DataSource
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
@@ -304,10 +304,10 @@ func TestMtlfProbeUsesUnifiedSyncDataSourceAvailability(t *testing.T) {
 			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 				t.Errorf("decode sync: %v", err)
 			}
-			inventories = append(inventories, payload.DataSourceAvailability)
+			sources = append(sources, payload.TrainingDataSource)
 			if _, writeErr := writer.Write([]byte(
 				`{"processInstanceId":"c11ed8a5-f093-459f-82dd-4a0fb36fb55d",` +
-					`"snapshotAccepted":true,"mongodbAvailable":false,"sourceSelection":{}}`,
+					`"snapshotAccepted":true}`,
 			)); writeErr != nil {
 				t.Errorf("Write() error = %v", writeErr)
 			}
@@ -332,17 +332,17 @@ func TestMtlfProbeUsesUnifiedSyncDataSourceAvailability(t *testing.T) {
 			Adrf: consumer.NewAdrfClient("http://127.0.0.1:9888"),
 		},
 	}
-	app.anlfMongoAvailable = true
+	app.trainingDataSource = backend.DataSourceMongoDB
 	if _, err = app.probeMtlfBackend(context.Background()); err != nil {
 		t.Fatalf("first probe error = %v", err)
 	}
-	app.anlfMongoAvailable = false
+	app.trainingDataSource = backend.DataSourceUnavailable
 	if _, err = app.probeMtlfBackend(context.Background()); err != nil {
 		t.Fatalf("second probe error = %v", err)
 	}
-	if len(inventories) != 2 || !inventories[0].ADRF || !inventories[0].MongoDB ||
-		!inventories[1].ADRF || inventories[1].MongoDB {
-		t.Fatalf("sync inventories = %v", inventories)
+	if len(sources) != 2 || sources[0] != backend.DataSourceMongoDB ||
+		sources[1] != backend.DataSourceUnavailable {
+		t.Fatalf("sync sources = %v", sources)
 	}
 }
 

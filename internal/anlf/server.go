@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -103,25 +104,28 @@ type mlModelGateway interface {
 }
 
 type Server struct {
-	httpServer *http.Server
-	listener   net.Listener
-	router     *gin.Engine
-	processor  processorAPI
-	mlModel    mlModelGateway
+	httpServer            *http.Server
+	listener              net.Listener
+	router                *gin.Engine
+	processor             processorAPI
+	mlModel               mlModelGateway
+	publicCallbackBaseURI string
 }
 
 func NewServer(cfg *factory.Config, processor processorAPI) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 
 	s := &Server{
-		router:    logger_util.NewGinWithLogrus(logger.GinLog),
-		processor: processor,
+		router:                logger_util.NewGinWithLogrus(logger.GinLog),
+		processor:             processor,
+		publicCallbackBaseURI: strings.TrimRight(cfg.GetSbiUri(), "/"),
 	}
 	s.router.Use(gin.Recovery())
 	routes := s.eventsSubscriptionNotificationRoutes()
 	routes = append(routes, s.nfDiscoveryRoutes()...)
 	routes = append(routes, s.smfEventExposureRoutes()...)
 	routes = append(routes, s.adrfStorageRoutes()...)
+	routes = append(routes, s.adrfRetrievalRoutes()...)
 	routes = append(routes, s.smfResourceAssociationRoutes()...)
 	routes = append(routes, s.mlModelGatewayRoutes()...)
 	applyRoutes(s.router.Group(""), routes)

@@ -35,7 +35,7 @@ func TestClientSyncRequiresAcceptedSnapshotFromSameProcess(t *testing.T) {
 		writer.Header().Set("Content-Type", "application/json")
 		if _, err := writer.Write([]byte(
 			`{"processInstanceId":"` + testAnlfProcessInstanceID +
-				`","snapshotAccepted":true,"mongodbAvailable":true,"sourceSelection":{}}`,
+				`","snapshotAccepted":true,"trainingDataSource":"mongodb"}`,
 		)); err != nil {
 			t.Errorf("Write() error = %v", err)
 		}
@@ -49,7 +49,8 @@ func TestClientSyncRequiresAcceptedSnapshotFromSameProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
-	if response.ProcessInstanceID != testAnlfProcessInstanceID || !response.MongoDBAvailable {
+	if response.ProcessInstanceID != testAnlfProcessInstanceID ||
+		response.TrainingDataSource != backend.DataSourceMongoDB {
 		t.Fatalf("Sync() response = %+v", response)
 	}
 }

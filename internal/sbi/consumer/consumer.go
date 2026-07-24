@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
+	"sync"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
@@ -59,6 +61,9 @@ type Consumer struct {
 	mtlfService MtlfServiceClient
 	nrfService  *NrfService
 	Adrf        AdrfServiceAPI // nil if ADRF not configured
+
+	adrfClientsMu sync.Mutex
+	adrfClients   map[string]*AdrfClient
 }
 
 func newConsumerWithServices(
@@ -73,6 +78,7 @@ func newConsumerWithServices(
 		mtlfService: mtlfService,
 		nrfService:  newNrfService(),
 		Adrf:        adrf,
+		adrfClients: make(map[string]*AdrfClient),
 	}
 }
 
@@ -107,8 +113,15 @@ func (c *Consumer) Context() *nwdaf_context.NWDAFContext {
 	return nwdaf_context.GetSelf()
 }
 
-func (c *Consumer) DiscoverSmfProfiles(ctx context.Context) (*models.SearchResult, error) {
+func (c *Consumer) DiscoverSmfProfiles(ctx context.Context) (*NFDiscoveryResult, error) {
 	return c.nrfService.DiscoverSmfProfiles(ctx, c.Context())
+}
+
+func (c *Consumer) DiscoverNFInstances(
+	ctx context.Context,
+	query NFDiscoveryQuery,
+) (*NFDiscoveryResult, error) {
+	return c.nrfService.DiscoverNFInstances(ctx, c.Context(), query)
 }
 
 func (c *Consumer) smfRequestContext(ctx context.Context) (context.Context, error) {
@@ -158,15 +171,49 @@ func (c *Consumer) AdrfClient() AdrfServiceAPI {
 
 func (c *Consumer) StoreAdrfDataRecord(
 	ctx context.Context,
+	targetAPIBaseURI string,
 	body []byte,
 ) (*StandardAdrfResponse, error) {
-	client, ok := c.Adrf.(interface {
-		ExecuteStandardStorageRequest(context.Context, []byte) (*StandardAdrfResponse, error)
-	})
-	if !ok {
-		return nil, errors.New("ADRF storage transport is unavailable")
+	if targetAPIBaseURI == "" {
+		return nil, errors.New("ADRF target API root is required")
 	}
+	client := c.adrfClientForTarget(targetAPIBaseURI)
 	return client.ExecuteStandardStorageRequest(ctx, body)
+}
+
+func (c *Consumer) CreateAdrfRetrievalSubscription(
+	ctx context.Context,
+	targetAPIBaseURI string,
+	body []byte,
+) (*StandardAdrfResponse, error) {
+	if targetAPIBaseURI == "" {
+		return nil, errors.New("ADRF target API root is required")
+	}
+	return c.adrfClientForTarget(targetAPIBaseURI).ExecuteStandardRetrievalSubscribe(ctx, body)
+}
+
+func (c *Consumer) DeleteAdrfRetrievalSubscription(
+	ctx context.Context,
+	targetAPIBaseURI string,
+	resourceLocation string,
+) (*StandardAdrfResponse, error) {
+	if targetAPIBaseURI == "" || resourceLocation == "" {
+		return nil, errors.New("ADRF target and resource Location are required")
+	}
+	return c.adrfClientForTarget(targetAPIBaseURI).
+		ExecuteStandardRetrievalUnsubscribe(ctx, resourceLocation)
+}
+
+func (c *Consumer) adrfClientForTarget(targetAPIBaseURI string) *AdrfClient {
+	target := strings.TrimRight(strings.TrimSpace(targetAPIBaseURI), "/")
+	c.adrfClientsMu.Lock()
+	defer c.adrfClientsMu.Unlock()
+	if client, ok := c.adrfClients[target]; ok {
+		return client
+	}
+	client := NewAdrfClient(target)
+	c.adrfClients[target] = client
+	return client
 }
 
 func (c *Consumer) RegisterNFInstance(ctx context.Context) (RegistrationResult, error) {

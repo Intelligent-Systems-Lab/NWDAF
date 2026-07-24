@@ -51,6 +51,7 @@ func (p *standardContractProcessorStub) HandleEventsSubscriptionNotification(
 
 func (p *standardContractProcessorStub) StoreAdrfDataRecord(
 	_ context.Context,
+	_ string,
 	body []byte,
 ) (*consumer.StandardAdrfResponse, error) {
 	p.adrfBody = body
@@ -189,6 +190,7 @@ func TestAdrfStorageHTTPContract(t *testing.T) {
 		context, _ := gin.CreateTestContext(recorder)
 		context.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 		context.Request.Header.Set("Content-Type", "application/json; charset=utf-8")
+		context.Request.Header.Set("Target-Api-Root", "http://adrf.example")
 		(&Server{processor: processor}).StoreAdrfDataRecord(context)
 		context.Writer.WriteHeaderNow()
 		if recorder.Code != http.StatusCreated || recorder.Header().Get("Location") == "" ||

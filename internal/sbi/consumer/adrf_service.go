@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -48,10 +49,10 @@ func (e *StandardAdrfError) StandardProblemDetails() *models.ProblemDetails {
 const (
 	AdrfDataStoreRecordsPath           = "/nadrf-datamanagement/v1/data-store-records"
 	AdrfDataRetrievalSubscriptionsPath = "/nadrf-datamanagement/v1/data-retrieval-subscriptions"
-	adrfStorageTimeout                 = 10 * time.Second
-	adrfRetrievalTimeout               = 15 * time.Second
+	adrfStorageTimeout                 = 120 * time.Second
+	adrfRetrievalTimeout               = 120 * time.Second
 	adrfFetchTimeout                   = 10 * time.Second
-	adrfUnsubscribeTimeout             = 10 * time.Second
+	adrfUnsubscribeTimeout             = 120 * time.Second
 	adrfUnsubscribeMaxRetry            = 3
 	adrfUnsubscribeRetryBackoff        = 500 * time.Millisecond
 )
@@ -249,6 +250,100 @@ func (c *AdrfClient) ExecuteStandardStorageRequest(
 		return nil, fmt.Errorf("malformed ADRF storage response: dataSub and a supported dataNotif array are required")
 	}
 	return standardResponse, nil
+}
+
+func (c *AdrfClient) ExecuteStandardRetrievalSubscribe(
+	ctx context.Context,
+	body []byte,
+) (*StandardAdrfResponse, error) {
+	return c.executeStandardAdrfRequest(
+		ctx,
+		http.MethodPost,
+		strings.TrimRight(c.endpoint, "/")+AdrfDataRetrievalSubscriptionsPath,
+		body,
+		http.StatusCreated,
+		true,
+	)
+}
+
+func (c *AdrfClient) ExecuteStandardRetrievalUnsubscribe(
+	ctx context.Context,
+	resourceLocation string,
+) (*StandardAdrfResponse, error) {
+	requestURL := strings.TrimSpace(resourceLocation)
+	if parsed, err := url.Parse(requestURL); err != nil || !parsed.IsAbs() {
+		requestURL = strings.TrimRight(c.endpoint, "/") + "/" + strings.TrimLeft(requestURL, "/")
+	}
+	return c.executeStandardAdrfRequest(
+		ctx,
+		http.MethodDelete,
+		requestURL,
+		nil,
+		http.StatusNoContent,
+		false,
+	)
+}
+
+func (c *AdrfClient) executeStandardAdrfRequest(
+	ctx context.Context,
+	method string,
+	requestURL string,
+	body []byte,
+	successStatus int,
+	requireLocation bool,
+) (*StandardAdrfResponse, error) {
+	requestCtx, cancel, err := timeoutContextFromParent(
+		ctx, adrfRetrievalTimeout, "ADRF retrieval control request",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, method, requestURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build ADRF retrieval control request: %w", err)
+	}
+	if len(body) > 0 {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("send ADRF retrieval control request: %w", err)
+	}
+	responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, maxAdrfStandardBodyBytes+1))
+	closeErr := response.Body.Close()
+	if readErr != nil || len(responseBody) > maxAdrfStandardBodyBytes {
+		return nil, fmt.Errorf("read ADRF retrieval control response")
+	}
+	if closeErr != nil {
+		consumerLog.Debugf("failed to close ADRF retrieval control response: %v", closeErr)
+	}
+	result := &StandardAdrfResponse{
+		StatusCode:  response.StatusCode,
+		Location:    response.Header.Get("Location"),
+		ContentType: response.Header.Get("Content-Type"),
+		Body:        responseBody,
+	}
+	if response.StatusCode != successStatus {
+		problem := models.ProblemDetails{Status: int32(response.StatusCode), Title: http.StatusText(response.StatusCode)}
+		if decodeErr := json.Unmarshal(responseBody, &problem); decodeErr != nil {
+			problem.Detail = strings.TrimSpace(string(responseBody))
+		}
+		return result, &StandardAdrfError{StatusCode: response.StatusCode, ProblemDetails: problem}
+	}
+	if requireLocation {
+		if result.Location == "" || !isJSONMediaType(result.ContentType) || len(result.Body) == 0 {
+			return nil, fmt.Errorf("malformed ADRF retrieval create response")
+		}
+		var representation NadrfDataRetrievalSubscription
+		if decodeErr := json.Unmarshal(result.Body, &representation); decodeErr != nil ||
+			representation.NotifCorrId == "" || representation.NotificationURI == "" ||
+			representation.DataSub.SmfDataSub == nil ||
+			representation.TimePeriod.StartTime == "" || representation.TimePeriod.StopTime == "" {
+			return nil, fmt.Errorf("malformed ADRF retrieval create representation")
+		}
+	}
+	return result, nil
 }
 
 func isJSONMediaType(value string) bool {

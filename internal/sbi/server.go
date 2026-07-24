@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 
+	"github.com/free5gc/nwdaf/internal/backend"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/sbi/processor"
 	"github.com/free5gc/nwdaf/pkg/app"
@@ -64,7 +65,7 @@ type processorAPI interface {
 		req *models.NnwdafEventsSubscription,
 	) (*models.NnwdafEventsSubscription, *models.ProblemDetails)
 	HandleDeleteSubscription(subscriptionID string) *models.ProblemDetails
-	HandleAdrfRetrievalNotify(notifCorrID string, fetchCorrIDs []string, terminationReq bool)
+	HandleAdrfRetrievalNotify(context.Context, []byte) (*backend.StandardResponse, error)
 }
 
 type Server struct {

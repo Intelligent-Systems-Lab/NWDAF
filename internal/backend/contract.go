@@ -18,8 +18,9 @@ const (
 type DataSource string
 
 const (
-	DataSourceADRF    DataSource = "adrf"
-	DataSourceMongoDB DataSource = "mongodb"
+	DataSourceADRF        DataSource = "adrf"
+	DataSourceMongoDB     DataSource = "mongodb"
+	DataSourceUnavailable DataSource = "unavailable"
 )
 
 type HealthResponse struct {
@@ -59,16 +60,6 @@ type SmfResourceAssociationUpdate struct {
 	SmfResources      []SmfResourceAssociation `json:"smfResources"`
 }
 
-type DataSourceAvailability struct {
-	ADRF    bool `json:"adrf"`
-	MongoDB bool `json:"mongodb"`
-}
-
-type DataSourceSelection struct {
-	PreferredSource DataSource `json:"preferredSource,omitempty"`
-	EffectiveSource DataSource `json:"effectiveSource,omitempty"`
-}
-
 type MLModelProvisionSubscriptionSnapshot struct {
 	SubscriptionID string          `json:"subscriptionId"`
 	Representation json.RawMessage `json:"representation"`
@@ -93,16 +84,14 @@ type SyncRequest struct {
 	ContainingNwdaf               NwdafIdentity                          `json:"containingNwdaf"`
 	EventsSubscriptions           []EventsSubscriptionSnapshot           `json:"eventsSubscriptions"`
 	SmfResources                  []SmfResourceSnapshot                  `json:"smfResources"`
-	DataSourceAvailability        DataSourceAvailability                 `json:"dataSourceAvailability"`
-	MtlfSourceSelection           DataSourceSelection                    `json:"mtlfSourceSelection"`
+	TrainingDataSource            DataSource                             `json:"trainingDataSource,omitempty"`
 	MLModelProvisionSubscriptions []MLModelProvisionSubscriptionSnapshot `json:"mlModelProvisionSubscriptions"`
 	MLModelMonitorRegistrations   []MLModelMonitorRegistrationSnapshot   `json:"mlModelMonitorRegistrations"`
 	MLModelMonitorSubscriptions   []MLModelMonitorSubscriptionSnapshot   `json:"mlModelMonitorSubscriptions"`
 }
 
 type SyncResponse struct {
-	ProcessInstanceID string              `json:"processInstanceId"`
-	SnapshotAccepted  bool                `json:"snapshotAccepted"`
-	MongoDBAvailable  bool                `json:"mongodbAvailable"`
-	SourceSelection   DataSourceSelection `json:"sourceSelection"`
+	ProcessInstanceID  string     `json:"processInstanceId"`
+	SnapshotAccepted   bool       `json:"snapshotAccepted"`
+	TrainingDataSource DataSource `json:"trainingDataSource,omitempty"`
 }

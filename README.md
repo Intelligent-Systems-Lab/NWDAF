@@ -29,6 +29,19 @@ Current runtime notes:
   modes never merge and NRF mode never silently falls back to configured
   endpoints. Discovery results are reused only for the positive NRF
   `validityPeriod`; refresh failures do not return stale endpoints.
+- The private `GET /internal/v1/nrf/nf-instances` boundary supports the SMF
+  Event Exposure and ADRF Data Management discovery profiles. Go injects the
+  containing NWDAF requester identity and shares valid results by canonical
+  query; backend processes still own candidate selection.
+- The pinned workspace free5GC NRF accepts ADRF registration but its older NF
+  Discovery schema rejects `target-nf-type=ADRF`. Backends must use configured
+  ADRF mode with that build; Go does not hide the incompatibility through a
+  non-standard NF Management listing fallback.
+- PyAnLF and PyMTLF independently select ADRF origins. Their standard-shaped
+  storage and retrieval-control requests carry `Target-Api-Root`; Go validates
+  that origin, performs ADRF POST/DELETE as the containing NWDAF, and forwards
+  complete ADRF retrieval callbacks to the MTLF backend before acknowledging
+  them. Dataset record GETs are performed directly by the MTLF backend.
 - OAuth-enabled HTTP/H2C is the current free5GC integration target.
   OAuth-enabled HTTPS with NRF-required mutual TLS, redirect handling,
   UDM-backed serving-SMF resolution, and NFUpdate heartbeat remain later work.

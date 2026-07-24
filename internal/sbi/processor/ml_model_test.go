@@ -115,6 +115,17 @@ func (s *mtlfMLModelBackendStub) DeliverMLModelMonitorNotification(
 	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
 }
 
+func (s *mtlfMLModelBackendStub) DeliverAdrfRetrievalNotification(
+	_ context.Context,
+	body []byte,
+) (*backend.StandardResponse, error) {
+	s.registrationBody = append([]byte(nil), body...)
+	if s.response != nil || s.err != nil {
+		return s.response, s.err
+	}
+	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+}
+
 type anlfMLModelBackendStub struct {
 	body     []byte
 	response *backend.StandardResponse

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -14,10 +16,13 @@ import (
 	"github.com/free5gc/openapi/models"
 )
 
-const maxAdrfStorageBodyBytes = 4 * 1024 * 1024
+const (
+	maxAdrfStorageBodyBytes = 4 * 1024 * 1024
+	httpsURLScheme          = "https"
+)
 
 type adrfStorageProcessor interface {
-	StoreAdrfDataRecord(context.Context, []byte) (*consumer.StandardAdrfResponse, error)
+	StoreAdrfDataRecord(context.Context, string, []byte) (*consumer.StandardAdrfResponse, error)
 }
 
 func (s *Server) adrfStorageRoutes() []Route {
@@ -37,6 +42,14 @@ func (s *Server) StoreAdrfDataRecord(c *gin.Context) {
 	)
 	if problem != nil {
 		util.GinProblemJson(c, problem)
+		return
+	}
+	target := strings.TrimSpace(c.GetHeader("Target-Api-Root"))
+	parsedTarget, targetErr := url.Parse(target)
+	if targetErr != nil || parsedTarget.Scheme != "http" && parsedTarget.Scheme != httpsURLScheme ||
+		parsedTarget.Host == "" || parsedTarget.User != nil || parsedTarget.RawQuery != "" ||
+		parsedTarget.Fragment != "" || parsedTarget.Path != "" && parsedTarget.Path != "/" {
+		util.GinProblemJson(c, malformedRequestProblem("Target-Api-Root must be an HTTP(S) origin"))
 		return
 	}
 	var record consumer.NadrfDataStoreRecord
@@ -59,7 +72,7 @@ func (s *Server) StoreAdrfDataRecord(c *gin.Context) {
 		util.GinProblemJson(c, adrfStorageUnavailableProblem())
 		return
 	}
-	response, err := processor.StoreAdrfDataRecord(c.Request.Context(), body)
+	response, err := processor.StoreAdrfDataRecord(c.Request.Context(), strings.TrimRight(target, "/"), body)
 	if err == nil && response != nil {
 		c.Header("Location", response.Location)
 		contentType := response.ContentType

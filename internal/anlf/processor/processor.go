@@ -2,6 +2,7 @@ package processor
 
 import (
 	"context"
+	"sync"
 
 	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/internal/anlf/coordinator"
@@ -35,7 +36,7 @@ type runtimeCompletionWorkflow interface {
 }
 
 type nfDiscoveryProxy interface {
-	DiscoverSmfProfiles(context.Context) (*models.SearchResult, error)
+	DiscoverNFInstances(context.Context, consumer.NFDiscoveryQuery) (*consumer.NFDiscoveryResult, error)
 }
 
 type smfEventExposureProxy interface {
@@ -46,7 +47,18 @@ type smfEventExposureProxy interface {
 }
 
 type adrfStorageProxy interface {
-	StoreAdrfDataRecord(context.Context, []byte) (*consumer.StandardAdrfResponse, error)
+	StoreAdrfDataRecord(context.Context, string, []byte) (*consumer.StandardAdrfResponse, error)
+}
+
+type adrfRetrievalProxy interface {
+	CreateAdrfRetrievalSubscription(context.Context, string, []byte) (*consumer.StandardAdrfResponse, error)
+	DeleteAdrfRetrievalSubscription(context.Context, string, string) (*consumer.StandardAdrfResponse, error)
+}
+
+type adrfRetrievalRoute struct {
+	TargetAPIBaseURI string
+	ResourceLocation string
+	NotifCorrID      string
 }
 
 type smfAssociationMirror interface {
@@ -62,6 +74,9 @@ type Processor struct {
 	nfDiscovery            nfDiscoveryProxy
 	smfEventExposure       smfEventExposureProxy
 	adrfStorage            adrfStorageProxy
+	adrfRetrieval          adrfRetrievalProxy
+	adrfRetrievalMu        sync.RWMutex
+	adrfRetrievalRoutes    map[string]adrfRetrievalRoute
 	associationMirror      smfAssociationMirror
 }
 
@@ -79,13 +94,19 @@ func (p *Processor) SetSmfEventExposureProxy(proxy smfEventExposureProxy) {
 
 func (p *Processor) SetAdrfStorageProxy(proxy adrfStorageProxy) {
 	p.adrfStorage = proxy
+	if retrieval, ok := proxy.(adrfRetrievalProxy); ok {
+		p.adrfRetrieval = retrieval
+	}
 }
 
 func NewProcessor(
 	workflow mlModelProvisionWorkflow,
 	dispatchers ...analyticsReportDispatcher,
 ) *Processor {
-	processor := &Processor{workflow: workflow}
+	processor := &Processor{
+		workflow:            workflow,
+		adrfRetrievalRoutes: make(map[string]adrfRetrievalRoute),
+	}
 	if associationMirror, ok := workflow.(smfAssociationMirror); ok {
 		processor.associationMirror = associationMirror
 	}

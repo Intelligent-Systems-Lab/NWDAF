@@ -11,10 +11,11 @@ var ErrAdrfStorageUnavailable = errors.New("ADRF storage proxy is unavailable")
 
 func (p *Processor) StoreAdrfDataRecord(
 	ctx context.Context,
+	targetAPIBaseURI string,
 	body []byte,
 ) (*consumer.StandardAdrfResponse, error) {
 	if p.adrfStorage == nil {
 		return nil, ErrAdrfStorageUnavailable
 	}
-	return p.adrfStorage.StoreAdrfDataRecord(ctx, body)
+	return p.adrfStorage.StoreAdrfDataRecord(ctx, targetAPIBaseURI, body)
 }

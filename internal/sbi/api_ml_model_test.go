@@ -34,7 +34,11 @@ func (*apiMLModelProcessorStub) HandleUpdateSubscription(
 }
 
 func (*apiMLModelProcessorStub) HandleDeleteSubscription(string) *models.ProblemDetails { return nil }
-func (*apiMLModelProcessorStub) HandleAdrfRetrievalNotify(string, []string, bool)       {}
+func (*apiMLModelProcessorStub) HandleAdrfRetrievalNotify(
+	context.Context, []byte,
+) (*backend.StandardResponse, error) {
+	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+}
 
 func (s *apiMLModelProcessorStub) HandleCreateMLModelProvision(
 	_ context.Context, body []byte,

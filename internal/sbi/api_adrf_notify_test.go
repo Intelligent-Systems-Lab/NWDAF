@@ -1,10 +1,13 @@
 package sbi
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
 	"go.uber.org/mock/gomock"
+
+	"github.com/free5gc/nwdaf/internal/backend"
 )
 
 func TestHandleAdrfRetrievalNotify_InvalidPayload(t *testing.T) {
@@ -18,11 +21,11 @@ func TestHandleAdrfRetrievalNotify_InvalidPayload(t *testing.T) {
 	}
 
 	problem := decodeProblemDetailsResponse(t, recorder)
-	if problem.Title != malformedRequestSyntaxTitle {
+	if problem.Title != http.StatusText(http.StatusBadRequest) {
 		t.Fatalf("title = %q", problem.Title)
 	}
-	if problem.Cause != "" {
-		t.Fatalf("cause = %q, want empty", problem.Cause)
+	if problem.Cause != "INVALID_MSG_FORMAT" {
+		t.Fatalf("cause = %q", problem.Cause)
 	}
 }
 
@@ -32,11 +35,13 @@ func TestHandleAdrfRetrievalNotify_Success(t *testing.T) {
 
 	mockProcessor := NewMockprocessorAPI(ctrl)
 	mockProcessor.EXPECT().
-		HandleAdrfRetrievalNotify("corr-123", []string{"fetch-1", "fetch-2"}, true)
+		HandleAdrfRetrievalNotify(gomock.AssignableToTypeOf(context.Background()), gomock.Any()).
+		Return(&backend.StandardResponse{StatusCode: http.StatusNoContent}, nil)
 
 	server := newHandlerTestServer(t, mockProcessor)
 	notifyBody := `{
 		"notifCorrId":"corr-123",
+		"timeStamp":"2026-07-24T00:00:00Z",
 		"terminationReq":true,
 		"fetchInstruct":{
 			"fetchUri":"http://adrf.example/fetch",
@@ -54,5 +59,25 @@ func TestHandleAdrfRetrievalNotify_Success(t *testing.T) {
 
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNoContent)
+	}
+}
+
+func TestHandleAdrfRetrievalNotify_RejectsJSONPrefixMediaType(t *testing.T) {
+	server := newHandlerTestServer(t, nil)
+	c, recorder := newJSONRequestContext(
+		http.MethodPost,
+		"/collector/retrieval-notify",
+		[]byte(`{"notifCorrId":"corr","timeStamp":"2026-07-24T00:00:00Z"}`),
+	)
+	c.Request.Header.Set("Content-Type", "application/jsonx")
+
+	server.HandleAdrfRetrievalNotify(c)
+
+	if recorder.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf(
+			"status = %d, want %d",
+			recorder.Code,
+			http.StatusUnsupportedMediaType,
+		)
 	}
 }

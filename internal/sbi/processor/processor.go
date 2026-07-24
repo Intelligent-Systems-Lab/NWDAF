@@ -2,6 +2,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sync"
 
@@ -54,6 +55,7 @@ type mtlfMLModelBackend interface {
 	CreateMLModelMonitorRegistration(context.Context, []byte) (*backend.StandardResponse, error)
 	DeleteMLModelMonitorRegistration(context.Context, string) (*backend.StandardResponse, error)
 	DeliverMLModelMonitorNotification(context.Context, []byte) (*backend.StandardResponse, error)
+	DeliverAdrfRetrievalNotification(context.Context, []byte) (*backend.StandardResponse, error)
 }
 
 type anlfMLModelBackend interface {
@@ -137,6 +139,12 @@ func (p *Processor) StartMtlfTrainingScheduler(wg *sync.WaitGroup) {
 }
 
 // HandleAdrfRetrievalNotify delegates an ADRF retrieval callback to MtlfService.
-func (p *Processor) HandleAdrfRetrievalNotify(notifCorrId string, fetchCorrIds []string, terminationReq bool) {
-	p.mtlf.HandleAdrfRetrievalNotify(notifCorrId, fetchCorrIds, terminationReq)
+func (p *Processor) HandleAdrfRetrievalNotify(
+	ctx context.Context,
+	body []byte,
+) (*backend.StandardResponse, error) {
+	if p.mtlfMLModelBackend == nil || p.mtlfAvailability == nil || !p.mtlfAvailability.Usable() {
+		return nil, errors.New("MTLF backend is unavailable")
+	}
+	return p.mtlfMLModelBackend.DeliverAdrfRetrievalNotification(ctx, body)
 }

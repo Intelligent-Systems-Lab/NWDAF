@@ -35,26 +35,25 @@ var _ app.App = &NwdafApp{}
 const nrfDeregistrationTimeout = 5 * time.Second
 
 type NwdafApp struct {
-	cfg                 *factory.Config
-	nwdafCtx            *nwdaf_context.NWDAFContext
-	ctx                 context.Context
-	cancel              context.CancelFunc
-	consumer            *consumer.Consumer
-	nrfManagement       consumer.NFManagementService
-	processor           *processor.Processor
-	sbiServer           *sbi.Server
-	anlfServer          *anlf.Server
-	anlfCoordinator     *coordinator.Coordinator
-	anlfAvailability    *backend.AvailabilityMonitor
-	mtlfAvailability    *backend.AvailabilityMonitor
-	anlfBackendClient   *anlfclient.Client
-	mtlfBackendClient   *mtlfclient.BackendClient
-	backendSyncMu       sync.RWMutex
-	anlfMongoAvailable  bool
-	mtlfSourceSelection backend.DataSourceSelection
-	mtlfServer          *mtlf.Server
-	wg                  sync.WaitGroup
-	deregisterTimeout   time.Duration
+	cfg                *factory.Config
+	nwdafCtx           *nwdaf_context.NWDAFContext
+	ctx                context.Context
+	cancel             context.CancelFunc
+	consumer           *consumer.Consumer
+	nrfManagement      consumer.NFManagementService
+	processor          *processor.Processor
+	sbiServer          *sbi.Server
+	anlfServer         *anlf.Server
+	anlfCoordinator    *coordinator.Coordinator
+	anlfAvailability   *backend.AvailabilityMonitor
+	mtlfAvailability   *backend.AvailabilityMonitor
+	anlfBackendClient  *anlfclient.Client
+	mtlfBackendClient  *mtlfclient.BackendClient
+	backendSyncMu      sync.RWMutex
+	trainingDataSource backend.DataSource
+	mtlfServer         *mtlf.Server
+	wg                 sync.WaitGroup
+	deregisterTimeout  time.Duration
 }
 
 func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
@@ -316,12 +315,9 @@ func (a *NwdafApp) probeMtlfBackend(ctx context.Context) (backend.ProbeResult, e
 	if response.ProcessInstanceID != health.ProcessInstanceID {
 		return backend.ProbeResult{}, errors.New("MTLF backend process changed during sync")
 	}
-	if a.updateMtlfSourceSelection(response.SourceSelection) && a.anlfAvailability != nil {
-		a.anlfAvailability.Refresh()
-	}
 	return backend.ProbeResult{
 		ProcessInstanceID: health.ProcessInstanceID,
-		Selection:         string(response.SourceSelection.EffectiveSource),
+		Selection:         string(a.currentTrainingDataSource()),
 	}, nil
 }
 
@@ -342,7 +338,10 @@ func (a *NwdafApp) probeAnlfBackend(ctx context.Context) (backend.ProbeResult, e
 	if response.ProcessInstanceID != health.ProcessInstanceID {
 		return backend.ProbeResult{}, errors.New("AnLF backend process changed during sync")
 	}
-	if a.updateAnlfMongoAvailability(response.MongoDBAvailable) && a.mtlfAvailability != nil {
+	if response.TrainingDataSource == "" {
+		response.TrainingDataSource = backend.DataSourceUnavailable
+	}
+	if a.updateTrainingDataSource(response.TrainingDataSource) && a.mtlfAvailability != nil {
 		a.mtlfAvailability.Refresh()
 	}
 	return backend.ProbeResult{ProcessInstanceID: health.ProcessInstanceID}, nil
@@ -361,11 +360,12 @@ func (a *NwdafApp) buildBackendSyncRequest(kind backend.Kind) backend.SyncReques
 		ContainingNwdaf:               identity,
 		EventsSubscriptions:           []backend.EventsSubscriptionSnapshot{},
 		SmfResources:                  []backend.SmfResourceSnapshot{},
-		DataSourceAvailability:        a.currentDataSourceAvailability(),
-		MtlfSourceSelection:           a.currentMtlfSourceSelection(),
 		MLModelProvisionSubscriptions: []backend.MLModelProvisionSubscriptionSnapshot{},
 		MLModelMonitorRegistrations:   []backend.MLModelMonitorRegistrationSnapshot{},
 		MLModelMonitorSubscriptions:   []backend.MLModelMonitorSubscriptionSnapshot{},
+	}
+	if kind == backend.KindMTLF {
+		request.TrainingDataSource = a.currentTrainingDataSource()
 	}
 	if a.nwdafCtx == nil {
 		return request
@@ -389,7 +389,7 @@ func (a *NwdafApp) buildBackendSyncRequest(kind backend.Kind) backend.SyncReques
 			},
 		)
 	}
-	if kind == backend.KindAnLF {
+	if kind == backend.KindAnLF || kind == backend.KindMTLF {
 		for _, route := range a.nwdafCtx.GetAllAnalyticsSubscriptionRoutes() {
 			request.EventsSubscriptions = append(
 				request.EventsSubscriptions,
@@ -447,37 +447,20 @@ func (a *NwdafApp) buildBackendSyncRequest(kind backend.Kind) backend.SyncReques
 	return request
 }
 
-func (a *NwdafApp) currentDataSourceAvailability() backend.DataSourceAvailability {
-	availability := backend.DataSourceAvailability{}
-	if a.cfg != nil && a.cfg.Configuration != nil && a.cfg.Configuration.Adrf != nil &&
-		a.cfg.Configuration.Adrf.AdrfEnabled() && a.consumer != nil && a.consumer.AdrfClient() != nil {
-		availability.ADRF = true
-	}
-	a.backendSyncMu.RLock()
-	availability.MongoDB = a.anlfMongoAvailable
-	a.backendSyncMu.RUnlock()
-	return availability
-}
-
-func (a *NwdafApp) currentMtlfSourceSelection() backend.DataSourceSelection {
+func (a *NwdafApp) currentTrainingDataSource() backend.DataSource {
 	a.backendSyncMu.RLock()
 	defer a.backendSyncMu.RUnlock()
-	return a.mtlfSourceSelection
+	if a.trainingDataSource == "" {
+		return backend.DataSourceUnavailable
+	}
+	return a.trainingDataSource
 }
 
-func (a *NwdafApp) updateAnlfMongoAvailability(available bool) bool {
+func (a *NwdafApp) updateTrainingDataSource(source backend.DataSource) bool {
 	a.backendSyncMu.Lock()
 	defer a.backendSyncMu.Unlock()
-	changed := a.anlfMongoAvailable != available
-	a.anlfMongoAvailable = available
-	return changed
-}
-
-func (a *NwdafApp) updateMtlfSourceSelection(selection backend.DataSourceSelection) bool {
-	a.backendSyncMu.Lock()
-	defer a.backendSyncMu.Unlock()
-	changed := a.mtlfSourceSelection != selection
-	a.mtlfSourceSelection = selection
+	changed := a.trainingDataSource != source
+	a.trainingDataSource = source
 	return changed
 }
 

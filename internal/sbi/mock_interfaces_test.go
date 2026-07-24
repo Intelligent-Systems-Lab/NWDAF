@@ -13,6 +13,7 @@ import (
 	context "context"
 	reflect "reflect"
 
+	backend "github.com/free5gc/nwdaf/internal/backend"
 	models "github.com/free5gc/openapi/models"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -41,15 +42,18 @@ func (m *MockprocessorAPI) EXPECT() *MockprocessorAPIMockRecorder {
 }
 
 // HandleAdrfRetrievalNotify mocks base method.
-func (m *MockprocessorAPI) HandleAdrfRetrievalNotify(notifCorrID string, fetchCorrIDs []string, terminationReq bool) {
+func (m *MockprocessorAPI) HandleAdrfRetrievalNotify(ctx context.Context, body []byte) (*backend.StandardResponse, error) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "HandleAdrfRetrievalNotify", notifCorrID, fetchCorrIDs, terminationReq)
+	ret := m.ctrl.Call(m, "HandleAdrfRetrievalNotify", ctx, body)
+	ret0, _ := ret[0].(*backend.StandardResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // HandleAdrfRetrievalNotify indicates an expected call of HandleAdrfRetrievalNotify.
-func (mr *MockprocessorAPIMockRecorder) HandleAdrfRetrievalNotify(notifCorrID, fetchCorrIDs, terminationReq any) *gomock.Call {
+func (mr *MockprocessorAPIMockRecorder) HandleAdrfRetrievalNotify(ctx, body any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleAdrfRetrievalNotify", reflect.TypeOf((*MockprocessorAPI)(nil).HandleAdrfRetrievalNotify), notifCorrID, fetchCorrIDs, terminationReq)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "HandleAdrfRetrievalNotify", reflect.TypeOf((*MockprocessorAPI)(nil).HandleAdrfRetrievalNotify), ctx, body)
 }
 
 // HandleCreateSubscription mocks base method.

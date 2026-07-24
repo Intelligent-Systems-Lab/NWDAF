@@ -828,6 +828,178 @@ func TestDiscoverSmfProfilesReturnsCompleteSearchResultWithoutSelecting(t *testi
 	}
 }
 
+func TestDiscoverNFInstancesCachesIdenticalAdrfQuery(t *testing.T) {
+	var requests atomic.Int32
+	server := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		if request.URL.Query().Get("target-nf-type") != "ADRF" ||
+			request.URL.Query().Get("service-names") != "nadrf-datamanagement" {
+			t.Errorf("discovery query = %v", request.URL.Query())
+		}
+		writeDiscoveryResponse(t, w, models.SearchResult{
+			ValidityPeriod: 60,
+			NfInstances:    []models.NrfNfDiscoveryNfProfile{},
+		})
+	}))
+	defer server.Close()
+	service := newTestNrfService()
+	query := NFDiscoveryQuery{
+		TargetNFType:    models.NrfNfManagementNfType("ADRF"),
+		RequesterNFType: models.NrfNfManagementNfType_NWDAF,
+		ServiceNames:    []models.ServiceName{models.ServiceName("nadrf-datamanagement")},
+	}
+	nwdafCtx := newNFManagementTestContext(t, server.URL)
+
+	for range 2 {
+		result, err := service.DiscoverNFInstances(context.Background(), nwdafCtx, query)
+		if err != nil {
+			t.Fatalf("DiscoverNFInstances() error = %v", err)
+		}
+		if result.NfInstances == nil || result.ValidityPeriod <= 0 {
+			t.Fatalf("SearchResult = %+v", result)
+		}
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("NRF requests = %d, want 1", requests.Load())
+	}
+}
+
+func TestDiscoverNFInstancesReturnsRemainingValidityAndRefreshesAfterExpiry(t *testing.T) {
+	var requests atomic.Int32
+	server := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		writeDiscoveryResponse(t, w, models.SearchResult{
+			ValidityPeriod: 60,
+			NfInstances:    []models.NrfNfDiscoveryNfProfile{},
+		})
+	}))
+	defer server.Close()
+	now := time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC)
+	service := newTestNrfService()
+	service.now = func() time.Time { return now }
+	query := NFDiscoveryQuery{
+		TargetNFType:    models.NrfNfManagementNfType("ADRF"),
+		RequesterNFType: models.NrfNfManagementNfType_NWDAF,
+		ServiceNames:    []models.ServiceName{models.ServiceName("nadrf-datamanagement")},
+	}
+	nwdafCtx := newNFManagementTestContext(t, server.URL)
+
+	first, err := service.DiscoverNFInstances(context.Background(), nwdafCtx, query)
+	if err != nil || first.ValidityPeriod != 60 {
+		t.Fatalf("first result=%+v error=%v", first, err)
+	}
+	now = now.Add(10 * time.Second)
+	second, err := service.DiscoverNFInstances(context.Background(), nwdafCtx, query)
+	if err != nil || second.ValidityPeriod != 50 {
+		t.Fatalf("cached result=%+v error=%v", second, err)
+	}
+	now = now.Add(51 * time.Second)
+	third, err := service.DiscoverNFInstances(context.Background(), nwdafCtx, query)
+	if err != nil || third.ValidityPeriod != 60 {
+		t.Fatalf("refreshed result=%+v error=%v", third, err)
+	}
+	if requests.Load() != 2 {
+		t.Fatalf("NRF requests = %d, want 2", requests.Load())
+	}
+}
+
+func TestDiscoverNFInstancesDoesNotCacheExplicitZeroValidity(t *testing.T) {
+	var requests atomic.Int32
+	server := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write([]byte(`{"validityPeriod":0,"nfInstances":[]}`)); err != nil {
+			t.Errorf("write discovery response: %v", err)
+		}
+	}))
+	defer server.Close()
+	service := newTestNrfService()
+	query := NFDiscoveryQuery{
+		TargetNFType:    models.NrfNfManagementNfType("ADRF"),
+		RequesterNFType: models.NrfNfManagementNfType_NWDAF,
+		ServiceNames:    []models.ServiceName{models.ServiceName("nadrf-datamanagement")},
+	}
+	nwdafCtx := newNFManagementTestContext(t, server.URL)
+
+	for range 2 {
+		if _, err := service.DiscoverNFInstances(context.Background(), nwdafCtx, query); err != nil {
+			t.Fatalf("DiscoverNFInstances() error = %v", err)
+		}
+	}
+	if requests.Load() != 2 {
+		t.Fatalf("NRF requests = %d, want 2", requests.Load())
+	}
+}
+
+func TestDiscoverNFInstancesPreservesUnknownFieldsOnCacheHit(t *testing.T) {
+	var requests atomic.Int32
+	server := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write([]byte(`{
+			"validityPeriod":60,
+			"nfInstances":[],
+			"ignoredQueryParams":["data-storage-ind"],
+			"release18Extension":{"enabled":true}
+		}`)); err != nil {
+			t.Errorf("write discovery response: %v", err)
+		}
+	}))
+	defer server.Close()
+	service := newTestNrfService()
+	query := NFDiscoveryQuery{
+		TargetNFType:    models.NrfNfManagementNfType("ADRF"),
+		RequesterNFType: models.NrfNfManagementNfType_NWDAF,
+		ServiceNames:    []models.ServiceName{models.ServiceName("nadrf-datamanagement")},
+	}
+	nwdafCtx := newNFManagementTestContext(t, server.URL)
+
+	for range 2 {
+		result, err := service.DiscoverNFInstances(context.Background(), nwdafCtx, query)
+		if err != nil {
+			t.Fatalf("DiscoverNFInstances() error = %v", err)
+		}
+		payload, err := json.Marshal(result)
+		if err != nil {
+			t.Fatalf("marshal result: %v", err)
+		}
+		var envelope map[string]json.RawMessage
+		decodeErr := json.Unmarshal(payload, &envelope)
+		if decodeErr != nil {
+			t.Fatalf("decode result: %v", decodeErr)
+		}
+		if envelope["ignoredQueryParams"] == nil || envelope["release18Extension"] == nil {
+			t.Fatalf("unknown fields were lost: %s", payload)
+		}
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("NRF requests = %d, want 1", requests.Load())
+	}
+}
+
+func TestDiscoverNFInstancesRejectsMissingMandatoryValidity(t *testing.T) {
+	server := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write([]byte(`{"nfInstances":[]}`)); err != nil {
+			t.Errorf("write discovery response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	_, err := newTestNrfService().DiscoverNFInstances(
+		context.Background(),
+		newNFManagementTestContext(t, server.URL),
+		NFDiscoveryQuery{
+			TargetNFType:    models.NrfNfManagementNfType("ADRF"),
+			RequesterNFType: models.NrfNfManagementNfType_NWDAF,
+			ServiceNames:    []models.ServiceName{models.ServiceName("nadrf-datamanagement")},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "validityPeriod is missing") {
+		t.Fatalf("DiscoverNFInstances() error = %v", err)
+	}
+}
+
 func TestNFDiscoveryClientConstructionReusesPerNrfURI(t *testing.T) {
 	service := newTestNrfService()
 	service.httpClientFactory = func(string) (*http.Client, error) {

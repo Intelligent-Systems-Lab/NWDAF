@@ -1,21 +1,27 @@
 package consumer
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"path"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/net/http2"
 	"golang.org/x/oauth2"
+	"golang.org/x/sync/singleflight"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/openapi"
@@ -55,6 +61,75 @@ type NrfService struct {
 	initialRetryDelay   time.Duration
 	maximumRetryDelay   time.Duration
 	now                 func() time.Time
+	discoveryCache      map[string]cachedDiscovery
+	discoveryGroup      singleflight.Group
+}
+
+type NFDiscoveryQuery struct {
+	TargetNFType    models.NrfNfManagementNfType
+	RequesterNFType models.NrfNfManagementNfType
+	ServiceNames    []models.ServiceName
+}
+
+// NFDiscoveryResult keeps the generated model for Go callers while retaining
+// the complete peer JSON envelope for backend pass-through and cache hits.
+type NFDiscoveryResult struct {
+	models.SearchResult
+	raw map[string]json.RawMessage
+}
+
+func (r NFDiscoveryResult) MarshalJSON() ([]byte, error) {
+	if r.raw == nil {
+		return json.Marshal(r.SearchResult)
+	}
+	envelope := make(map[string]json.RawMessage, len(r.raw))
+	for key, value := range r.raw {
+		envelope[key] = value
+	}
+	validity, err := json.Marshal(r.ValidityPeriod)
+	if err != nil {
+		return nil, err
+	}
+	envelope["validityPeriod"] = validity
+	return json.Marshal(envelope)
+}
+
+type cachedDiscovery struct {
+	result    NFDiscoveryResult
+	expiresAt time.Time
+	usedAt    time.Time
+}
+
+type rawDiscoveryCapture struct {
+	body []byte
+}
+
+type rawDiscoveryCaptureContextKey struct{}
+
+type rawDiscoveryCaptureTransport struct {
+	base http.RoundTripper
+}
+
+func (t rawDiscoveryCaptureTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	response, err := t.base.RoundTrip(request)
+	if err != nil || response == nil {
+		return response, err
+	}
+	capture, ok := request.Context().Value(rawDiscoveryCaptureContextKey{}).(*rawDiscoveryCapture)
+	if !ok || response.StatusCode != http.StatusOK {
+		return response, nil
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, err
+	}
+	closeErr := response.Body.Close()
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	capture.body = append(capture.body[:0], body...)
+	response.Body = io.NopCloser(bytes.NewReader(body))
+	return response, nil
 }
 
 func newNrfService() *NrfService {
@@ -66,6 +141,7 @@ func newNrfService() *NrfService {
 		initialRetryDelay:   initialNRFRegistrationRetry,
 		maximumRetryDelay:   maximumNRFRegistrationRetry,
 		now:                 time.Now,
+		discoveryCache:      make(map[string]cachedDiscovery),
 	}
 }
 
@@ -91,6 +167,11 @@ func (s *NrfService) getNFDiscoveryClient(nrfURI string) (*NFDiscovery.APIClient
 	if err != nil {
 		return nil, err
 	}
+	transport := httpClient.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	httpClient.Transport = rawDiscoveryCaptureTransport{base: transport}
 	configuration.SetHTTPClient(httpClient)
 	client := NFDiscovery.NewAPIClient(configuration)
 	s.nfDiscoveryClients[nrfURI] = client
@@ -218,10 +299,11 @@ func (e *NFDiscoveryError) RedirectLocation() string {
 // DiscoverSmfProfiles performs the standard SMF NFDiscovery query and returns
 // the complete SearchResult. Candidate selection and validity caching belong to
 // the AnLF backend on this boundary.
-func (s *NrfService) DiscoverSmfProfiles(
+func (s *NrfService) DiscoverNFInstances(
 	ctx context.Context,
 	nwdafCtx *nwdaf_context.NWDAFContext,
-) (*models.SearchResult, error) {
+	query NFDiscoveryQuery,
+) (*NFDiscoveryResult, error) {
 	if nwdafCtx == nil {
 		return nil, errors.New("NWDAF context is unavailable")
 	}
@@ -241,45 +323,158 @@ func (s *NrfService) DiscoverSmfProfiles(
 			return nil, fmt.Errorf("authorize NRF SMF discovery: %w", err)
 		}
 	}
-	request := &NFDiscovery.SearchNFInstancesRequest{}
-	request.SetTargetNfType(models.NrfNfManagementNfType_SMF)
-	request.SetRequesterNfType(models.NrfNfManagementNfType_NWDAF)
-	request.SetRequesterNfInstanceId(nwdafCtx.NfId)
-	request.SetServiceNames([]models.ServiceName{models.ServiceName_NSMF_EVENT_EXPOSURE})
-
-	response, searchErr := client.NFInstancesStoreApi.SearchNFInstances(requestCtx, request)
-	if searchErr != nil {
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("NRF SMF discovery canceled: %w", ctx.Err())
+	key := discoveryCacheKey(query, nwdafCtx.NrfUri(), nwdafCtx.NfId)
+	now := s.now()
+	s.mu.Lock()
+	if cached, ok := s.discoveryCache[key]; ok && now.Before(cached.expiresAt) {
+		cached.usedAt = now
+		cached.result.ValidityPeriod = int32(cached.expiresAt.Sub(now) / time.Second)
+		if cached.result.ValidityPeriod > 0 {
+			s.discoveryCache[key] = cached
+			result := cached.result
+			s.mu.Unlock()
+			return &result, nil
 		}
-		var apiErr openapi.GenericOpenAPIError
-		if errors.As(searchErr, &apiErr) {
-			standardError := &NFDiscoveryError{StatusCode: apiErr.ErrorStatus}
-			switch model := apiErr.Model().(type) {
-			case NFDiscovery.SearchNFInstancesError:
-				standardError.Location = model.Location
-				standardError.ProblemDetails = model.ProblemDetails
-			case *NFDiscovery.SearchNFInstancesError:
-				if model != nil {
+	}
+	delete(s.discoveryCache, key)
+	s.mu.Unlock()
+
+	value, err, _ := s.discoveryGroup.Do(key, func() (any, error) {
+		request := &NFDiscovery.SearchNFInstancesRequest{}
+		request.SetTargetNfType(query.TargetNFType)
+		request.SetRequesterNfType(query.RequesterNFType)
+		request.SetRequesterNfInstanceId(nwdafCtx.NfId)
+		request.SetServiceNames(query.ServiceNames)
+
+		capture := &rawDiscoveryCapture{}
+		capturedContext := context.WithValue(
+			requestCtx,
+			rawDiscoveryCaptureContextKey{},
+			capture,
+		)
+		response, searchErr := client.NFInstancesStoreApi.SearchNFInstances(capturedContext, request)
+		if searchErr != nil {
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("NRF SMF discovery canceled: %w", ctx.Err())
+			}
+			var apiErr openapi.GenericOpenAPIError
+			if errors.As(searchErr, &apiErr) {
+				standardError := &NFDiscoveryError{StatusCode: apiErr.ErrorStatus}
+				switch model := apiErr.Model().(type) {
+				case NFDiscovery.SearchNFInstancesError:
 					standardError.Location = model.Location
 					standardError.ProblemDetails = model.ProblemDetails
+				case *NFDiscovery.SearchNFInstancesError:
+					if model != nil {
+						standardError.Location = model.Location
+						standardError.ProblemDetails = model.ProblemDetails
+					}
+				case models.ProblemDetails:
+					standardError.ProblemDetails = model
+				case *models.ProblemDetails:
+					if model != nil {
+						standardError.ProblemDetails = *model
+					}
 				}
-			case models.ProblemDetails:
-				standardError.ProblemDetails = model
-			case *models.ProblemDetails:
-				if model != nil {
-					standardError.ProblemDetails = *model
+				return nil, standardError
+			}
+			return nil, fmt.Errorf("NRF SMF discovery failed: %w", searchErr)
+		}
+		if response == nil {
+			return nil, errors.New("malformed NRF SMF discovery success: response is nil")
+		}
+		result, parseErr := parseNFDiscoveryResult(capture.body, response.SearchResult)
+		if parseErr != nil {
+			return nil, fmt.Errorf("malformed NRF discovery success: %w", parseErr)
+		}
+		if result.ValidityPeriod > 0 {
+			cacheNow := s.now()
+			s.mu.Lock()
+			for cacheKey, entry := range s.discoveryCache {
+				if !cacheNow.Before(entry.expiresAt) {
+					delete(s.discoveryCache, cacheKey)
 				}
 			}
-			return nil, standardError
+			if len(s.discoveryCache) >= 256 {
+				oldestKey := ""
+				var oldest time.Time
+				for cacheKey, entry := range s.discoveryCache {
+					if oldestKey == "" || entry.usedAt.Before(oldest) {
+						oldestKey, oldest = cacheKey, entry.usedAt
+					}
+				}
+				delete(s.discoveryCache, oldestKey)
+			}
+			s.discoveryCache[key] = cachedDiscovery{
+				result:    result,
+				expiresAt: cacheNow.Add(time.Duration(result.ValidityPeriod) * time.Second),
+				usedAt:    cacheNow,
+			}
+			s.mu.Unlock()
 		}
-		return nil, fmt.Errorf("NRF SMF discovery failed: %w", searchErr)
+		return result, nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	if response == nil {
-		return nil, errors.New("malformed NRF SMF discovery success: response is nil")
-	}
-	result := response.SearchResult
+	result := value.(NFDiscoveryResult)
 	return &result, nil
+}
+
+func parseNFDiscoveryResult(
+	raw []byte,
+	typed models.SearchResult,
+) (NFDiscoveryResult, error) {
+	var envelope map[string]json.RawMessage
+	if len(raw) == 0 {
+		return NFDiscoveryResult{}, errors.New("raw response body is unavailable")
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return NFDiscoveryResult{}, fmt.Errorf("invalid JSON: %w", err)
+	}
+	rawValidity, ok := envelope["validityPeriod"]
+	if !ok {
+		return NFDiscoveryResult{}, errors.New("validityPeriod is missing")
+	}
+	var validity int32
+	if err := json.Unmarshal(rawValidity, &validity); err != nil || validity < 0 {
+		return NFDiscoveryResult{}, errors.New("validityPeriod is invalid")
+	}
+	rawInstances, ok := envelope["nfInstances"]
+	if !ok || bytes.Equal(bytes.TrimSpace(rawInstances), []byte("null")) {
+		return NFDiscoveryResult{}, errors.New("nfInstances is missing")
+	}
+	var instances []json.RawMessage
+	if err := json.Unmarshal(rawInstances, &instances); err != nil {
+		return NFDiscoveryResult{}, errors.New("nfInstances is invalid")
+	}
+	if typed.NfInstances == nil {
+		typed.NfInstances = []models.NrfNfDiscoveryNfProfile{}
+	}
+	typed.ValidityPeriod = validity
+	return NFDiscoveryResult{SearchResult: typed, raw: envelope}, nil
+}
+
+func discoveryCacheKey(query NFDiscoveryQuery, nrfURI, requesterNFInstanceID string) string {
+	names := make([]string, len(query.ServiceNames))
+	for index, name := range query.ServiceNames {
+		names[index] = string(name)
+	}
+	sort.Strings(names)
+	return nrfURI + "|" + requesterNFInstanceID + "|" +
+		string(query.TargetNFType) + "|" + string(query.RequesterNFType) + "|" +
+		strings.Join(names, ",")
+}
+
+func (s *NrfService) DiscoverSmfProfiles(
+	ctx context.Context,
+	nwdafCtx *nwdaf_context.NWDAFContext,
+) (*NFDiscoveryResult, error) {
+	return s.DiscoverNFInstances(ctx, nwdafCtx, NFDiscoveryQuery{
+		TargetNFType:    models.NrfNfManagementNfType_SMF,
+		RequesterNFType: models.NrfNfManagementNfType_NWDAF,
+		ServiceNames:    []models.ServiceName{models.ServiceName_NSMF_EVENT_EXPOSURE},
+	})
 }
 
 func (s *NrfService) RegisterNFInstance(
