@@ -14,7 +14,6 @@ import (
 	reflect "reflect"
 
 	context0 "github.com/free5gc/nwdaf/internal/context"
-	consumer "github.com/free5gc/nwdaf/internal/sbi/consumer"
 	factory "github.com/free5gc/nwdaf/pkg/factory"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -68,20 +67,6 @@ func (m *MockApp) Config() *factory.Config {
 func (mr *MockAppMockRecorder) Config() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Config", reflect.TypeOf((*MockApp)(nil).Config))
-}
-
-// Consumer mocks base method.
-func (m *MockApp) Consumer() consumer.ConsumerAPI {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Consumer")
-	ret0, _ := ret[0].(consumer.ConsumerAPI)
-	return ret0
-}
-
-// Consumer indicates an expected call of Consumer.
-func (mr *MockAppMockRecorder) Consumer() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Consumer", reflect.TypeOf((*MockApp)(nil).Consumer))
 }
 
 // Context mocks base method.

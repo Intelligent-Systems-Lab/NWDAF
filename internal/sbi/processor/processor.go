@@ -6,12 +6,8 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/internal/backend"
-	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
-	"github.com/free5gc/nwdaf/internal/mtlf"
-	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/app"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
@@ -20,18 +16,6 @@ import (
 type NwdafApp interface {
 	app.App
 	CancelContext() context.Context
-	Consumer() consumer.ConsumerAPI
-}
-
-type anlfCoordinator interface {
-	ApplyInitialSubscriptionRuntime(
-		subscription *nwdaf_context.Subscription,
-	) (*contract.ApplySubscriptionRuntimeResponse, error)
-	ReleaseSubscriptionRuntime(subscriptionID string) error
-	SyncCurrentObservationBindings(subscriptionID string) error
-	BuildProvisionNotificationURI() string
-	SyncModelProvisionBinding(subscriptionID string, binding contract.ModelProvisionBinding) error
-	EnqueueObservations(sourceID string, observations []contract.SourceObservation) bool
 }
 
 type eventsSubscriptionBackend interface {
@@ -45,7 +29,6 @@ type eventsSubscriptionBackend interface {
 		*models.NnwdafEventsSubscription,
 	) (*models.NnwdafEventsSubscription, error)
 	DeleteEventsSubscription(context.Context, string) error
-	RefreshBackendSync()
 }
 
 type mtlfMLModelBackend interface {
@@ -73,9 +56,8 @@ type backendAvailability interface {
 
 type Processor struct {
 	nwdaf              NwdafApp
-	wg                 *sync.WaitGroup
-	anlf               anlfCoordinator
 	eventsBackend      eventsSubscriptionBackend
+	eventsAvailability backendAvailability
 	eventsMu           sync.Mutex
 	mlModelMu          sync.Mutex
 	mtlfMLModelBackend mtlfMLModelBackend
@@ -83,7 +65,6 @@ type Processor struct {
 	mtlfAvailability   backendAvailability
 	anlfAvailability   backendAvailability
 	mlModelHTTPClient  *http.Client
-	mtlf               *mtlf.MtlfService
 }
 
 func (p *Processor) config() *factory.Config {
@@ -93,11 +74,9 @@ func (p *Processor) config() *factory.Config {
 	return p.nwdaf.Config()
 }
 
-func NewProcessor(nwdaf NwdafApp, coordinator anlfCoordinator, mtlfService *mtlf.MtlfService) *Processor {
+func NewProcessor(nwdaf NwdafApp) *Processor {
 	p := &Processor{
 		nwdaf:             nwdaf,
-		anlf:              coordinator,
-		mtlf:              mtlfService,
 		mlModelHTTPClient: http.DefaultClient,
 	}
 
@@ -111,8 +90,12 @@ func (p *Processor) SetMLModelHTTPClient(client *http.Client) {
 	}
 }
 
-func (p *Processor) SetEventsSubscriptionBackend(backend eventsSubscriptionBackend) {
+func (p *Processor) SetEventsSubscriptionBackend(
+	backend eventsSubscriptionBackend,
+	availability backendAvailability,
+) {
 	p.eventsBackend = backend
+	p.eventsAvailability = availability
 }
 
 func (p *Processor) SetMLModelBackends(
@@ -127,18 +110,7 @@ func (p *Processor) SetMLModelBackends(
 	p.anlfAvailability = anlfAvailability
 }
 
-// SetWaitGroup stores the application WaitGroup for goroutine lifecycle management.
-func (p *Processor) SetWaitGroup(wg *sync.WaitGroup) {
-	p.wg = wg
-	p.mtlf.SetWaitGroup(wg)
-}
-
-// StartMtlfTrainingScheduler delegates to MtlfService.
-func (p *Processor) StartMtlfTrainingScheduler(wg *sync.WaitGroup) {
-	p.mtlf.StartTrainingScheduler(wg)
-}
-
-// HandleAdrfRetrievalNotify delegates an ADRF retrieval callback to MtlfService.
+// HandleAdrfRetrievalNotify forwards a standard ADRF callback to the MTLF backend.
 func (p *Processor) HandleAdrfRetrievalNotify(
 	ctx context.Context,
 	body []byte,

@@ -48,11 +48,20 @@ configuration:
 			},
 		},
 		{
-			name: "missing nrf uri",
+			name: "disabled registration permits no nrf uri",
 			yaml: `
-configuration: {}
+configuration:
+  nrfRegistrationEnabled: false
 `,
-			wantErr: "nrfUri is required",
+			checkConfig: func(t *testing.T, cfg *factory.Config) {
+				t.Helper()
+				if cfg.NrfRegistrationEnabled() {
+					t.Fatal("NRF registration should be disabled")
+				}
+				if cfg.GetNrfUri() != "" {
+					t.Fatalf("GetNrfUri() = %q, want empty", cfg.GetNrfUri())
+				}
+			},
 		},
 		{
 			name: "nrf uri rejects service path",
@@ -181,17 +190,6 @@ configuration:
 			wantErr: "anlfBackend.endpoint",
 		},
 		{
-			name: "external mtlf enabled accepts endpoint-only config",
-			yaml: `
-configuration:
-  nrfUri: http://127.0.0.10:8000
-  externalMtlf:
-    enabled: true
-    endpoints:
-      - http://127.0.0.1:8082
-`,
-		},
-		{
 			name: "sbi wildcard binding requires register ip",
 			yaml: `
 configuration:
@@ -253,16 +251,6 @@ configuration:
       bindingIPv4: 0.0.0.0
 `,
 			wantErr: "mtlf.server.registerIPv4",
-		},
-		{
-			name: "adrf fetch batch larger than supported",
-			yaml: `
-configuration:
-  adrf:
-    url: http://127.0.0.1:9888
-    fetchBatchSize: 2
-`,
-			wantErr: "adrf.fetchBatchSize",
 		},
 	}
 

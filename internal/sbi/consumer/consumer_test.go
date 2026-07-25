@@ -7,40 +7,11 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/free5gc/nwdaf/internal/compat/nsmf"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
-
-type testSmfService struct {
-	httpClient *http.Client
-}
-
-func (s *testSmfService) HTTPClient() *http.Client {
-	return s.httpClient
-}
-
-type testMtlfService struct {
-	subscribeCalled   bool
-	unsubscribeCalled bool
-	subscriptionID    string
-	err               error
-	httpClient        *http.Client
-}
-
-func (s *testMtlfService) SubscribeToMtlf(_ context.Context, _ string, _ MtlfSubscriptionOptions) (string, error) {
-	s.subscribeCalled = true
-	return s.subscriptionID, s.err
-}
-
-func (s *testMtlfService) UnsubscribeFromMtlf(_ context.Context, _ string, _ string) error {
-	s.unsubscribeCalled = true
-	return s.err
-}
-
-func (s *testMtlfService) HTTPClient() *http.Client {
-	return s.httpClient
-}
 
 type testConsumerApp struct {
 	cfg *factory.Config
@@ -83,8 +54,8 @@ func TestNewConsumer(t *testing.T) {
 		t.Fatal("NewConsumer() returned nil")
 	} else if c.SmfService() == nil {
 		t.Error("SMF service should be initialized")
-	} else if c.MtlfService() == nil {
-		t.Error("MTLF service should be initialized")
+	} else if c.MLModelProvisionService() == nil {
+		t.Error("ML Model Provision service should be initialized")
 	}
 }
 
@@ -129,26 +100,6 @@ func TestNsmfServiceHTTPClient(t *testing.T) {
 	}
 }
 
-func TestConsumerDelegatesToInjectedServices(t *testing.T) {
-	smfService := &testSmfService{httpClient: &http.Client{}}
-	mtlfService := &testMtlfService{
-		subscriptionID: "mtlf-sub-1",
-		httpClient:     &http.Client{},
-	}
-	c := newConsumerWithServices(nil, smfService, mtlfService, nil)
-
-	if _, err := c.SubscribeToMtlf(context.Background(), "http://mtlf", MtlfSubscriptionOptions{}); err != nil {
-		t.Fatalf("SubscribeToMtlf returned error: %v", err)
-	}
-	if err := c.UnsubscribeFromMtlf(context.Background(), "http://mtlf", "mtlf-sub-1"); err != nil {
-		t.Fatalf("UnsubscribeFromMtlf returned error: %v", err)
-	}
-
-	if !mtlfService.subscribeCalled || !mtlfService.unsubscribeCalled {
-		t.Fatal("expected MTLF service delegation to be invoked")
-	}
-}
-
 func TestConsumerRequestsSmfTokenForStandardRequest(t *testing.T) {
 	var requestOrder []string
 	var tokenScopes []string
@@ -185,7 +136,9 @@ func TestConsumerRequestsSmfTokenForStandardRequest(t *testing.T) {
 			w.WriteHeader(http.StatusCreated)
 			if err := json.NewEncoder(w).Encode(models.NsmfEventExposure{
 				SubId: "smf-sub-1", NotifId: "corr-a", NotifUri: "http://py/callback",
-				EventSubs: []models.SmfEventExposureEventSubscription{{Event: SmfEvent_UPF_EVENT}},
+				EventSubs: []models.SmfEventExposureEventSubscription{{
+					Event: models.SmfEvent(nsmf.EventUPFEvent),
+				}},
 			}); err != nil {
 				t.Errorf("encode create response: %v", err)
 			}
@@ -218,52 +171,5 @@ func TestConsumerRequestsSmfTokenForStandardRequest(t *testing.T) {
 	wantScopes := []string{string(models.ServiceName_NSMF_EVENT_EXPOSURE)}
 	if !slices.Equal(tokenScopes, wantScopes) {
 		t.Fatalf("token scopes = %v, want %v", tokenScopes, wantScopes)
-	}
-}
-
-func TestNewConsumerInitializesAdrfFromAppConfig(t *testing.T) {
-	c, err := NewConsumer(newTestConsumerApp(&factory.Config{
-		Configuration: &factory.Configuration{
-			Adrf: &factory.AdrfConfig{
-				Url:              "http://adrf.example",
-				StorageThreshold: 3,
-			},
-		},
-	}))
-	if err != nil {
-		t.Fatalf("NewConsumer failed: %v", err)
-	}
-
-	if c.Adrf == nil {
-		t.Fatal("ADRF client should be initialized from app config")
-	}
-}
-
-// TestExtendedEventSubscription tests UPF event subscription model
-func TestExtendedEventSubscription(t *testing.T) {
-	sub := ExtendedEventSubscription{
-		Event: SmfEvent_UPF_EVENT,
-		UpfEvents: []UpfEvent{
-			{
-				Type: UpfEventType_USER_DATA_USAGE_MEASURES,
-				MeasurementTypes: []MeasurementType{
-					MeasurementType_VOLUME_MEASUREMENT,
-					MeasurementType_THROUGHPUT_MEASUREMENT,
-				},
-				GranularityOfMeasurement: Granularity_PER_SESSION,
-			},
-		},
-		BundlingAllowed:       true,
-		BundledEventNotifyUri: "http://localhost:8080/upf-notify",
-	}
-
-	if sub.Event != SmfEvent_UPF_EVENT {
-		t.Errorf("Event = %v, want UPF_EVENT", sub.Event)
-	}
-	if len(sub.UpfEvents) != 1 {
-		t.Errorf("UpfEvents length = %v, want 1", len(sub.UpfEvents))
-	}
-	if !sub.BundlingAllowed {
-		t.Error("BundlingAllowed should be true")
 	}
 }

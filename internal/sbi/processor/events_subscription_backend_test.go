@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
-	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
@@ -26,7 +25,6 @@ func (*subscriptionTestApp) Context() *nwdaf_context.NWDAFContext {
 	return nwdaf_context.GetSelf()
 }
 func (a *subscriptionTestApp) CancelContext() context.Context { return a.ctx }
-func (*subscriptionTestApp) Consumer() consumer.ConsumerAPI   { return nil }
 
 func setupTestContext() *nwdaf_context.NWDAFContext {
 	nwdaf_context.Init()
@@ -67,7 +65,13 @@ func (s *eventsSubscriptionBackendStub) DeleteEventsSubscription(
 	return nil
 }
 
-func (s *eventsSubscriptionBackendStub) RefreshBackendSync() {
+func (*eventsSubscriptionBackendStub) Usable() bool {
+	return true
+}
+
+func (*eventsSubscriptionBackendStub) MarkUnavailable(string) {}
+
+func (s *eventsSubscriptionBackendStub) Refresh() {
 	s.refresh++
 }
 
@@ -84,7 +88,11 @@ func TestBackendEventsSubscriptionRoutingPreservesExternalURI(t *testing.T) {
 			}},
 		}},
 	}
-	processor := &Processor{nwdaf: app, eventsBackend: backend}
+	processor := &Processor{
+		nwdaf:              app,
+		eventsBackend:      backend,
+		eventsAvailability: backend,
+	}
 	request := &models.NnwdafEventsSubscription{
 		NotificationURI: "http://consumer.example/notify",
 		NotifCorrId:     "corr-a",
@@ -146,8 +154,9 @@ func TestBackendEventsSubscriptionRejectsUnknownRouteWithoutCallingBackend(t *te
 	setupTestContext()
 	backend := &eventsSubscriptionBackendStub{}
 	processor := &Processor{
-		nwdaf:         &subscriptionTestApp{ctx: context.Background()},
-		eventsBackend: backend,
+		nwdaf:              &subscriptionTestApp{ctx: context.Background()},
+		eventsBackend:      backend,
+		eventsAvailability: backend,
 	}
 
 	response, problem := processor.HandleUpdateSubscription(

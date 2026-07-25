@@ -196,6 +196,9 @@ func newMLModelProcessorTestSubject() (
 			Anlf: &factory.AnlfConfig{Server: &factory.AuxiliaryServerConfig{
 				RegisterIPv4: "192.0.2.20", Port: 8090,
 			}},
+			Mtlf: &factory.MtlfConfig{Server: &factory.AuxiliaryServerConfig{
+				RegisterIPv4: "192.0.2.21", Port: 8091,
+			}},
 		}},
 	}
 	mtlfBackend := &mtlfMLModelBackendStub{}
@@ -223,7 +226,7 @@ func TestMLModelProvisionRoutingPreservesUnknownFieldsAndExternalURI(t *testing.
 		t.Fatalf("response = %+v", response)
 	}
 	if strings.Contains(string(mtlfBackend.provisionBody), "consumer.example") ||
-		!strings.Contains(string(mtlfBackend.provisionBody), "192.0.2.20:8090") {
+		!strings.Contains(string(mtlfBackend.provisionBody), "192.0.2.21:8091") {
 		t.Fatalf("backend body did not internalize callback URI: %s", mtlfBackend.provisionBody)
 	}
 	if !strings.Contains(string(response.Body), "consumer.example") ||
@@ -232,7 +235,7 @@ func TestMLModelProvisionRoutingPreservesUnknownFieldsAndExternalURI(t *testing.
 	}
 	route, found := ctx.GetMLModelProvisionSubscriptionRoute(testProvisionID)
 	if !found || route.DestinationNotificationURI != "http://consumer.example/provision" ||
-		!strings.Contains(string(route.BackendRepresentation), "192.0.2.20:8090") {
+		!strings.Contains(string(route.BackendRepresentation), "192.0.2.21:8091") {
 		t.Fatalf("route = %+v found=%v", route, found)
 	}
 	if availability.refreshed != 1 {
@@ -451,7 +454,7 @@ func TestMLModelMonitorBackendSubscriptionRoutesNotificationToMTLFBackend(t *tes
 		t.Fatalf("owner registration ID=%q", route.OwnerRegistrationID)
 	}
 	if strings.Contains(string(anlfBackend.body), "mtlf.backend") ||
-		!strings.Contains(string(anlfBackend.body), mlModelMonitorCallbackPath) {
+		!strings.Contains(string(anlfBackend.body), "192.0.2.20:8090"+mlModelMonitorCallbackPath) {
 		t.Fatalf("AnLF backend representation=%s", anlfBackend.body)
 	}
 

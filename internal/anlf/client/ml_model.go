@@ -6,7 +6,7 @@ import (
 	"net/url"
 
 	"github.com/free5gc/nwdaf/internal/backend"
-	"github.com/free5gc/nwdaf/internal/mlmodel/wire"
+	wire "github.com/free5gc/nwdaf/internal/compat/mlmodel"
 )
 
 const (

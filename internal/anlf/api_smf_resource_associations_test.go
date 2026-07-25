@@ -9,29 +9,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/free5gc/nwdaf/internal/anlf/contract"
-	"github.com/free5gc/nwdaf/internal/anlf/coordinator"
+	anlfprocessor "github.com/free5gc/nwdaf/internal/anlf/processor"
 	"github.com/free5gc/nwdaf/internal/backend"
 )
 
 type associationProcessorStub struct {
 	err    error
 	update backend.SmfResourceAssociationUpdate
-}
-
-func (*associationProcessorStub) HandleMlModelProvisionNotify([]contract.ModelProvisionNotification) {
-}
-
-func (*associationProcessorStub) HandleAnalyticsReport(string, *contract.AnalyticsReport) error {
-	return nil
-}
-
-func (*associationProcessorStub) HandleModelAccuracyReport(*contract.ModelAccuracyReport) error {
-	return nil
-}
-
-func (*associationProcessorStub) HandleRuntimeCompletion(*contract.RuntimeCompletionEvent) error {
-	return nil
 }
 
 func (s *associationProcessorStub) ReplaceSmfResourceAssociations(
@@ -54,10 +38,10 @@ func TestReplaceSmfResourceAssociationsStatusAndValidation(t *testing.T) {
 		wantStatus int
 	}{
 		{name: "accepted", body: body, wantStatus: http.StatusNoContent},
-		{name: "stale process", body: body, err: coordinator.ErrStaleBackendProcess, wantStatus: http.StatusConflict},
-		{name: "unknown peer", body: body, err: coordinator.ErrUnknownSmfResource, wantStatus: http.StatusConflict},
+		{name: "stale process", body: body, err: anlfprocessor.ErrStaleBackendProcess, wantStatus: http.StatusConflict},
+		{name: "unknown peer", body: body, err: anlfprocessor.ErrUnknownSmfResource, wantStatus: http.StatusConflict},
 		{
-			name: "backend syncing", body: body, err: coordinator.ErrBackendUnavailable,
+			name: "backend syncing", body: body, err: anlfprocessor.ErrBackendUnavailable,
 			wantStatus: http.StatusServiceUnavailable,
 		},
 		{name: "malformed UUID", body: `{"processInstanceId":"bad","smfResources":[]}`, wantStatus: http.StatusBadRequest},

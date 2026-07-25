@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/free5gc/nwdaf/internal/anlf/coordinator"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/openapi/models"
@@ -27,6 +26,7 @@ func (p *Processor) createBackendSubscription(
 	}
 	response, subscriptionID, err := p.eventsBackend.CreateEventsSubscription(requestCtx, backendRequest)
 	if err != nil {
+		p.recordEventsBackendFailure(err)
 		return nil, "", eventsSubscriptionBackendProblem(err)
 	}
 	if response == nil || subscriptionID == "" {
@@ -54,7 +54,9 @@ func (p *Processor) createBackendSubscription(
 			Detail: "could not record the analytics subscription route",
 		}
 	}
-	p.eventsBackend.RefreshBackendSync()
+	if p.eventsAvailability != nil {
+		p.eventsAvailability.Refresh()
+	}
 
 	externalResponse := accepted
 	externalResponse.NotificationURI = req.NotificationURI
@@ -87,6 +89,7 @@ func (p *Processor) replaceBackendSubscription(
 		backendRequest,
 	)
 	if err != nil {
+		p.recordEventsBackendFailure(err)
 		return nil, eventsSubscriptionBackendProblem(err)
 	}
 	if response == nil {
@@ -105,7 +108,9 @@ func (p *Processor) replaceBackendSubscription(
 			Detail: "could not update the analytics subscription route",
 		}
 	}
-	p.eventsBackend.RefreshBackendSync()
+	if p.eventsAvailability != nil {
+		p.eventsAvailability.Refresh()
+	}
 
 	externalResponse := accepted
 	externalResponse.NotificationURI = req.NotificationURI
@@ -125,6 +130,7 @@ func (p *Processor) deleteBackendSubscription(subscriptionID string) *models.Pro
 		return subscriptionNotFoundProblem(subscriptionID)
 	}
 	if err := p.eventsBackend.DeleteEventsSubscription(p.nwdaf.CancelContext(), subscriptionID); err != nil {
+		p.recordEventsBackendFailure(err)
 		return eventsSubscriptionBackendProblem(err)
 	}
 	if !ctx.DeleteAnalyticsSubscriptionRoute(subscriptionID) {
@@ -134,7 +140,9 @@ func (p *Processor) deleteBackendSubscription(subscriptionID string) *models.Pro
 			Detail: "could not remove the analytics subscription route",
 		}
 	}
-	p.eventsBackend.RefreshBackendSync()
+	if p.eventsAvailability != nil {
+		p.eventsAvailability.Refresh()
+	}
 	logger.ProcLog.Infof("DeleteSubscription: routed sub=%s to AnLF backend", subscriptionID)
 	return nil
 }
@@ -170,10 +178,21 @@ func eventsSubscriptionBackendProblem(err error) *models.ProblemDetails {
 			return problem
 		}
 	}
-	if errors.Is(err, coordinator.ErrBackendUnavailable) {
-		return analyticsRuntimeUnavailableProblem()
-	}
 	return analyticsRuntimeUnavailableProblem()
+}
+
+func (p *Processor) recordEventsBackendFailure(err error) {
+	if err == nil || p.eventsAvailability == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	var statusError interface{ HTTPStatusCode() int }
+	if errors.As(err, &statusError) {
+		status := statusError.HTTPStatusCode()
+		if status >= http.StatusBadRequest && status < http.StatusInternalServerError {
+			return
+		}
+	}
+	p.eventsAvailability.MarkUnavailable("operation_failure")
 }
 
 func subscriptionNotFoundProblem(subscriptionID string) *models.ProblemDetails {

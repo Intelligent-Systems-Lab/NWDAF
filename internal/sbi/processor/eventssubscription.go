@@ -11,7 +11,7 @@ func (p *Processor) HandleCreateSubscription(
 	requestCtx context.Context,
 	req *models.NnwdafEventsSubscription,
 ) (*models.NnwdafEventsSubscription, string, *models.ProblemDetails) {
-	if p.eventsBackend == nil {
+	if !p.eventsBackendUsable() {
 		return nil, "", analyticsRuntimeUnavailableProblem()
 	}
 	return p.createBackendSubscription(requestCtx, req)
@@ -22,17 +22,22 @@ func (p *Processor) HandleUpdateSubscription(
 	subscriptionID string,
 	req *models.NnwdafEventsSubscription,
 ) (*models.NnwdafEventsSubscription, *models.ProblemDetails) {
-	if p.eventsBackend == nil {
+	if !p.eventsBackendUsable() {
 		return nil, analyticsRuntimeUnavailableProblem()
 	}
 	return p.replaceBackendSubscription(requestCtx, subscriptionID, req)
 }
 
 func (p *Processor) HandleDeleteSubscription(subscriptionID string) *models.ProblemDetails {
-	if p.eventsBackend == nil {
+	if !p.eventsBackendUsable() {
 		return analyticsRuntimeUnavailableProblem()
 	}
 	return p.deleteBackendSubscription(subscriptionID)
+}
+
+func (p *Processor) eventsBackendUsable() bool {
+	return p.eventsBackend != nil &&
+		(p.eventsAvailability == nil || p.eventsAvailability.Usable())
 }
 
 func analyticsRuntimeUnavailableProblem() *models.ProblemDetails {

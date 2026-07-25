@@ -209,7 +209,7 @@ func (f *fakeNFManagement) DeregisterNFInstance(ctx context.Context) error {
 // NewApp initializes package-global NWDAF and Gin state, so lifecycle tests
 // must remain sequential until production supports multiple app instances.
 func TestStartOwnedServersStartsAndStopsAllListeners(t *testing.T) {
-	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+	cfg := newFreeLifecycleTestConfig(t)
 	app, err := NewApp(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
@@ -228,7 +228,7 @@ func TestStartOwnedServersStartsAndStopsAllListeners(t *testing.T) {
 }
 
 func TestNewAppDoesNotRequireRunningBackends(t *testing.T) {
-	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+	cfg := newFreeLifecycleTestConfig(t)
 	cfg.Configuration.AnlfBackend = &factory.AnlfBackendConfig{
 		Enabled: true, Endpoint: "http://127.0.0.1:1", RequestTimeout: 1,
 	}
@@ -324,13 +324,8 @@ func TestMtlfProbeUsesUnifiedTrainingDataSource(t *testing.T) {
 		t.Fatalf("NewBackendClient() error = %v", err)
 	}
 	app := &NwdafApp{
-		cfg: &factory.Config{Configuration: &factory.Configuration{
-			Adrf: &factory.AdrfConfig{Url: "http://127.0.0.1:9888"},
-		}},
+		cfg:               &factory.Config{Configuration: &factory.Configuration{}},
 		mtlfBackendClient: client,
-		consumer: &consumer.Consumer{
-			Adrf: consumer.NewAdrfClient("http://127.0.0.1:9888"),
-		},
 	}
 	app.trainingDataSource = backend.DataSourceMongoDB
 	if _, err = app.probeMtlfBackend(context.Background()); err != nil {
@@ -398,7 +393,7 @@ func TestMtlfMonitorCancellationInterruptsSyncRequest(t *testing.T) {
 func TestStartOwnedServersStartsAndStopsHttpsSbiListener(t *testing.T) {
 	certPemPath, certKeyPath := writeTempTLSCertPair(t)
 
-	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+	cfg := newFreeLifecycleTestConfig(t)
 	cfg.Configuration.Sbi.Scheme = "https"
 	cfg.Configuration.Sbi.Tls = &factory.Tls{
 		Pem: certPemPath,
@@ -445,7 +440,7 @@ func TestStartOwnedServersCleansUpOnAuxiliaryBindFailure(t *testing.T) {
 }
 
 func TestStartOwnedServersCleansUpOnMissingHttpsTLSConfig(t *testing.T) {
-	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+	cfg := newFreeLifecycleTestConfig(t)
 	cfg.Configuration.Sbi.Scheme = "https"
 
 	app, err := NewApp(context.Background(), cfg)
@@ -464,7 +459,7 @@ func TestStartOwnedServersCleansUpOnMissingHttpsTLSConfig(t *testing.T) {
 }
 
 func TestStartOwnedServersCleansUpOnUnsupportedSbiScheme(t *testing.T) {
-	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+	cfg := newFreeLifecycleTestConfig(t)
 	cfg.Configuration.Sbi.Scheme = "ftp"
 
 	if _, err := NewApp(context.Background(), cfg); err == nil {
@@ -473,7 +468,7 @@ func TestStartOwnedServersCleansUpOnUnsupportedSbiScheme(t *testing.T) {
 }
 
 func TestStartRuntimeRegistersBeforeStartingOwnedListeners(t *testing.T) {
-	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+	cfg := newFreeLifecycleTestConfig(t)
 	app, err := NewApp(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
@@ -506,7 +501,7 @@ func TestStartRuntimeRegistersBeforeStartingOwnedListeners(t *testing.T) {
 }
 
 func TestStartRuntimeLeavesListenersClosedOnRegistrationFailure(t *testing.T) {
-	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+	cfg := newFreeLifecycleTestConfig(t)
 	app, err := NewApp(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
@@ -531,7 +526,7 @@ func TestStartRuntimeLeavesListenersClosedOnRegistrationFailure(t *testing.T) {
 
 func TestRunTreatsRegistrationCancellationAsGracefulShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+	cfg := newFreeLifecycleTestConfig(t)
 	app, err := NewApp(ctx, cfg)
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
@@ -571,7 +566,7 @@ func TestRunTreatsRegistrationCancellationAsGracefulShutdown(t *testing.T) {
 }
 
 func TestStartRuntimeKeepsListenersClosedUntilRegistrationRecovers(t *testing.T) {
-	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+	cfg := newFreeLifecycleTestConfig(t)
 	app, err := NewApp(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
@@ -636,7 +631,7 @@ func TestStartRuntimeKeepsListenersClosedUntilRegistrationRecovers(t *testing.T)
 }
 
 func TestStartRuntimeCleansUpMalformedRegistrationSuccess(t *testing.T) {
-	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+	cfg := newFreeLifecycleTestConfig(t)
 	app, err := NewApp(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
@@ -668,7 +663,7 @@ func TestStartRuntimeCleansUpMalformedRegistrationSuccess(t *testing.T) {
 }
 
 func TestStartRuntimeContinuesAfterOAuth2RequiredRegistration(t *testing.T) {
-	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+	cfg := newFreeLifecycleTestConfig(t)
 	app, err := NewApp(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
@@ -728,7 +723,7 @@ func TestLogOAuthCertificateStateReportsMissingAndUnusableMaterial(t *testing.T)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+			cfg := newFreeLifecycleTestConfig(t)
 			cfg.Configuration.NrfCertPem = tt.certPath
 			app, err := NewApp(context.Background(), cfg)
 			if err != nil {
@@ -858,7 +853,7 @@ func TestStartRuntimeOAuthRollbackUsesProtectedDeregistration(t *testing.T) {
 }
 
 func TestTerminateDeregistersWhileSbiIsReachable(t *testing.T) {
-	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+	cfg := newFreeLifecycleTestConfig(t)
 	app, err := NewApp(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
@@ -884,7 +879,7 @@ func TestTerminateDeregistersWhileSbiIsReachable(t *testing.T) {
 }
 
 func TestTerminateBoundsDeregistrationFailureAndStillStopsListeners(t *testing.T) {
-	cfg := newLifecycleTestConfig(t, takeFreePort(t), takeFreePort(t), takeFreePort(t))
+	cfg := newFreeLifecycleTestConfig(t)
 	app, err := NewApp(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
@@ -943,6 +938,30 @@ func newLifecycleTestConfig(t *testing.T, sbiPort, anlfPort, mtlfPort int) *fact
 			SupportedAnalytics: []string{factory.NwdafSupportedEventUEComm},
 		},
 	}
+}
+
+func newFreeLifecycleTestConfig(t *testing.T) *factory.Config {
+	t.Helper()
+
+	listeners := make([]net.Listener, 0, 3)
+	ports := make([]int, 0, 3)
+	for range 3 {
+		listener, err := (&net.ListenConfig{}).Listen(
+			context.Background(),
+			"tcp",
+			"127.0.0.1:0",
+		)
+		if err != nil {
+			t.Fatalf("Listen() error = %v", err)
+		}
+		listeners = append(listeners, listener)
+		ports = append(ports, listener.Addr().(*net.TCPAddr).Port)
+	}
+	for _, listener := range listeners {
+		closeListener(t, listener)
+	}
+
+	return newLifecycleTestConfig(t, ports[0], ports[1], ports[2])
 }
 
 func portIsOpen(addr string) bool {

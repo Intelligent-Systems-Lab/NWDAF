@@ -26,24 +26,6 @@ func NewNsmfService() *NsmfService {
 	}}
 }
 
-func BuildUpfEventSubs(upfNotifURI string, volume, throughput bool) []ExtendedEventSubscription {
-	measurements := []MeasurementType{}
-	if volume {
-		measurements = append(measurements, MeasurementType_VOLUME_MEASUREMENT)
-	}
-	if throughput {
-		measurements = append(measurements, MeasurementType_THROUGHPUT_MEASUREMENT)
-	}
-	return []ExtendedEventSubscription{{
-		Event: SmfEvent_UPF_EVENT,
-		UpfEvents: []UpfEvent{{
-			Type: UpfEventType_USER_DATA_USAGE_MEASURES, MeasurementTypes: measurements,
-			GranularityOfMeasurement: Granularity_PER_SESSION,
-		}},
-		BundlingAllowed: true, BundledEventNotifyUri: upfNotifURI,
-	}}
-}
-
 func bindOAuthTokenToRequest(request *http.Request, requestCtx context.Context) error {
 	if requestCtx == nil {
 		return nil

@@ -3,7 +3,6 @@ package mockapp
 import (
 	"context"
 
-	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/pkg/app"
 )
 
@@ -14,5 +13,4 @@ import (
 type App interface {
 	app.App
 	CancelContext() context.Context
-	Consumer() consumer.ConsumerAPI
 }

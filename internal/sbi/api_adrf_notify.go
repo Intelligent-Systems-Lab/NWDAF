@@ -9,26 +9,17 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/free5gc/nwdaf/internal/backend"
+	adrfcompat "github.com/free5gc/nwdaf/internal/compat/adrf"
 	"github.com/free5gc/nwdaf/internal/util"
 	"github.com/free5gc/openapi/models"
 )
 
 const applicationJSONMediaType = "application/json"
 
-// NadrfDataRetrievalNotification is the callback payload from ADRF (TS 29.575).
-type NadrfDataRetrievalNotification struct {
-	NotifCorrId      string                   `json:"notifCorrId"`
-	TimeStamp        string                   `json:"timeStamp"`
-	FetchInstruct    *models.FetchInstruction `json:"fetchInstruct,omitempty"`
-	DataNotif        json.RawMessage          `json:"dataNotif,omitempty"`
-	AnaNotifications []json.RawMessage        `json:"anaNotifications,omitempty"`
-	TerminationReq   bool                     `json:"terminationReq,omitempty"`
-}
-
 // HandleAdrfRetrievalNotify handles POST /collector/retrieval-notify.
 // ADRF calls this endpoint to deliver fetch instructions for data retrieval.
 func (s *Server) HandleAdrfRetrievalNotify(c *gin.Context) {
-	var notif NadrfDataRetrievalNotification
+	var notif adrfcompat.DataRetrievalNotification
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4*1024*1024)
 	requestBody, err := c.GetRawData()
 	if err != nil {

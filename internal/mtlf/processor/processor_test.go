@@ -1,0 +1,104 @@
+package processor
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"testing"
+
+	"github.com/free5gc/nwdaf/internal/sbi/consumer"
+)
+
+type adrfRetrievalStub struct {
+	createResponse *consumer.StandardAdrfResponse
+	createErr      error
+	deleteResponse *consumer.StandardAdrfResponse
+	deleteErr      error
+	deleteTarget   string
+	deleteLocation string
+}
+
+func (s *adrfRetrievalStub) CreateAdrfRetrievalSubscription(
+	context.Context,
+	string,
+	[]byte,
+) (*consumer.StandardAdrfResponse, error) {
+	return s.createResponse, s.createErr
+}
+
+func (s *adrfRetrievalStub) DeleteAdrfRetrievalSubscription(
+	_ context.Context,
+	target string,
+	location string,
+) (*consumer.StandardAdrfResponse, error) {
+	s.deleteTarget = target
+	s.deleteLocation = location
+	return s.deleteResponse, s.deleteErr
+}
+
+func TestAdrfRetrievalLifecycleUsesCapturedLocation(t *testing.T) {
+	stub := &adrfRetrievalStub{
+		createResponse: &consumer.StandardAdrfResponse{
+			StatusCode: http.StatusCreated,
+			Location: "http://adrf.example/nadrf-datamanagement/v1/" +
+				"data-retrieval-subscriptions/retrieval-a",
+		},
+		deleteResponse: &consumer.StandardAdrfResponse{StatusCode: http.StatusNoContent},
+	}
+	processor := New(nil, nil, stub)
+	body := []byte(`{
+		"notifCorrId":"corr-a",
+		"notificationURI":"http://nwdaf.example/collector/retrieval-notify",
+		"timePeriod":{"startTime":"2026-01-01T00:00:00Z","stopTime":"2026-01-01T00:05:00Z"},
+		"dataSub":{"smfDataSub":{"notifId":"corr-a","notifUri":"http://anlf.example/callback","eventSubs":[]}},
+		"consTrigNotif":true
+	}`)
+
+	response, err := processor.CreateAdrfRetrievalSubscription(
+		context.Background(),
+		"http://adrf.example",
+		body,
+	)
+	if err != nil || response == nil {
+		t.Fatalf("create response=%v error=%v", response, err)
+	}
+	response, err = processor.DeleteAdrfRetrievalSubscription(
+		context.Background(),
+		"retrieval-a",
+	)
+	if err != nil || response == nil ||
+		stub.deleteTarget != "http://adrf.example" ||
+		stub.deleteLocation != stub.createResponse.Location {
+		t.Fatalf(
+			"delete response=%v error=%v target=%q location=%q",
+			response,
+			err,
+			stub.deleteTarget,
+			stub.deleteLocation,
+		)
+	}
+	if _, err = processor.DeleteAdrfRetrievalSubscription(
+		context.Background(),
+		"retrieval-a",
+	); !errors.Is(err, ErrAdrfRetrievalRouteNotFound) {
+		t.Fatalf("second delete error=%v", err)
+	}
+}
+
+func TestAdrfRetrievalRejectsCrossOriginLocation(t *testing.T) {
+	stub := &adrfRetrievalStub{createResponse: &consumer.StandardAdrfResponse{
+		StatusCode: http.StatusCreated,
+		Location: "http://other.example/nadrf-datamanagement/v1/" +
+			"data-retrieval-subscriptions/retrieval-a",
+	}}
+	processor := New(nil, nil, stub)
+
+	_, err := processor.CreateAdrfRetrievalSubscription(
+		context.Background(),
+		"http://adrf.example",
+		[]byte(`{"notifCorrId":"corr-a"}`),
+	)
+	if err == nil {
+		t.Fatal("cross-origin ADRF Location was accepted")
+	}
+}

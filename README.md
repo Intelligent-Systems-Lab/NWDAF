@@ -11,9 +11,13 @@ Current runtime notes:
 
 - The main SBI server supports both HTTP and HTTPS, selected through runtime
   configuration.
-- `nrfUri` is required. NWDAF registers its Events Subscription service before
-  starting owned listeners, retries temporary NRF transport/server failures
-  until cancellation, and attempts bounded deregistration before SBI shutdown.
+- NRF registration is enabled by default. In that mode `nrfUri` is required:
+  NWDAF registers its Events Subscription service before starting owned
+  listeners, retries temporary NRF transport/server failures until
+  cancellation, and attempts bounded deregistration before SBI shutdown.
+  Configured-endpoint deployments may set `nrfRegistrationEnabled: false`;
+  this permits an empty `nrfUri`, skips registration/heartbeat/deregistration,
+  and makes private NRF discovery requests fail with `503`.
 - When registration reports that OAuth is required, NWDAF obtains an
   `nnrf-nfm` access token before deregistration, an `nnrf-disc` token for NRF
   discovery, and an `nsmf-event-exposure` token for SMF subscription creation
@@ -37,7 +41,7 @@ Current runtime notes:
   Discovery schema rejects `target-nf-type=ADRF`. Backends must use configured
   ADRF mode with that build; Go does not hide the incompatibility through a
   non-standard NF Management listing fallback.
-- PyAnLF and PyMTLF independently select ADRF origins. Their standard-shaped
+- The AnLF and MTLF backends independently select ADRF origins. Their standard-shaped
   storage and retrieval-control requests carry `Target-Api-Root`; Go validates
   that origin, performs ADRF POST/DELETE as the containing NWDAF, and forwards
   complete ADRF retrieval callbacks to the MTLF backend before acknowledging

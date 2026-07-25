@@ -4,7 +4,6 @@ package consumer
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -27,40 +26,13 @@ type SmfServiceClient interface {
 	HTTPClient() *http.Client
 }
 
-type MtlfServiceClient interface {
-	SubscribeToMtlf(ctx context.Context, mtlfEndpoint string, opts MtlfSubscriptionOptions) (string, error)
-	UnsubscribeFromMtlf(ctx context.Context, mtlfEndpoint string, subscriptionId string) error
-	HTTPClient() *http.Client
-}
-
-type AdrfServiceAPI interface {
-	StorageRequest(ctx context.Context, info *nwdaf_context.AdrfSmfInfo, upfNotifJSONs []json.RawMessage) (string, error)
-	RetrievalSubscribe(
-		ctx context.Context,
-		info *nwdaf_context.AdrfSmfInfo,
-		notifCorrId string,
-		notifURI string,
-		timePeriod AdrfTimePeriod,
-	) (string, error)
-	RetrievalRequest(ctx context.Context, fetchCorrIds []string) (*NadrfDataStoreRecord, error)
-	RetrievalUnsubscribe(ctx context.Context, subscriptionId string) error
-	HTTPClient() *http.Client
-}
-
-type ConsumerAPI interface {
-	SubscribeToMtlf(ctx context.Context, mtlfEndpoint string, opts MtlfSubscriptionOptions) (string, error)
-	UnsubscribeFromMtlf(ctx context.Context, mtlfEndpoint string, subscriptionId string) error
-	AdrfClient() AdrfServiceAPI
-}
-
 // Consumer aggregates all external NF service clients.
 type Consumer struct {
 	nwdaf
 
-	smfService  SmfServiceClient
-	mtlfService MtlfServiceClient
-	nrfService  *NrfService
-	Adrf        AdrfServiceAPI // nil if ADRF not configured
+	smfService              SmfServiceClient
+	mlModelProvisionService *MLModelProvisionService
+	nrfService              *NrfService
 
 	adrfClientsMu sync.Mutex
 	adrfClients   map[string]*AdrfClient
@@ -69,16 +41,14 @@ type Consumer struct {
 func newConsumerWithServices(
 	nwdaf nwdaf,
 	smfService SmfServiceClient,
-	mtlfService MtlfServiceClient,
-	adrf AdrfServiceAPI,
+	mlModelProvisionService *MLModelProvisionService,
 ) *Consumer {
 	return &Consumer{
-		nwdaf:       nwdaf,
-		smfService:  smfService,
-		mtlfService: mtlfService,
-		nrfService:  newNrfService(),
-		Adrf:        adrf,
-		adrfClients: make(map[string]*AdrfClient),
+		nwdaf:                   nwdaf,
+		smfService:              smfService,
+		mlModelProvisionService: mlModelProvisionService,
+		nrfService:              newNrfService(),
+		adrfClients:             make(map[string]*AdrfClient),
 	}
 }
 
@@ -87,19 +57,8 @@ func NewConsumer(nwdaf nwdaf) (*Consumer, error) {
 	c := newConsumerWithServices(
 		nwdaf,
 		NewNsmfService(),
-		NewNmtlfService(),
-		nil,
+		NewMLModelProvisionService(),
 	)
-
-	if nwdaf != nil {
-		cfg := nwdaf.Config()
-		if cfg != nil && cfg.Configuration != nil {
-			if cfg.Configuration.Adrf.AdrfEnabled() {
-				c.Adrf = NewAdrfClient(cfg.Configuration.Adrf.Url)
-				consumerLog.Info("ADRF client initialized")
-			}
-		}
-	}
 
 	consumerLog.Info("Consumer initialized")
 	return c, nil
@@ -141,32 +100,12 @@ func (c *Consumer) smfRequestContext(ctx context.Context) (context.Context, erro
 	return requestCtx, nil
 }
 
-func (c *Consumer) SubscribeToMtlf(
-	ctx context.Context,
-	mtlfEndpoint string,
-	opts MtlfSubscriptionOptions,
-) (string, error) {
-	return c.mtlfService.SubscribeToMtlf(ctx, mtlfEndpoint, opts)
-}
-
-func (c *Consumer) UnsubscribeFromMtlf(
-	ctx context.Context,
-	mtlfEndpoint string,
-	subscriptionId string,
-) error {
-	return c.mtlfService.UnsubscribeFromMtlf(ctx, mtlfEndpoint, subscriptionId)
-}
-
 func (c *Consumer) SmfService() SmfServiceClient {
 	return c.smfService
 }
 
-func (c *Consumer) MtlfService() MtlfServiceClient {
-	return c.mtlfService
-}
-
-func (c *Consumer) AdrfClient() AdrfServiceAPI {
-	return c.Adrf
+func (c *Consumer) MLModelProvisionService() *MLModelProvisionService {
+	return c.mlModelProvisionService
 }
 
 func (c *Consumer) StoreAdrfDataRecord(

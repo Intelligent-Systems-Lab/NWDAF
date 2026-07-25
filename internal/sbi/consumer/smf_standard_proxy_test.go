@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/free5gc/nwdaf/internal/compat/nsmf"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/openapi/models"
 )
@@ -35,10 +36,12 @@ func TestStandardSmfProxyPreservesBodyLocationAndCleanupOrdering(t *testing.T) {
 			)
 			response.WriteHeader(http.StatusCreated)
 			if err := json.NewEncoder(response).Encode(models.NsmfEventExposure{
-				SubId:     "smf-sub-a",
-				NotifId:   "corr-a",
-				NotifUri:  "http://py.example/callbacks/upf-event-exposure",
-				EventSubs: []models.SmfEventExposureEventSubscription{{Event: SmfEvent_UPF_EVENT}},
+				SubId:    "smf-sub-a",
+				NotifId:  "corr-a",
+				NotifUri: "http://py.example/callbacks/upf-event-exposure",
+				EventSubs: []models.SmfEventExposureEventSubscription{{
+					Event: models.SmfEvent(nsmf.EventUPFEvent),
+				}},
 			}); err != nil {
 				t.Errorf("encode create response: %v", err)
 			}
@@ -68,7 +71,7 @@ func TestStandardSmfProxyPreservesBodyLocationAndCleanupOrdering(t *testing.T) {
 	defer server.Close()
 
 	app := newTestConsumerApp(nil)
-	client := newConsumerWithServices(app, NewNsmfService(), &testMtlfService{}, nil)
+	client := newConsumerWithServices(app, NewNsmfService(), nil)
 	body := []byte(
 		`{"nfId":"nwdaf-a","notifId":"corr-a",` +
 			`"notifUri":"http://py.example/callbacks/upf-event-exposure",` +
@@ -141,10 +144,12 @@ func TestStandardSmfProxyKeepsDuplicatePeerIDsIndependentByTarget(t *testing.T) 
 				)
 				response.WriteHeader(http.StatusCreated)
 				if err := json.NewEncoder(response).Encode(models.NsmfEventExposure{
-					SubId:     "shared-sub-id",
-					NotifId:   "corr-shared",
-					NotifUri:  "http://py.example/callbacks/upf-event-exposure",
-					EventSubs: []models.SmfEventExposureEventSubscription{{Event: SmfEvent_UPF_EVENT}},
+					SubId:    "shared-sub-id",
+					NotifId:  "corr-shared",
+					NotifUri: "http://py.example/callbacks/upf-event-exposure",
+					EventSubs: []models.SmfEventExposureEventSubscription{{
+						Event: models.SmfEvent(nsmf.EventUPFEvent),
+					}},
 				}); err != nil {
 					t.Errorf("encode create response: %v", err)
 				}
@@ -162,7 +167,7 @@ func TestStandardSmfProxyKeepsDuplicatePeerIDsIndependentByTarget(t *testing.T) 
 	second := newSMF()
 	defer second.Close()
 	app := newTestConsumerApp(nil)
-	client := newConsumerWithServices(app, NewNsmfService(), &testMtlfService{}, nil)
+	client := newConsumerWithServices(app, NewNsmfService(), nil)
 	body := []byte(
 		`{"nfId":"nwdaf-a","notifId":"corr-shared",` +
 			`"notifUri":"http://py.example/callbacks/upf-event-exposure",` +
@@ -207,7 +212,9 @@ func TestStandardSmfProxyDoesNotFollowRedirects(t *testing.T) {
 					response.WriteHeader(http.StatusCreated)
 					if err := json.NewEncoder(response).Encode(models.NsmfEventExposure{
 						SubId: "peer-a", NotifId: "corr-a", NotifUri: "http://py/callback",
-						EventSubs: []models.SmfEventExposureEventSubscription{{Event: SmfEvent_UPF_EVENT}},
+						EventSubs: []models.SmfEventExposureEventSubscription{{
+							Event: models.SmfEvent(nsmf.EventUPFEvent),
+						}},
 					}); err != nil {
 						t.Errorf("encode create response: %v", err)
 					}
@@ -226,7 +233,7 @@ func TestStandardSmfProxyDoesNotFollowRedirects(t *testing.T) {
 			defer server.Close()
 
 			app := newTestConsumerApp(nil)
-			client := newConsumerWithServices(app, NewNsmfService(), &testMtlfService{}, nil)
+			client := newConsumerWithServices(app, NewNsmfService(), nil)
 			body := []byte(`{"nfId":"nwdaf-a","notifId":"corr-a","notifUri":"http://py/callback",` +
 				`"eventSubs":[{"event":"UPF_EVENT"}]}`)
 			if _, err := client.CreateSmfEventExposure(context.Background(), server.URL, body); err != nil {
@@ -296,7 +303,7 @@ func TestStandardSmfProxyCompensatesMalformedCreateRepresentation(t *testing.T) 
 	defer server.Close()
 
 	app := newTestConsumerApp(nil)
-	client := newConsumerWithServices(app, NewNsmfService(), &testMtlfService{}, nil)
+	client := newConsumerWithServices(app, NewNsmfService(), nil)
 	body := []byte(`{"nfId":"nwdaf-a","notifId":"corr-a","notifUri":"http://py/callback",` +
 		`"eventSubs":[{"event":"UPF_EVENT"}]}`)
 
@@ -328,7 +335,7 @@ func TestStandardSmfProxyRetainsPendingRouteWhenCreateCompensationFails(t *testi
 	defer server.Close()
 
 	app := newTestConsumerApp(nil)
-	client := newConsumerWithServices(app, NewNsmfService(), &testMtlfService{}, nil)
+	client := newConsumerWithServices(app, NewNsmfService(), nil)
 	body := []byte(`{"nfId":"nwdaf-a","notifId":"corr-pending","notifUri":"http://py/callback",` +
 		`"eventSubs":[{"event":"UPF_EVENT"}]}`)
 
@@ -364,7 +371,7 @@ func TestStandardSmfProxyRejectsMissingReadAndReplaceRepresentations(t *testing.
 		ResourceLocation: server.URL + SmfEventExposurePath + "/peer-a",
 		TargetAPIBaseURI: server.URL,
 	})
-	client := newConsumerWithServices(app, NewNsmfService(), &testMtlfService{}, nil)
+	client := newConsumerWithServices(app, NewNsmfService(), nil)
 	if _, err := client.ReadSmfEventExposure(context.Background(), server.URL, "peer-a"); err == nil {
 		t.Fatal("read without a JSON representation should fail")
 	}

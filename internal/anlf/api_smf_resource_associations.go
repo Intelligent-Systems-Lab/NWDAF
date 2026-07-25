@@ -11,7 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
-	"github.com/free5gc/nwdaf/internal/anlf/coordinator"
+	anlfprocessor "github.com/free5gc/nwdaf/internal/anlf/processor"
 	"github.com/free5gc/nwdaf/internal/backend"
 	"github.com/free5gc/nwdaf/internal/util"
 	"github.com/free5gc/openapi/models"
@@ -51,19 +51,19 @@ func (s *Server) ReplaceSmfResourceAssociations(c *gin.Context) {
 	switch {
 	case err == nil:
 		c.Status(http.StatusNoContent)
-	case errors.Is(err, coordinator.ErrBackendUnavailable):
+	case errors.Is(err, anlfprocessor.ErrBackendUnavailable):
 		util.GinProblemJson(c, smfAssociationProblem(
 			http.StatusServiceUnavailable,
 			"BACKEND_UNAVAILABLE",
 			"AnLF backend is not currently usable",
 		))
-	case errors.Is(err, coordinator.ErrStaleBackendProcess):
+	case errors.Is(err, anlfprocessor.ErrStaleBackendProcess):
 		util.GinProblemJson(c, smfAssociationProblem(
 			http.StatusConflict,
 			"STALE_BACKEND_PROCESS",
 			"association update belongs to a stale AnLF backend process",
 		))
-	case errors.Is(err, coordinator.ErrUnknownSmfResource):
+	case errors.Is(err, anlfprocessor.ErrUnknownSmfResource):
 		util.GinProblemJson(c, smfAssociationProblem(
 			http.StatusConflict,
 			"UNKNOWN_SMF_RESOURCE",

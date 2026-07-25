@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/free5gc/nwdaf/internal/backend"
+	wire "github.com/free5gc/nwdaf/internal/compat/mlmodel"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
-	"github.com/free5gc/nwdaf/internal/mlmodel/wire"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
 )
@@ -62,7 +62,7 @@ func (p *Processor) handleCreateMLModelProvision(
 		return nil, mlModelUnavailableProblem()
 	}
 	backendBody, err := wire.ReplaceStringField(
-		body, "notifUri", p.internalCallbackURI(mlModelProvisionCallbackPath),
+		body, "notifUri", p.mtlfCallbackURI(mlModelProvisionCallbackPath),
 	)
 	if err != nil {
 		return nil, malformedMLModelProblem(err)
@@ -240,7 +240,7 @@ func (p *Processor) HandleReplaceMLModelProvision(
 		return nil, mlModelUnavailableProblem()
 	}
 	backendBody, err := wire.ReplaceStringField(
-		body, "notifUri", p.internalCallbackURI(mlModelProvisionCallbackPath),
+		body, "notifUri", p.mtlfCallbackURI(mlModelProvisionCallbackPath),
 	)
 	if err != nil {
 		return nil, malformedMLModelProblem(err)
@@ -474,7 +474,7 @@ func (p *Processor) handleCreateMLModelMonitorSubscription(
 		return nil, mlModelUnavailableProblem()
 	}
 	backendBody, err := wire.ReplaceStringField(
-		body, "notificationUri", p.internalCallbackURI(mlModelMonitorCallbackPath),
+		body, "notificationUri", p.anlfCallbackURI(mlModelMonitorCallbackPath),
 	)
 	if err != nil {
 		return nil, malformedMLModelProblem(err)
@@ -643,7 +643,7 @@ func (p *Processor) HandleReplaceMLModelMonitorSubscription(
 		return nil, mlModelUnavailableProblem()
 	}
 	backendBody, err := wire.ReplaceStringField(
-		body, "notificationUri", p.internalCallbackURI(mlModelMonitorCallbackPath),
+		body, "notificationUri", p.anlfCallbackURI(mlModelMonitorCallbackPath),
 	)
 	if err != nil {
 		return nil, malformedMLModelProblem(err)
@@ -718,9 +718,16 @@ func (p *Processor) HandleDeleteMLModelMonitorSubscription(
 	return response, nil
 }
 
-func (p *Processor) internalCallbackURI(path string) string {
+func (p *Processor) anlfCallbackURI(path string) string {
 	if config := p.config(); config != nil {
 		return config.GetAnlfServerURI() + path
+	}
+	return ""
+}
+
+func (p *Processor) mtlfCallbackURI(path string) string {
+	if config := p.config(); config != nil {
+		return config.GetMtlfServerURI() + path
 	}
 	return ""
 }

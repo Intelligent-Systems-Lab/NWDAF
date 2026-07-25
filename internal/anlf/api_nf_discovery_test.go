@@ -8,7 +8,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/openapi/models"
 )
@@ -17,21 +16,6 @@ type nfDiscoveryProcessorStub struct {
 	result *consumer.NFDiscoveryResult
 	err    error
 	calls  int
-}
-
-func (*nfDiscoveryProcessorStub) HandleMlModelProvisionNotify([]contract.ModelProvisionNotification) {
-}
-
-func (*nfDiscoveryProcessorStub) HandleAnalyticsReport(string, *contract.AnalyticsReport) error {
-	return nil
-}
-
-func (*nfDiscoveryProcessorStub) HandleModelAccuracyReport(*contract.ModelAccuracyReport) error {
-	return nil
-}
-
-func (*nfDiscoveryProcessorStub) HandleRuntimeCompletion(*contract.RuntimeCompletionEvent) error {
-	return nil
 }
 
 func (s *nfDiscoveryProcessorStub) HandleNFDiscovery(

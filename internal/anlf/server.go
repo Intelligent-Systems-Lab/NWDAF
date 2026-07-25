@@ -13,7 +13,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 
-	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/internal/backend"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/pkg/factory"
@@ -48,13 +47,6 @@ func applyRoutes(group *gin.RouterGroup, routes []Route) {
 	}
 }
 
-type processorAPI interface {
-	HandleMlModelProvisionNotify(notifications []contract.ModelProvisionNotification)
-	HandleAnalyticsReport(subscriptionID string, report *contract.AnalyticsReport) error
-	HandleModelAccuracyReport(report *contract.ModelAccuracyReport) error
-	HandleRuntimeCompletion(event *contract.RuntimeCompletionEvent) error
-}
-
 type mlModelGateway interface {
 	HandleCreateMLModelProvisionFromBackend(
 		context.Context,
@@ -69,30 +61,11 @@ type mlModelGateway interface {
 		context.Context,
 		string,
 	) (*backend.StandardResponse, *models.ProblemDetails)
-	HandleMLModelProvisionNotification(
-		context.Context,
-		string,
-		[]byte,
-	) (*backend.StandardResponse, *models.ProblemDetails)
 	HandleCreateMLModelMonitorRegistrationFromBackend(
 		context.Context,
 		[]byte,
 	) (*backend.StandardResponse, *models.ProblemDetails)
 	HandleDeleteMLModelMonitorRegistrationFromBackend(
-		context.Context,
-		string,
-	) (*backend.StandardResponse, *models.ProblemDetails)
-	HandleCreateMLModelMonitorSubscriptionFromBackend(
-		context.Context,
-		[]byte,
-		string,
-	) (*backend.StandardResponse, *models.ProblemDetails)
-	HandleReplaceMLModelMonitorSubscriptionFromBackend(
-		context.Context,
-		string,
-		[]byte,
-	) (*backend.StandardResponse, *models.ProblemDetails)
-	HandleDeleteMLModelMonitorSubscriptionFromBackend(
 		context.Context,
 		string,
 	) (*backend.StandardResponse, *models.ProblemDetails)
@@ -107,12 +80,12 @@ type Server struct {
 	httpServer            *http.Server
 	listener              net.Listener
 	router                *gin.Engine
-	processor             processorAPI
+	processor             any
 	mlModel               mlModelGateway
 	publicCallbackBaseURI string
 }
 
-func NewServer(cfg *factory.Config, processor processorAPI) (*Server, error) {
+func NewServer(cfg *factory.Config, processor any) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 
 	s := &Server{
@@ -125,9 +98,8 @@ func NewServer(cfg *factory.Config, processor processorAPI) (*Server, error) {
 	routes = append(routes, s.nfDiscoveryRoutes()...)
 	routes = append(routes, s.smfEventExposureRoutes()...)
 	routes = append(routes, s.adrfStorageRoutes()...)
-	routes = append(routes, s.adrfRetrievalRoutes()...)
 	routes = append(routes, s.smfResourceAssociationRoutes()...)
-	routes = append(routes, s.mlModelGatewayRoutes()...)
+	routes = append(routes, s.anlfMLModelRoutes()...)
 	applyRoutes(s.router.Group(""), routes)
 
 	httpServer, err := httpwrapper.NewHttp2Server(

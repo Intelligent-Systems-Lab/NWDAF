@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	anlfprocessor "github.com/free5gc/nwdaf/internal/anlf/processor"
+	"github.com/free5gc/nwdaf/internal/compat/nsmf"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/internal/util"
 	"github.com/free5gc/openapi/models"
@@ -173,17 +174,12 @@ func readSmfEventExposureBody(c *gin.Context) ([]byte, *models.ProblemDetails) {
 			Detail: "notifId, notifUri and eventSubs are required",
 		}
 	}
-	var release18Fields struct {
-		NfID      string `json:"nfId"`
-		EventSubs []struct {
-			Event string `json:"event"`
-		} `json:"eventSubs"`
-	}
+	var release18Fields nsmf.EventExposure
 	if err := json.Unmarshal(body, &release18Fields); err != nil {
 		return nil, malformedRequestProblem(err.Error())
 	}
 	for _, eventSubscription := range release18Fields.EventSubs {
-		if eventSubscription.Event == string(consumer.SmfEvent_UPF_EVENT) && release18Fields.NfID == "" {
+		if eventSubscription.Event == nsmf.EventUPFEvent && release18Fields.NFID == "" {
 			return nil, &models.ProblemDetails{
 				Status: http.StatusBadRequest,
 				Title:  http.StatusText(http.StatusBadRequest),

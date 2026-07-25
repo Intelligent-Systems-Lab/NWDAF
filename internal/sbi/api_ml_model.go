@@ -10,7 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/free5gc/nwdaf/internal/backend"
-	"github.com/free5gc/nwdaf/internal/mlmodel/wire"
+	wire "github.com/free5gc/nwdaf/internal/compat/mlmodel"
 	"github.com/free5gc/nwdaf/internal/util"
 	"github.com/free5gc/openapi"
 	"github.com/free5gc/openapi/models"

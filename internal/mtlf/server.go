@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 	"github.com/free5gc/util/httpwrapper"
 	logger_util "github.com/free5gc/util/logger"
 )
+
+var mtlfLog = logger.MtlfLog
 
 type Route struct {
 	Name    string
@@ -42,26 +45,27 @@ func applyRoutes(group *gin.RouterGroup, routes []Route) {
 	}
 }
 
-type processorAPI interface {
-	HandleDaisyTrainingComplete(taskID, modelURL, status, errMsg string)
-}
-
 type Server struct {
-	httpServer *http.Server
-	listener   net.Listener
-	router     *gin.Engine
-	processor  processorAPI
+	httpServer            *http.Server
+	listener              net.Listener
+	router                *gin.Engine
+	processor             any
+	publicCallbackBaseURI string
 }
 
-func NewServer(cfg *factory.Config, processor processorAPI) (*Server, error) {
+func NewServer(cfg *factory.Config, processor any) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 
 	s := &Server{
-		router:    logger_util.NewGinWithLogrus(logger.GinLog),
-		processor: processor,
+		router:                logger_util.NewGinWithLogrus(logger.GinLog),
+		processor:             processor,
+		publicCallbackBaseURI: strings.TrimRight(cfg.GetSbiUri(), "/"),
 	}
 	s.router.Use(gin.Recovery())
-	applyRoutes(s.router.Group(""), s.getRoutes())
+	routes := s.adrfRetrievalRoutes()
+	routes = append(routes, s.nfDiscoveryRoutes()...)
+	routes = append(routes, s.mtlfMLModelRoutes()...)
+	applyRoutes(s.router.Group(""), routes)
 
 	httpServer, err := httpwrapper.NewHttp2Server(
 		cfg.GetMtlfServerBindingAddr(),
@@ -75,17 +79,6 @@ func NewServer(cfg *factory.Config, processor processorAPI) (*Server, error) {
 	s.httpServer = httpServer
 
 	return s, nil
-}
-
-func (s *Server) getRoutes() []Route {
-	return []Route{
-		{
-			Name:    "HandleDaisyTrainingComplete",
-			Method:  http.MethodPost,
-			Pattern: "/mtlf/training-complete",
-			APIFunc: s.HandleDaisyTrainingComplete,
-		},
-	}
 }
 
 func (s *Server) Run(wg *sync.WaitGroup) error {

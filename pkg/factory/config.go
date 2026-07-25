@@ -47,117 +47,27 @@ type Info struct {
 }
 
 type Configuration struct {
-	NwdafName          string              `yaml:"nwdafName,omitempty"`
-	Sbi                *Sbi                `yaml:"sbi,omitempty"`
-	NrfUri             string              `yaml:"nrfUri,omitempty"`
-	NrfCertPem         string              `yaml:"nrfCertPem,omitempty"`
-	SupportedAnalytics []string            `yaml:"supportedAnalytics,omitempty"`
-	Anlf               *AnlfConfig         `yaml:"anlf,omitempty"`
-	ExternalMtlf       *ExternalMtlfConfig `yaml:"externalMtlf,omitempty"`
-	AnlfBackend        *AnlfBackendConfig  `yaml:"anlfBackend,omitempty"`
-	MtlfBackend        *MtlfBackendConfig  `yaml:"mtlfBackend,omitempty"`
-	Mtlf               *MtlfConfig         `yaml:"mtlf,omitempty"`
-	Adrf               *AdrfConfig         `yaml:"adrf,omitempty"`
-}
-
-// ExternalMtlfConfig configuration for External MTLF (ML Model Training Logical Function) integration
-type ExternalMtlfConfig struct {
-	Enabled   bool     `yaml:"enabled"`
-	Endpoints []string `yaml:"endpoints,omitempty"`
+	NwdafName              string             `yaml:"nwdafName,omitempty"`
+	Sbi                    *Sbi               `yaml:"sbi,omitempty"`
+	NrfRegistrationEnabled *bool              `yaml:"nrfRegistrationEnabled,omitempty"`
+	NrfUri                 string             `yaml:"nrfUri,omitempty"`
+	NrfCertPem             string             `yaml:"nrfCertPem,omitempty"`
+	SupportedAnalytics     []string           `yaml:"supportedAnalytics,omitempty"`
+	Anlf                   *AnlfConfig        `yaml:"anlf,omitempty"`
+	AnlfBackend            *AnlfBackendConfig `yaml:"anlfBackend,omitempty"`
+	MtlfBackend            *MtlfBackendConfig `yaml:"mtlfBackend,omitempty"`
+	Mtlf                   *MtlfConfig        `yaml:"mtlf,omitempty"`
 }
 
 type AnlfConfig struct {
 	Server *AuxiliaryServerConfig `yaml:"server,omitempty"`
 }
 
-// AnalyticsConfig holds per-analytics-type model parameters
-type AnalyticsConfig struct {
-	UeCommunication *ModelParams `yaml:"ueCommunication,omitempty"`
-	// Future: AbnormalBehaviour *ModelParams `yaml:"abnormalBehaviour,omitempty"`
-}
-
-// ModelParams defines the ML model input/output window and data collection parameters
-// for a specific analytics type.
-type ModelParams struct {
-	// SamplingInterval is the UPF report period in seconds.
-	// Must match smf.subscriptionDuration / report-period (default: 10).
-	SamplingInterval int `yaml:"samplingInterval,omitempty"`
-
-	// InputWindow is the number of data points fed to the ML model as history.
-	InputWindow int `yaml:"inputWindow,omitempty"`
-
-	// OutputWindow is the number of future steps the ML model predicts.
-	OutputWindow int `yaml:"outputWindow,omitempty"`
-
-	// LookbackBuffer is extra seconds added to the MongoDB query window beyond
-	// inputWindow×samplingInterval to absorb delivery jitter (default: samplingInterval).
-	LookbackBuffer int `yaml:"lookbackBuffer,omitempty"`
-
-	// RingBufferSize is the maximum number of UPF data points kept in memory per session.
-	// Inference reads exclusively from this buffer; must be >= InputWindow (default: 50).
-	RingBufferSize int `yaml:"ringBufferSize,omitempty"`
-}
-
-// QueryLookback returns the computed time window to query from MongoDB:
-// SamplingInterval × InputWindow (seconds).
-func (m *ModelParams) QueryLookback() int {
-	si := m.SamplingInterval
-	if si <= 0 {
-		si = 10 // default: 10s
-	}
-	iw := m.InputWindow
-	if iw <= 0 {
-		iw = 30 // default: 30 points
-	}
-	return si * iw
-}
-
-// SamplingIntervalOrDefault returns SamplingInterval with a fallback to 10s.
-func (m *ModelParams) SamplingIntervalOrDefault() int {
-	if m.SamplingInterval > 0 {
-		return m.SamplingInterval
-	}
-	return 10
-}
-
-// InputWindowOrDefault returns InputWindow with a fallback to 30.
-func (m *ModelParams) InputWindowOrDefault() int {
-	if m.InputWindow > 0 {
-		return m.InputWindow
-	}
-	return 30
-}
-
-// LookbackBufferOrDefault returns LookbackBuffer with a fallback to 2×SamplingIntervalOrDefault.
-func (m *ModelParams) LookbackBufferOrDefault() int {
-	if m.LookbackBuffer > 0 {
-		return m.LookbackBuffer
-	}
-	return 2 * m.SamplingIntervalOrDefault()
-}
-
-// OutputWindowOrDefault returns OutputWindow with a fallback to 5.
-func (m *ModelParams) OutputWindowOrDefault() int {
-	if m.OutputWindow > 0 {
-		return m.OutputWindow
-	}
-	return 5
-}
-
-// RingBufferSizeOrDefault returns RingBufferSize with a fallback to 50.
-func (m *ModelParams) RingBufferSizeOrDefault() int {
-	if m.RingBufferSize > 0 {
-		return m.RingBufferSize
-	}
-	return 50
-}
-
 // AnlfBackendConfig configures the downstream AnLF backend used by NWDAF.
 type AnlfBackendConfig struct {
-	Enabled             bool                       `yaml:"enabled"`
-	Endpoint            string                     `yaml:"endpoint,omitempty"`
-	RequestTimeout      int                        `yaml:"requestTimeout,omitempty"`
-	ObservationDelivery *ObservationDeliveryConfig `yaml:"observationDelivery,omitempty"`
+	Enabled        bool   `yaml:"enabled"`
+	Endpoint       string `yaml:"endpoint,omitempty"`
+	RequestTimeout int    `yaml:"requestTimeout,omitempty"`
 }
 
 func (c *AnlfBackendConfig) RequestTimeoutOrDefault() int {
@@ -182,332 +92,9 @@ func (c *MtlfBackendConfig) RequestTimeoutOrDefault() int {
 	return 5
 }
 
-type ObservationDeliveryConfig struct {
-	QueueCapacity  int `yaml:"queueCapacity,omitempty"`
-	RequestTimeout int `yaml:"requestTimeout,omitempty"`
-	MaxRetries     int `yaml:"maxRetries,omitempty"`
-	RetryInterval  int `yaml:"retryInterval,omitempty"`
-}
-
-func (c *ObservationDeliveryConfig) QueueCapacityOrDefault() int {
-	if c != nil && c.QueueCapacity > 0 {
-		return c.QueueCapacity
-	}
-	return 1024
-}
-
-func (c *ObservationDeliveryConfig) RequestTimeoutOrDefault() int {
-	if c != nil && c.RequestTimeout > 0 {
-		return c.RequestTimeout
-	}
-	return 5
-}
-
-func (c *ObservationDeliveryConfig) MaxRetriesOrDefault() int {
-	if c != nil && c.MaxRetries > 0 {
-		return c.MaxRetries
-	}
-	return 3
-}
-
-func (c *ObservationDeliveryConfig) RetryIntervalOrDefault() int {
-	if c != nil && c.RetryInterval > 0 {
-		return c.RetryInterval
-	}
-	return 1
-}
-
-// MtlfConfig configuration for 1st-party MTLF / Daisy FL framework integration
+// MtlfConfig configures the private MTLF backend-facing auxiliary listener.
 type MtlfConfig struct {
-	Enabled          bool                   `yaml:"enabled"`                    // Master switch for all Daisy FL features
-	Server           *AuxiliaryServerConfig `yaml:"server,omitempty"`           // Auxiliary inbound callback server
-	Endpoint         string                 `yaml:"endpoint,omitempty"`         // Master REST API
-	TriggerOnStartup bool                   `yaml:"triggerOnStartup,omitempty"` // Trigger training on NWDAF startup
-	TriggerDelay     int                    `yaml:"triggerDelay,omitempty"`     // Startup trigger delay (default: 30)
-	Task             map[string]any         `yaml:"task,omitempty"`             // Task payload (mirrors task.json)
-	AccuracyPolicy   *AccuracyMonitorConfig `yaml:"accuracyPolicy,omitempty"`   // MTLF accuracy decision policy
-	ModelProvider    *ModelProviderConfig   `yaml:"modelProvider,omitempty"`    // Stable local model identity
-}
-
-type ModelProviderConfig struct {
-	ProviderID             string `yaml:"providerId"`
-	BootstrapModelUniqueID int64  `yaml:"bootstrapModelUniqueId"`
-}
-
-// AccuracyMonitorConfig controls how MTLF evaluates accuracy reports from AnLF.
-type AccuracyMonitorConfig struct {
-	Enabled bool `yaml:"enabled"`
-	// Metric used for retrain decision.
-	PrimaryMetric string `yaml:"primaryMetric,omitempty"`
-	// Per-scope history length.
-	RecentBufferSize int `yaml:"recentBufferSize,omitempty"`
-	// Buffer samples required before z-score gate.
-	MinBufferSamples int `yaml:"minBufferSamples,omitempty"`
-	// Standard-deviation floor for z-score.
-	MinStd float64 `yaml:"minStd,omitempty"`
-	// Degradation eligibility floor for the primary metric.
-	FixedFloor float64 `yaml:"fixedFloor,omitempty"`
-	// Relative anomaly threshold.
-	ZScoreThreshold float64 `yaml:"zScoreThreshold,omitempty"`
-	// Decision window length M.
-	DecisionWindowSize int `yaml:"decisionWindowSize,omitempty"`
-	// Required hits N in the latest M rounds.
-	RequiredHitsInWindow int `yaml:"requiredHitsInWindow,omitempty"`
-	// Scope state GC threshold in seconds.
-	ScopeStateTTL int `yaml:"scopeStateTTL,omitempty"`
-	// Backward-compatible fallback for strict consecutive behavior.
-	ConsecutiveBreaches int                      `yaml:"consecutiveBreaches,omitempty"`
-	DegradationPolicy   *DegradationPolicyConfig `yaml:"degradationPolicy,omitempty"`
-	ChronicPolicy       *ChronicPolicyConfig     `yaml:"chronicPolicy,omitempty"`
-	LowTrafficPolicy    *LowTrafficPolicyConfig  `yaml:"lowTrafficOverpredictionPolicy,omitempty"`
-}
-
-type DegradationPolicyConfig struct {
-	MinDecisionTrafficScale float64 `yaml:"minDecisionTrafficScale,omitempty"`
-}
-
-type ChronicPolicyConfig struct {
-	Enabled                 *bool   `yaml:"enabled,omitempty"`
-	Metric                  string  `yaml:"metric,omitempty"`
-	Aggregator              string  `yaml:"aggregator,omitempty"`
-	Percentile              int     `yaml:"percentile,omitempty"`
-	Threshold               float64 `yaml:"threshold,omitempty"`
-	MinDecisionTrafficScale float64 `yaml:"minDecisionTrafficScale,omitempty"`
-}
-
-type LowTrafficPolicyConfig struct {
-	Enabled                  *bool   `yaml:"enabled,omitempty"`
-	MaxActualTrafficScale    float64 `yaml:"maxActualTrafficScale,omitempty"`
-	MinPredictedTrafficScale float64 `yaml:"minPredictedTrafficScale,omitempty"`
-	PredictionOvershootRatio float64 `yaml:"predictionOvershootRatio,omitempty"`
-}
-
-const chronicAggregatorPercentile = "percentile"
-
-func (a *AccuracyMonitorConfig) PrimaryMetricOrDefault() string {
-	if a == nil || a.PrimaryMetric == "" {
-		return "MAE"
-	}
-	return a.PrimaryMetric
-}
-
-func (a *AccuracyMonitorConfig) RecentBufferSizeOrDefault() int {
-	if a == nil || a.RecentBufferSize <= 0 {
-		return 20
-	}
-	return a.RecentBufferSize
-}
-
-func (a *AccuracyMonitorConfig) MinBufferSamplesOrDefault() int {
-	if a == nil || a.MinBufferSamples <= 0 {
-		return 8
-	}
-	return a.MinBufferSamples
-}
-
-func (a *AccuracyMonitorConfig) MinStdOrDefault() float64 {
-	if a == nil || a.MinStd <= 0 {
-		return 0.01
-	}
-	return a.MinStd
-}
-
-func (a *AccuracyMonitorConfig) FixedFloorOrDefault() float64 {
-	if a == nil || a.FixedFloor <= 0 {
-		return 1024
-	}
-	return a.FixedFloor
-}
-
-func (d *DegradationPolicyConfig) MinDecisionTrafficScaleOrDefault() float64 {
-	if d == nil || d.MinDecisionTrafficScale < 0 {
-		return 0
-	}
-	return d.MinDecisionTrafficScale
-}
-
-func (a *AccuracyMonitorConfig) ZScoreThresholdOrDefault() float64 {
-	if a == nil || a.ZScoreThreshold <= 0 {
-		return 3.0
-	}
-	return a.ZScoreThreshold
-}
-
-func (a *AccuracyMonitorConfig) ScopeStateTTLOrDefault() int {
-	if a == nil || a.ScopeStateTTL <= 0 {
-		return 600
-	}
-	return a.ScopeStateTTL
-}
-
-func (a *AccuracyMonitorConfig) DecisionWindowSizeOrDefault() int {
-	if a == nil {
-		return 3
-	}
-	if a.DecisionWindowSize > 0 {
-		return a.DecisionWindowSize
-	}
-	if a.ConsecutiveBreaches > 0 {
-		return a.ConsecutiveBreaches
-	}
-	return 3
-}
-
-func (a *AccuracyMonitorConfig) RequiredHitsInWindowOrDefault() int {
-	windowSize := a.DecisionWindowSizeOrDefault()
-	required := 0
-	switch {
-	case a == nil:
-		required = 3
-	case a.RequiredHitsInWindow > 0:
-		required = a.RequiredHitsInWindow
-	case a.ConsecutiveBreaches > 0:
-		required = a.ConsecutiveBreaches
-	default:
-		required = 3
-	}
-	if required > windowSize {
-		return windowSize
-	}
-	return required
-}
-
-func (a *AccuracyMonitorConfig) ConsecutiveBreachesOrDefault() int {
-	if a == nil || a.ConsecutiveBreaches <= 0 {
-		return 3
-	}
-	return a.ConsecutiveBreaches
-}
-
-func (c *ChronicPolicyConfig) EnabledOrDefault() bool {
-	if c == nil || c.Enabled == nil {
-		return false
-	}
-	return *c.Enabled
-}
-
-func (c *ChronicPolicyConfig) MetricOrDefault() string {
-	if c == nil {
-		return "WAPE"
-	}
-	switch strings.ToUpper(strings.TrimSpace(c.Metric)) {
-	case "WAPE", "NRMSE", "MAE":
-		return strings.ToUpper(strings.TrimSpace(c.Metric))
-	default:
-		return "WAPE"
-	}
-}
-
-func (c *ChronicPolicyConfig) AggregatorOrDefault() string {
-	if c == nil {
-		return chronicAggregatorPercentile
-	}
-	switch strings.ToLower(strings.TrimSpace(c.Aggregator)) {
-	case "mean", chronicAggregatorPercentile:
-		return strings.ToLower(strings.TrimSpace(c.Aggregator))
-	default:
-		return chronicAggregatorPercentile
-	}
-}
-
-func (c *ChronicPolicyConfig) PercentileOrDefault() int {
-	if c == nil || c.Percentile <= 0 {
-		return 75
-	}
-	if c.Percentile > 99 {
-		return 99
-	}
-	return c.Percentile
-}
-
-func (c *ChronicPolicyConfig) ThresholdOrDefault() float64 {
-	if c == nil || c.Threshold <= 0 {
-		return 1.0
-	}
-	return c.Threshold
-}
-
-func (c *ChronicPolicyConfig) MinDecisionTrafficScaleOrDefault() float64 {
-	if c == nil {
-		return 1024
-	}
-	if c.MinDecisionTrafficScale > 0 {
-		return c.MinDecisionTrafficScale
-	}
-	return 1024
-}
-
-func (c *LowTrafficPolicyConfig) EnabledOrDefault() bool {
-	if c == nil || c.Enabled == nil {
-		return false
-	}
-	return *c.Enabled
-}
-
-func (c *LowTrafficPolicyConfig) MaxActualTrafficScaleOrDefault() float64 {
-	if c == nil || c.MaxActualTrafficScale <= 0 {
-		return 1024
-	}
-	return c.MaxActualTrafficScale
-}
-
-func (c *LowTrafficPolicyConfig) MinPredictedTrafficScaleOrDefault() float64 {
-	if c == nil || c.MinPredictedTrafficScale <= 0 {
-		return 4096
-	}
-	return c.MinPredictedTrafficScale
-}
-
-func (c *LowTrafficPolicyConfig) PredictionOvershootRatioOrDefault() float64 {
-	if c == nil || c.PredictionOvershootRatio <= 1.0 {
-		return 4.0
-	}
-	return c.PredictionOvershootRatio
-}
-
-// AdrfConfig holds connection settings for the ADRF (Analytics Data Repository Function).
-// Per TS 29.575: ADRF stores and retrieves analytics/data records.
-// StorageThreshold is used by the processor ADRF buffer.
-// FetchBatchSize, RetrainWindow, WatchdogTimeout are used by MTLF retrieval (Phase E3).
-type AdrfConfig struct {
-	Url              string `yaml:"url,omitempty"`
-	StorageThreshold int    `yaml:"storageThreshold,omitempty"` // default: 1
-	// default: 1; ADRF V0 accepts exactly 1 fetch-correlation-id per GET — do not set above 1
-	FetchBatchSize  int `yaml:"fetchBatchSize,omitempty"`
-	RetrainWindow   int `yaml:"retrainWindow,omitempty"`   // default: 1800 (seconds of history to fetch)
-	WatchdogTimeout int `yaml:"watchdogTimeout,omitempty"` // default: 120 (seconds after last callback)
-}
-
-func (a *AdrfConfig) AdrfEnabled() bool {
-	return a != nil && a.Url != ""
-}
-
-func (a *AdrfConfig) StorageThresholdOrDefault() int {
-	if a == nil || a.StorageThreshold <= 0 {
-		return 1
-	}
-	return a.StorageThreshold
-}
-
-func (a *AdrfConfig) FetchBatchSizeOrDefault() int {
-	if a == nil || a.FetchBatchSize <= 0 {
-		return 1
-	}
-	return a.FetchBatchSize
-}
-
-func (a *AdrfConfig) RetrainWindowOrDefault() int {
-	if a == nil || a.RetrainWindow <= 0 {
-		return 1800
-	}
-	return a.RetrainWindow
-}
-
-func (a *AdrfConfig) WatchdogTimeoutOrDefault() int {
-	if a == nil || a.WatchdogTimeout <= 0 {
-		return 120
-	}
-	return a.WatchdogTimeout
+	Server *AuxiliaryServerConfig `yaml:"server,omitempty"`
 }
 
 type Sbi struct {
@@ -614,11 +201,13 @@ func (c *Configuration) validate() error {
 	var errs []error
 	c.NrfCertPem = strings.TrimSpace(c.NrfCertPem)
 
-	normalizedNrfURI, nrfErr := normalizeNrfURI(c.NrfUri)
-	if nrfErr != nil {
-		errs = append(errs, nrfErr)
-	} else {
-		c.NrfUri = normalizedNrfURI
+	if strings.TrimSpace(c.NrfUri) != "" || c.NrfRegistrationEnabledOrDefault() {
+		normalizedNrfURI, nrfErr := normalizeNrfURI(c.NrfUri)
+		if nrfErr != nil {
+			errs = append(errs, nrfErr)
+		} else {
+			c.NrfUri = normalizedNrfURI
+		}
 	}
 
 	if c.Sbi == nil {
@@ -653,17 +242,6 @@ func (c *Configuration) validate() error {
 			errs = append(errs, validateErr)
 		}
 	}
-	if c.ExternalMtlf != nil && c.ExternalMtlf.Enabled {
-		if validateErr := c.ExternalMtlf.validate(); validateErr != nil {
-			errs = append(errs, validateErr)
-		}
-	}
-	if c.Adrf != nil && c.Adrf.AdrfEnabled() {
-		if validateErr := c.Adrf.validate(); validateErr != nil {
-			errs = append(errs, validateErr)
-		}
-	}
-
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
@@ -786,20 +364,6 @@ func (m *AnlfBackendConfig) validate() error {
 	if m.RequestTimeout <= 0 {
 		errs = append(errs, errors.New("anlfBackend.requestTimeout must be positive"))
 	}
-	if delivery := m.ObservationDelivery; delivery != nil {
-		if delivery.QueueCapacity < 0 {
-			errs = append(errs, errors.New("anlfBackend.observationDelivery.queueCapacity must be positive"))
-		}
-		if delivery.RequestTimeout < 0 {
-			errs = append(errs, errors.New("anlfBackend.observationDelivery.requestTimeout must be positive"))
-		}
-		if delivery.MaxRetries < 0 {
-			errs = append(errs, errors.New("anlfBackend.observationDelivery.maxRetries must be zero or positive"))
-		}
-		if delivery.RetryInterval < 0 {
-			errs = append(errs, errors.New("anlfBackend.observationDelivery.retryInterval must be positive"))
-		}
-	}
 	return errors.Join(errs...)
 }
 
@@ -815,57 +379,6 @@ func (m *MtlfBackendConfig) validate() error {
 		errs = append(errs, errors.New("mtlfBackend.requestTimeout must be positive"))
 	}
 	return errors.Join(errs...)
-}
-
-func (m *ExternalMtlfConfig) validate() error {
-	var errs []error
-
-	if len(m.Endpoints) == 0 {
-		errs = append(
-			errs,
-			errors.New(
-				"externalMtlf.endpoints must contain at least one endpoint when externalMtlf.enabled is true",
-			),
-		)
-	}
-	for i, endpoint := range m.Endpoints {
-		if err := validateHTTPURL(fmt.Sprintf("externalMtlf.endpoints[%d]", i), endpoint); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-	return nil
-}
-
-func (a *AdrfConfig) validate() error {
-	var errs []error
-
-	if err := validateHTTPURL("adrf.url", a.Url); err != nil {
-		errs = append(errs, err)
-	}
-	if a.StorageThreshold < 0 {
-		errs = append(errs, errors.New("adrf.storageThreshold must be zero or positive"))
-	}
-	if a.FetchBatchSize < 0 {
-		errs = append(errs, errors.New("adrf.fetchBatchSize must be zero or positive"))
-	}
-	if a.FetchBatchSize > 1 {
-		errs = append(errs, errors.New("adrf.fetchBatchSize must be 1 for the current ADRF retrieval flow"))
-	}
-	if a.RetrainWindow < 0 {
-		errs = append(errs, errors.New("adrf.retrainWindow must be zero or positive"))
-	}
-	if a.WatchdogTimeout < 0 {
-		errs = append(errs, errors.New("adrf.watchdogTimeout must be zero or positive"))
-	}
-
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-	return nil
 }
 
 func normalizeSupportedAnalytics(values []string) ([]string, error) {
@@ -899,26 +412,6 @@ func normalizeSupportedAnalytics(values []string) ([]string, error) {
 	}
 
 	return normalized, nil
-}
-
-func validateHTTPURL(fieldName string, raw string) error {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return fmt.Errorf("%s is required", fieldName)
-	}
-
-	parsed, err := url.ParseRequestURI(trimmed)
-	if err != nil {
-		return fmt.Errorf("%s must be a valid URL: %w", fieldName, err)
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("%s must use http or https", fieldName)
-	}
-	if parsed.Hostname() == "" {
-		return fmt.Errorf("%s must include a host", fieldName)
-	}
-
-	return nil
 }
 
 func normalizeHTTPOrigin(fieldName string, raw string) (string, error) {
@@ -1225,6 +718,15 @@ func (c *Config) GetNrfUri() string {
 		return ""
 	}
 	return c.Configuration.NrfUri
+}
+
+func (c *Config) NrfRegistrationEnabled() bool {
+	return c != nil && c.Configuration != nil &&
+		c.Configuration.NrfRegistrationEnabledOrDefault()
+}
+
+func (c *Configuration) NrfRegistrationEnabledOrDefault() bool {
+	return c == nil || c.NrfRegistrationEnabled == nil || *c.NrfRegistrationEnabled
 }
 
 func (c *Config) GetNrfCertPem() string {

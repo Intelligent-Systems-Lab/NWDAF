@@ -14,13 +14,13 @@ import (
 
 	"github.com/free5gc/nwdaf/internal/anlf"
 	anlfclient "github.com/free5gc/nwdaf/internal/anlf/client"
-	"github.com/free5gc/nwdaf/internal/anlf/coordinator"
 	anlfprocessor "github.com/free5gc/nwdaf/internal/anlf/processor"
 	"github.com/free5gc/nwdaf/internal/backend"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/internal/mtlf"
 	mtlfclient "github.com/free5gc/nwdaf/internal/mtlf/client"
+	mtlfprocessor "github.com/free5gc/nwdaf/internal/mtlf/processor"
 	"github.com/free5gc/nwdaf/internal/sbi"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/internal/sbi/notifier"
@@ -44,7 +44,6 @@ type NwdafApp struct {
 	processor          *processor.Processor
 	sbiServer          *sbi.Server
 	anlfServer         *anlf.Server
-	anlfCoordinator    *coordinator.Coordinator
 	anlfAvailability   *backend.AvailabilityMonitor
 	mtlfAvailability   *backend.AvailabilityMonitor
 	anlfBackendClient  *anlfclient.Client
@@ -102,7 +101,6 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 	}
 	nwdaf.nrfManagement = nwdaf.consumer
 
-	var anlfBackend coordinator.BackendRuntimeClient
 	if cfg.Configuration != nil &&
 		cfg.Configuration.AnlfBackend != nil &&
 		cfg.Configuration.AnlfBackend.Enabled &&
@@ -111,7 +109,6 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 			cfg.Configuration.AnlfBackend.Endpoint,
 			time.Duration(cfg.Configuration.AnlfBackend.RequestTimeoutOrDefault())*time.Second,
 		)
-		anlfBackend = client
 		nwdaf.anlfBackendClient = client
 		nwdaf.anlfAvailability = backend.NewAvailabilityMonitor(nwdaf.probeAnlfBackend)
 	}
@@ -129,22 +126,22 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		nwdaf.mtlfAvailability = backend.NewAvailabilityMonitor(nwdaf.probeMtlfBackend)
 	}
 
-	nwdaf.anlfCoordinator = coordinator.New(
-		nwdaf,
-		anlfBackend,
-		nil,
-		nwdaf.anlfAvailability,
-	)
-	mtlfService := mtlf.NewMtlfService(nwdaf, nil, nwdaf.consumer.AdrfClient())
 	reportDispatcher := notifier.NewReportDispatcher(nwdaf.ctx)
-	anlfProcessor := anlfprocessor.NewProcessor(nwdaf.anlfCoordinator, reportDispatcher)
-	anlfProcessor.SetNFDiscoveryProxy(nwdaf.consumer)
+	anlfProcessor := anlfprocessor.NewProcessor(reportDispatcher)
+	anlfProcessor.SetSmfAssociationRepository(
+		nwdaf.nwdafCtx,
+		nwdaf.anlfAvailability,
+		nwdaf.mtlfAvailability,
+	)
+	if cfg.NrfRegistrationEnabled() {
+		anlfProcessor.SetNFDiscoveryProxy(nwdaf.consumer)
+	}
 	anlfProcessor.SetSmfEventExposureProxy(nwdaf.consumer)
 	anlfProcessor.SetAdrfStorageProxy(nwdaf.consumer)
 
 	// Initialize processor
-	nwdaf.processor = processor.NewProcessor(nwdaf, nwdaf.anlfCoordinator, mtlfService)
-	nwdaf.processor.SetEventsSubscriptionBackend(nwdaf.anlfCoordinator)
+	nwdaf.processor = processor.NewProcessor(nwdaf)
+	nwdaf.processor.SetEventsSubscriptionBackend(nwdaf.anlfBackendClient, nwdaf.anlfAvailability)
 	nwdaf.processor.SetMLModelBackends(
 		nwdaf.mtlfBackendClient,
 		nwdaf.anlfBackendClient,
@@ -162,6 +159,17 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		return nil, err
 	}
 	nwdaf.anlfServer.SetMLModelGateway(nwdaf.processor)
+	var discoveryProxy interface {
+		DiscoverNFInstances(context.Context, consumer.NFDiscoveryQuery) (*consumer.NFDiscoveryResult, error)
+	}
+	if cfg.NrfRegistrationEnabled() {
+		discoveryProxy = nwdaf.consumer
+	}
+	mtlfProcessor := mtlfprocessor.New(nwdaf.processor, discoveryProxy, nwdaf.consumer)
+	nwdaf.mtlfServer, err = mtlf.NewServer(cfg, mtlfProcessor)
+	if err != nil {
+		return nil, err
+	}
 	return nwdaf, nil
 }
 
@@ -179,10 +187,6 @@ func (a *NwdafApp) CancelContext() context.Context {
 
 func (a *NwdafApp) Processor() *processor.Processor {
 	return a.processor
-}
-
-func (a *NwdafApp) Consumer() consumer.ConsumerAPI {
-	return a.consumer
 }
 
 func (a *NwdafApp) SetLogEnable(enable bool) {
@@ -232,34 +236,34 @@ func (a *NwdafApp) Run() error {
 }
 
 func (a *NwdafApp) startRuntime() error {
-	// Set WaitGroup before starting any app-owned worker.
-	a.processor.SetWaitGroup(&a.wg)
-	a.anlfCoordinator.SetWaitGroup(&a.wg)
-
-	result, registrationErr := a.nrfManagement.RegisterNFInstance(a.ctx)
-	a.nwdafCtx.RecordHeartBeatTimer(result.HeartBeatTimer)
-	if registrationErr != nil {
-		if result.RemoteRegistered {
-			if result.OAuth2Required {
-				a.nwdafCtx.RecordOAuth2Required(result.ResourceURI)
-			} else {
-				a.nwdafCtx.MarkRegistered(result.ResourceURI)
+	if a.cfg.NrfRegistrationEnabled() {
+		result, registrationErr := a.nrfManagement.RegisterNFInstance(a.ctx)
+		a.nwdafCtx.RecordHeartBeatTimer(result.HeartBeatTimer)
+		if registrationErr != nil {
+			if result.RemoteRegistered {
+				if result.OAuth2Required {
+					a.nwdafCtx.RecordOAuth2Required(result.ResourceURI)
+				} else {
+					a.nwdafCtx.MarkRegistered(result.ResourceURI)
+				}
+				a.deregisterFromNrf()
 			}
-			a.deregisterFromNrf()
+			return fmt.Errorf("register NWDAF with NRF: %w", registrationErr)
 		}
-		return fmt.Errorf("register NWDAF with NRF: %w", registrationErr)
-	}
-	if result.OAuth2Required {
-		a.nwdafCtx.RecordOAuth2Required(result.ResourceURI)
-		a.logOAuthCertificateState()
+		if result.OAuth2Required {
+			a.nwdafCtx.RecordOAuth2Required(result.ResourceURI)
+			a.logOAuthCertificateState()
+		} else {
+			a.nwdafCtx.MarkRegistered(result.ResourceURI)
+		}
+		logger.InitLog.Infof(
+			"Registered NWDAF with NRF: nfInstanceId=%s oauth2Required=%t",
+			a.nwdafCtx.NfId,
+			result.OAuth2Required,
+		)
 	} else {
-		a.nwdafCtx.MarkRegistered(result.ResourceURI)
+		logger.InitLog.Info("NRF registration is disabled for configured-endpoint deployment")
 	}
-	logger.InitLog.Infof(
-		"Registered NWDAF with NRF: nfInstanceId=%s oauth2Required=%t",
-		a.nwdafCtx.NfId,
-		result.OAuth2Required,
-	)
 
 	if ctxErr := a.ctx.Err(); ctxErr != nil {
 		a.deregisterFromNrf()
@@ -355,6 +359,9 @@ func (a *NwdafApp) buildBackendSyncRequest(kind backend.Kind) backend.SyncReques
 	if a.cfg != nil {
 		identity.APIBaseURI = a.cfg.GetSbiUri()
 		identity.InternalCallbackBaseURI = a.cfg.GetAnlfServerURI()
+		if kind == backend.KindMTLF {
+			identity.InternalCallbackBaseURI = a.cfg.GetMtlfServerURI()
+		}
 	}
 	request := backend.SyncRequest{
 		ContainingNwdaf:               identity,

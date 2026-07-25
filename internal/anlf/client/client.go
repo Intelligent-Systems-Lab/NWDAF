@@ -9,14 +9,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/free5gc/nwdaf/internal/backend"
-	"github.com/free5gc/nwdaf/internal/logger"
 )
 
 type Client struct {
@@ -60,48 +58,6 @@ func NewClient(endpoint string, requestTimeout ...time.Duration) *Client {
 			},
 		},
 	}
-}
-
-func (c *Client) sendJSON(
-	parent context.Context,
-	method string,
-	requestURL string,
-	body any,
-	expectedStatus int,
-	timeout time.Duration,
-	operation string,
-) error {
-	jsonData, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("%s: marshal request: %w", operation, err)
-	}
-	ctx, cancel, err := timeoutContextFromParent(parent, timeout, operation)
-	if err != nil {
-		return err
-	}
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, method, requestURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("%s: create request: %w", operation, err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("%s: %w", operation, err)
-	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			logger.AnlfLog.Debugf("failed to close response body: %v", closeErr)
-		}
-	}()
-	if resp.StatusCode != expectedStatus {
-		return &BackendRequestError{
-			Operation:  operation,
-			StatusCode: resp.StatusCode,
-			Detail:     http.StatusText(resp.StatusCode),
-		}
-	}
-	return nil
 }
 
 func (c *Client) CheckReadiness(parent context.Context) (backend.HealthResponse, error) {
@@ -220,10 +176,6 @@ func readHealthBody(reader io.Reader) ([]byte, error) {
 		return nil, errors.New("response body exceeds transport limit")
 	}
 	return body, nil
-}
-
-func (c *Client) subscriptionURL(subscriptionID, suffix string) string {
-	return c.endpoint + "/subscriptions/" + url.PathEscape(subscriptionID) + suffix
 }
 
 func (c *Client) GetEndpoint() string {

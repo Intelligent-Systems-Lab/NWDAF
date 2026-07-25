@@ -10,7 +10,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/free5gc/nwdaf/internal/anlf/contract"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/internal/sbi/notifier"
 	"github.com/free5gc/nwdaf/internal/util"
@@ -23,21 +22,6 @@ type standardContractProcessorStub struct {
 	rawNotification []byte
 	adrfResponse    *consumer.StandardAdrfResponse
 	adrfBody        []byte
-}
-
-func (*standardContractProcessorStub) HandleMlModelProvisionNotify([]contract.ModelProvisionNotification) {
-}
-
-func (*standardContractProcessorStub) HandleAnalyticsReport(string, *contract.AnalyticsReport) error {
-	return nil
-}
-
-func (*standardContractProcessorStub) HandleModelAccuracyReport(*contract.ModelAccuracyReport) error {
-	return nil
-}
-
-func (*standardContractProcessorStub) HandleRuntimeCompletion(*contract.RuntimeCompletionEvent) error {
-	return nil
 }
 
 func (p *standardContractProcessorStub) HandleEventsSubscriptionNotification(
