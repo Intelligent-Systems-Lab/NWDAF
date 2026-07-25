@@ -306,6 +306,31 @@ func TestMLModelProvisionBackendInitiatorAndNotificationRouting(t *testing.T) {
 	if !bytes.Equal(anlfBackend.body, notification) {
 		t.Fatalf("AnLF backend notification=%s", anlfBackend.body)
 	}
+
+	updatedNotification := []byte(`[{
+		"subscriptionId":"` + testProvisionID + `",
+		"eventNotifs":[{
+			"event":"UE_COMMUNICATION",
+			"notifCorreId":"corr-internal",
+			"modelUniqueId":2,
+			"mLFileAddr":{"mLModelUrl":"http://mtlf.example/artifacts/2"},
+			"validityPeriod":{
+				"startTime":"2026-07-25T00:00:00Z",
+				"stopTime":"2026-07-26T00:00:00Z"
+			}
+		}]
+	}]`)
+	response, problem = processor.HandleMLModelProvisionNotification(
+		context.Background(),
+		testProvisionID,
+		updatedNotification,
+	)
+	if problem != nil || response.StatusCode != http.StatusNoContent {
+		t.Fatalf("updated notification response=%+v problem=%+v", response, problem)
+	}
+	if !bytes.Equal(anlfBackend.body, updatedNotification) {
+		t.Fatalf("updated AnLF backend notification=%s", anlfBackend.body)
+	}
 }
 
 func TestMLModelProvisionNotificationReachesExternalURI(t *testing.T) {

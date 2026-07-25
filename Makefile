@@ -1,4 +1,4 @@
-.PHONY: build clean run lint lint-fix
+.PHONY: build clean run test lint lint-fix
 
 BINARY_NAME=nwdaf
 BUILD_DIR=bin
