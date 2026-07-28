@@ -57,7 +57,12 @@ func TestReplaceSmfResourceAssociationsStatusAndValidation(t *testing.T) {
 			server := &Server{processor: stub}
 			recorder := httptest.NewRecorder()
 			context, _ := gin.CreateTestContext(recorder)
-			context.Request = httptest.NewRequest(http.MethodPut, "/", strings.NewReader(test.body))
+			context.Request = httptest.NewRequestWithContext(
+				t.Context(),
+				http.MethodPut,
+				"/",
+				strings.NewReader(test.body),
+			)
 
 			server.ReplaceSmfResourceAssociations(context)
 			context.Writer.WriteHeaderNow()

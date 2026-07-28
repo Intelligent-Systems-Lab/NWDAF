@@ -21,7 +21,8 @@ func TestAnLFRouteOwnershipExcludesMTLFOriginatedOperations(t *testing.T) {
 	routes = append(routes, server.anlfMLModelRoutes()...)
 	applyRoutes(router.Group(""), routes)
 
-	request := httptest.NewRequest(
+	request := httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodPost,
 		"/internal/v1/ml-model-monitor/subscriptions",
 		strings.NewReader(`{}`),

@@ -75,7 +75,8 @@ func TestMLModelProvisionNotificationContract(t *testing.T) {
 	ginContext.Params = gin.Params{{
 		Key: "subscriptionId", Value: "11111111-1111-4111-8111-111111111111",
 	}}
-	ginContext.Request = httptest.NewRequest(
+	ginContext.Request = httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodPost,
 		"/internal/v1/ml-model-provision/subscriptions/11111111-1111-4111-8111-111111111111/notifications",
 		strings.NewReader(body),
@@ -108,7 +109,8 @@ func TestMLModelMonitorSubscriptionRequiresAndForwardsOwner(t *testing.T) {
 	t.Run("missing owner", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		ginContext, _ := gin.CreateTestContext(recorder)
-		ginContext.Request = httptest.NewRequest(
+		ginContext.Request = httptest.NewRequestWithContext(
+			t.Context(),
 			http.MethodPost,
 			"/internal/v1/ml-model-monitor/subscriptions",
 			strings.NewReader(body),
@@ -133,7 +135,8 @@ func TestMLModelMonitorSubscriptionRequiresAndForwardsOwner(t *testing.T) {
 		}}
 		recorder := httptest.NewRecorder()
 		ginContext, _ := gin.CreateTestContext(recorder)
-		ginContext.Request = httptest.NewRequest(
+		ginContext.Request = httptest.NewRequestWithContext(
+			t.Context(),
 			http.MethodPost,
 			"/internal/v1/ml-model-monitor/subscriptions",
 			strings.NewReader(body),
@@ -168,7 +171,8 @@ func TestMTLFRouteOwnershipExcludesAnLFOriginatedOperations(t *testing.T) {
 	routes = append(routes, server.mtlfMLModelRoutes()...)
 	applyRoutes(router.Group(""), routes)
 
-	request := httptest.NewRequest(
+	request := httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodPost,
 		"/internal/v1/ml-model-provision/subscriptions",
 		strings.NewReader(`{}`),

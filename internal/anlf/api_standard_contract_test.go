@@ -86,7 +86,12 @@ func TestEventsSubscriptionNotificationHTTPContract(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			context, _ := gin.CreateTestContext(recorder)
-			context.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(test.body))
+			context.Request = httptest.NewRequestWithContext(
+				t.Context(),
+				http.MethodPost,
+				"/",
+				strings.NewReader(test.body),
+			)
 			if test.contentType != "" {
 				context.Request.Header.Set("Content-Type", test.contentType)
 			}
@@ -113,7 +118,12 @@ func TestAdrfStorageHTTPContract(t *testing.T) {
 	t.Run("missing media type", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		context, _ := gin.CreateTestContext(recorder)
-		context.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+		context.Request = httptest.NewRequestWithContext(
+			t.Context(),
+			http.MethodPost,
+			"/",
+			strings.NewReader(body),
+		)
 		(&Server{processor: &standardContractProcessorStub{}}).StoreAdrfDataRecord(context)
 		context.Writer.WriteHeaderNow()
 		if recorder.Code != http.StatusUnsupportedMediaType ||
@@ -127,7 +137,12 @@ func TestAdrfStorageHTTPContract(t *testing.T) {
 	t.Run("malformed JSON", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		context, _ := gin.CreateTestContext(recorder)
-		context.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{`))
+		context.Request = httptest.NewRequestWithContext(
+			t.Context(),
+			http.MethodPost,
+			"/",
+			strings.NewReader(`{`),
+		)
 		context.Request.Header.Set("Content-Type", "application/json")
 		(&Server{processor: &standardContractProcessorStub{}}).StoreAdrfDataRecord(context)
 		context.Writer.WriteHeaderNow()
@@ -142,7 +157,8 @@ func TestAdrfStorageHTTPContract(t *testing.T) {
 	t.Run("oversized body", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		context, _ := gin.CreateTestContext(recorder)
-		context.Request = httptest.NewRequest(
+		context.Request = httptest.NewRequestWithContext(
+			t.Context(),
 			http.MethodPost,
 			"/",
 			strings.NewReader(strings.Repeat(" ", maxAdrfStorageBodyBytes+1)),
@@ -172,7 +188,12 @@ func TestAdrfStorageHTTPContract(t *testing.T) {
 		}}
 		recorder := httptest.NewRecorder()
 		context, _ := gin.CreateTestContext(recorder)
-		context.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+		context.Request = httptest.NewRequestWithContext(
+			t.Context(),
+			http.MethodPost,
+			"/",
+			strings.NewReader(body),
+		)
 		context.Request.Header.Set("Content-Type", "application/json; charset=utf-8")
 		context.Request.Header.Set("Target-Api-Root", "http://adrf.example")
 		(&Server{processor: processor}).StoreAdrfDataRecord(context)

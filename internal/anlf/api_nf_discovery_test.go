@@ -37,7 +37,8 @@ func TestHandleNFDiscoveryRequiresStandardQuery(t *testing.T) {
 
 	invalidRecorder := httptest.NewRecorder()
 	invalidContext, _ := gin.CreateTestContext(invalidRecorder)
-	invalidContext.Request = httptest.NewRequest(
+	invalidContext.Request = httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodGet,
 		"/internal/v1/nrf/nf-instances?target-nf-type=SMF",
 		nil,
@@ -49,7 +50,8 @@ func TestHandleNFDiscoveryRequiresStandardQuery(t *testing.T) {
 
 	validRecorder := httptest.NewRecorder()
 	validContext, _ := gin.CreateTestContext(validRecorder)
-	validContext.Request = httptest.NewRequest(
+	validContext.Request = httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodGet,
 		"/internal/v1/nrf/nf-instances?target-nf-type=SMF&requester-nf-type=NWDAF&service-names=nsmf-event-exposure",
 		nil,

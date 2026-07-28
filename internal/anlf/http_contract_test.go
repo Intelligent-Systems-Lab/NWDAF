@@ -31,7 +31,12 @@ func TestReadStandardJSONBodyContract(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			context, _ := gin.CreateTestContext(httptest.NewRecorder())
-			context.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(test.body))
+			context.Request = httptest.NewRequestWithContext(
+				t.Context(),
+				http.MethodPost,
+				"/",
+				strings.NewReader(test.body),
+			)
 			if test.contentType != "" {
 				context.Request.Header.Set("Content-Type", test.contentType)
 			}

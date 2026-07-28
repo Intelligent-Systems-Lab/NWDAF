@@ -55,7 +55,12 @@ func newJSONRequestContext(method, target string, body []byte) (*gin.Context, *h
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(method, target, bytes.NewReader(body))
+	c.Request = httptest.NewRequestWithContext(
+		context.Background(),
+		method,
+		target,
+		bytes.NewReader(body),
+	)
 	c.Request.Header.Set("Content-Type", "application/json")
 	return c, recorder
 }

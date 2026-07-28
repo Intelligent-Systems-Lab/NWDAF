@@ -146,7 +146,12 @@ func TestMLModelCreateHandlerPreservesRawBodyAndResponse(t *testing.T) {
 	}}
 	recorder := httptest.NewRecorder()
 	ginContext, _ := gin.CreateTestContext(recorder)
-	ginContext.Request = httptest.NewRequest(http.MethodPost, "/subscriptions", strings.NewReader(body))
+	ginContext.Request = httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodPost,
+		"/subscriptions",
+		strings.NewReader(body),
+	)
 	ginContext.Request.Header.Set("Content-Type", "application/json; charset=utf-8")
 	(&Server{processor: stub}).HandleCreateMLModelProvision(ginContext)
 	if recorder.Code != http.StatusCreated || recorder.Header().Get("Location") == "" ||
@@ -185,7 +190,8 @@ func TestMLModelHandlersValidateMediaTypeSizeAndMandatoryFields(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			ginContext, _ := gin.CreateTestContext(recorder)
-			ginContext.Request = httptest.NewRequest(
+			ginContext.Request = httptest.NewRequestWithContext(
+				t.Context(),
 				http.MethodPost, "/subscriptions", strings.NewReader(test.body),
 			)
 			if test.contentType != "" {
@@ -213,7 +219,12 @@ func TestMLModelHandlerWritesProblemDetailsAndNoContent(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		ginContext, _ := gin.CreateTestContext(recorder)
 		ginContext.Params = gin.Params{{Key: "registrationId", Value: "reg-1"}}
-		ginContext.Request = httptest.NewRequest(http.MethodDelete, "/registrations/reg-1", nil)
+		ginContext.Request = httptest.NewRequestWithContext(
+			t.Context(),
+			http.MethodDelete,
+			"/registrations/reg-1",
+			nil,
+		)
 		(&Server{processor: stub}).HandleDeleteMLModelMonitorRegistration(ginContext)
 		if recorder.Code != http.StatusServiceUnavailable ||
 			recorder.Header().Get("Content-Type") != util.ProblemJSONContentType {
@@ -225,7 +236,12 @@ func TestMLModelHandlerWritesProblemDetailsAndNoContent(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		ginContext, _ := gin.CreateTestContext(recorder)
 		ginContext.Params = gin.Params{{Key: "subscriptionId", Value: "sub-1"}}
-		ginContext.Request = httptest.NewRequest(http.MethodDelete, "/subscriptions/sub-1", nil)
+		ginContext.Request = httptest.NewRequestWithContext(
+			t.Context(),
+			http.MethodDelete,
+			"/subscriptions/sub-1",
+			nil,
+		)
 		(&Server{processor: stub}).HandleDeleteMLModelProvision(ginContext)
 		ginContext.Writer.WriteHeaderNow()
 		if recorder.Code != http.StatusNoContent || recorder.Body.Len() != 0 || stub.resource != "sub-1" {

@@ -70,7 +70,12 @@ func TestReadSmfEventExposureBodyRequiresNfIDForUpfEvent(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			context, _ := gin.CreateTestContext(httptest.NewRecorder())
-			context.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(test.body))
+			context.Request = httptest.NewRequestWithContext(
+				t.Context(),
+				http.MethodPost,
+				"/",
+				strings.NewReader(test.body),
+			)
 			if test.contentType != "" {
 				context.Request.Header.Set("Content-Type", test.contentType)
 			}
@@ -94,7 +99,7 @@ func TestWriteSmfEventExposureResponsePreservesRedirectLocation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	c.Request = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 
 	server := &Server{}
 	responseBody, err := json.Marshal(models.ProblemDetails{
@@ -139,7 +144,7 @@ func TestWriteSmfEventExposureCreateRejectsRedirect(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	c.Request = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil)
 
 	server := &Server{}
 	server.writeSmfEventExposureResponse(

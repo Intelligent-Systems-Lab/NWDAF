@@ -87,7 +87,8 @@ func TestMLModelProvisionGatewayCreateContract(t *testing.T) {
 	}}
 	recorder := httptest.NewRecorder()
 	ginContext, _ := gin.CreateTestContext(recorder)
-	ginContext.Request = httptest.NewRequest(
+	ginContext.Request = httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodPost,
 		"/internal/v1/ml-model-provision/subscriptions",
 		strings.NewReader(createBody),
@@ -110,7 +111,8 @@ func TestMLModelProvisionGatewayRejectsMalformedStandardBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	ginContext, _ := gin.CreateTestContext(recorder)
-	ginContext.Request = httptest.NewRequest(
+	ginContext.Request = httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodPost,
 		"/internal/v1/ml-model-provision/subscriptions",
 		strings.NewReader(`{"notifUri":"http://anlf.backend/provision"}`),

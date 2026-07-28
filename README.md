@@ -4,8 +4,8 @@ Network Data Analytics Function (NWDAF) implementation based on 3GPP TS 29.520.
 
 ## Prerequisites
 
-- Go 1.25.5
-- MongoDB (optional — NWDAF falls back to in-memory without it)
+- Go 1.26.2
+- golangci-lint v2.11.4 for `make lint`
 
 Current runtime notes:
 

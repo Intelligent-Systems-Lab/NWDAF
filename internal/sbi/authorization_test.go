@@ -50,7 +50,7 @@ func TestRouterAuthorizationCheck(t *testing.T) {
 			gin.SetMode(gin.TestMode)
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
-			c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+			c.Request = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 			c.Request.Header.Set("Authorization", "Bearer token-value")
 			stub := &authorizationContextStub{err: tt.err}
 			check := newRouterAuthorizationCheck(models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION)
@@ -99,7 +99,10 @@ func TestEventsSubscriptionRoutesUseAuthorizationGroupAndCollectorDoesNot(t *tes
 	}
 	for _, request := range protectedRequests {
 		recorder := httptest.NewRecorder()
-		router.ServeHTTP(recorder, httptest.NewRequest(request.method, request.path, nil))
+		router.ServeHTTP(
+			recorder,
+			httptest.NewRequestWithContext(t.Context(), request.method, request.path, nil),
+		)
 		if recorder.Code != http.StatusUnauthorized {
 			t.Fatalf("%s %s status = %d, want 401", request.method, request.path, recorder.Code)
 		}
@@ -109,7 +112,10 @@ func TestEventsSubscriptionRoutesUseAuthorizationGroupAndCollectorDoesNot(t *tes
 	}
 
 	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/collector/notify", nil))
+	router.ServeHTTP(
+		recorder,
+		httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/collector/notify", nil),
+	)
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("collector status = %d, want 204", recorder.Code)
 	}
@@ -128,7 +134,8 @@ func TestEventsSubscriptionAuthorizationAllowsHandler(t *testing.T) {
 	eventsGroup.POST("/subscriptions", func(c *gin.Context) { c.Status(http.StatusCreated) })
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodPost,
 		factory.NwdafEventsSubResUriPrefix+"/subscriptions",
 		nil,
@@ -188,7 +195,10 @@ func TestNewServerWiresAuthorizationForAllPublicNwdafServices(t *testing.T) {
 	}
 	for _, request := range protectedRequests {
 		recorder := httptest.NewRecorder()
-		server.router.ServeHTTP(recorder, httptest.NewRequest(request.method, request.path, nil))
+		server.router.ServeHTTP(
+			recorder,
+			httptest.NewRequestWithContext(t.Context(), request.method, request.path, nil),
+		)
 		if recorder.Code != http.StatusUnauthorized {
 			t.Fatalf("%s %s status = %d, want 401", request.method, request.path, recorder.Code)
 		}
@@ -203,7 +213,8 @@ func TestNewServerWiresAuthorizationForAllPublicNwdafServices(t *testing.T) {
 		}
 	}
 
-	collectorRequest := httptest.NewRequest(
+	collectorRequest := httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodPost,
 		"/collector/notify",
 		strings.NewReader("{"),
