@@ -153,6 +153,11 @@ func TestNewServerWiresAuthorizationForAllPublicNwdafServices(t *testing.T) {
 			RegisterIPv4: "127.0.0.1",
 			Port:         8080,
 		},
+		ServiceNameList: []models.ServiceName{
+			models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION,
+			models.ServiceName_NNWDAF_MLMODELPROVISION,
+			mlModelMonitorServiceName,
+		},
 	}}
 	authorizationCtx := &nwdaf_context.NWDAFContext{}
 	authorizationCtx.RecordOAuth2Required("http://nrf/nnrf-nfm/v1/nf-instances/nwdaf")

@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/free5gc/nwdaf/internal/backend"
 	mtlfprocessor "github.com/free5gc/nwdaf/internal/mtlf/processor"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/nwdaf/internal/util"
@@ -16,7 +16,7 @@ import (
 )
 
 type nfDiscoveryProcessor interface {
-	HandleNFDiscovery(context.Context, consumer.NFDiscoveryQuery) (*consumer.NFDiscoveryResult, error)
+	HandleNFDiscovery(context.Context, backend.NFDiscoveryQuery) (*consumer.NFDiscoveryResult, error)
 }
 
 func (s *Server) nfDiscoveryRoutes() []Route {
@@ -74,36 +74,8 @@ func (s *Server) HandleNFDiscovery(c *gin.Context) {
 	})
 }
 
-func validateNFDiscoveryQuery(c *gin.Context) (consumer.NFDiscoveryQuery, *models.ProblemDetails) {
-	targetType := c.Query("target-nf-type")
-	requesterType := c.Query("requester-nf-type")
-	serviceNames := strings.Split(c.Query("service-names"), ",")
-	acceptedService := ""
-	for _, serviceName := range serviceNames {
-		name := strings.TrimSpace(serviceName)
-		if name == string(models.ServiceName_NSMF_EVENT_EXPOSURE) ||
-			name == "nadrf-datamanagement" {
-			acceptedService = name
-		}
-	}
-	targetAccepted := targetType == string(models.NrfNfManagementNfType_SMF) ||
-		targetType == "ADRF"
-	if targetAccepted && requesterType == string(models.NrfNfManagementNfType_NWDAF) &&
-		acceptedService != "" &&
-		(targetType != "SMF" || acceptedService == "nsmf-event-exposure") &&
-		(targetType != "ADRF" || acceptedService == "nadrf-datamanagement") {
-		return consumer.NFDiscoveryQuery{
-			TargetNFType:    models.NrfNfManagementNfType(targetType),
-			RequesterNFType: models.NrfNfManagementNfType(requesterType),
-			ServiceNames:    []models.ServiceName{models.ServiceName(acceptedService)},
-		}, nil
-	}
-	return consumer.NFDiscoveryQuery{}, &models.ProblemDetails{
-		Status: http.StatusBadRequest,
-		Title:  http.StatusText(http.StatusBadRequest),
-		Cause:  "MANDATORY_QUERY_PARAM_INCORRECT",
-		Detail: "a supported target NF type and matching service name with requester-nf-type=NWDAF are required",
-	}
+func validateNFDiscoveryQuery(c *gin.Context) (backend.NFDiscoveryQuery, *models.ProblemDetails) {
+	return backend.ParseNFDiscoveryQuery(c.Request.URL.Query())
 }
 
 func nfDiscoveryUnavailableProblem() *models.ProblemDetails {

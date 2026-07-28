@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/free5gc/nwdaf/internal/backend"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/nwdaf/pkg/app"
@@ -78,7 +79,7 @@ func (c *Consumer) DiscoverSmfProfiles(ctx context.Context) (*NFDiscoveryResult,
 
 func (c *Consumer) DiscoverNFInstances(
 	ctx context.Context,
-	query NFDiscoveryQuery,
+	query backend.NFDiscoveryQuery,
 ) (*NFDiscoveryResult, error) {
 	return c.nrfService.DiscoverNFInstances(ctx, c.Context(), query)
 }

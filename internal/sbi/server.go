@@ -93,32 +93,31 @@ func NewServer(nwdaf nwdafApp, tlsKeyLogPath string) (*Server, error) {
 
 	s.router.Use(metrics.InboundMetrics())
 
-	// EventsSubscription routes
-	eventsSubRoutes := s.getEventsSubscriptionRoutes()
-	eventsSubGroup := s.router.Group(factory.NwdafEventsSubResUriPrefix)
-	eventsSubAuthorization := newRouterAuthorizationCheck(
-		models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION,
-	)
-	eventsSubGroup.Use(func(c *gin.Context) {
-		eventsSubAuthorization.Check(c, s.Context())
-	})
-	applyRoutes(eventsSubGroup, eventsSubRoutes)
-
-	provisionGroup := s.router.Group(factory.NwdafMLModelProvisionResURIPrefix)
-	provisionAuthorization := newRouterAuthorizationCheck(
-		models.ServiceName_NNWDAF_MLMODELPROVISION,
-	)
-	provisionGroup.Use(func(c *gin.Context) {
-		provisionAuthorization.Check(c, s.Context())
-	})
-	applyRoutes(provisionGroup, s.getMLModelProvisionRoutes())
-
-	monitorGroup := s.router.Group(factory.NwdafMLModelMonitorResURIPrefix)
-	monitorAuthorization := newRouterAuthorizationCheck(mlModelMonitorServiceName)
-	monitorGroup.Use(func(c *gin.Context) {
-		monitorAuthorization.Check(c, s.Context())
-	})
-	applyRoutes(monitorGroup, s.getMLModelMonitorRoutes())
+	for _, serviceName := range nwdaf.Config().GetServiceNameList() {
+		switch serviceName {
+		case models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION:
+			eventsSubGroup := s.router.Group(factory.NwdafEventsSubResUriPrefix)
+			eventsSubAuthorization := newRouterAuthorizationCheck(serviceName)
+			eventsSubGroup.Use(func(c *gin.Context) {
+				eventsSubAuthorization.Check(c, s.Context())
+			})
+			applyRoutes(eventsSubGroup, s.getEventsSubscriptionRoutes())
+		case models.ServiceName_NNWDAF_MLMODELPROVISION:
+			provisionGroup := s.router.Group(factory.NwdafMLModelProvisionResURIPrefix)
+			provisionAuthorization := newRouterAuthorizationCheck(serviceName)
+			provisionGroup.Use(func(c *gin.Context) {
+				provisionAuthorization.Check(c, s.Context())
+			})
+			applyRoutes(provisionGroup, s.getMLModelProvisionRoutes())
+		case mlModelMonitorServiceName:
+			monitorGroup := s.router.Group(factory.NwdafMLModelMonitorResURIPrefix)
+			monitorAuthorization := newRouterAuthorizationCheck(serviceName)
+			monitorGroup.Use(func(c *gin.Context) {
+				monitorAuthorization.Check(c, s.Context())
+			})
+			applyRoutes(monitorGroup, s.getMLModelMonitorRoutes())
+		}
+	}
 
 	// Collector routes (for SMF callbacks)
 	collectorRoutes := s.getCollectorRoutes()

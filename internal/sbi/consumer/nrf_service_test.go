@@ -19,6 +19,8 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
+	"github.com/free5gc/nwdaf/internal/backend"
+	compatnrf "github.com/free5gc/nwdaf/internal/compat/nrf"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/openapi/models"
 )
@@ -425,11 +427,12 @@ func TestRegisterNFInstanceAcceptsOAuth2Requirement(t *testing.T) {
 func TestRegisterNFInstancePreservesOAuth2RequirementOnIdentityMismatch(t *testing.T) {
 	t.Parallel()
 
-	server := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var server *httptest.Server
+	server = newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		profile := decodeRegistrationProfile(t, r)
 		profile.NfInstanceId = "22222222-2222-4222-8222-222222222222"
 		profile.CustomInfo = map[string]interface{}{"oauth2": true}
-		writeRegistrationResponse(t, w, http.StatusCreated, &profile, "")
+		writeRegistrationResponse(t, w, http.StatusCreated, &profile, server.URL+r.URL.Path)
 	}))
 	defer server.Close()
 
@@ -448,8 +451,10 @@ func TestRegisterNFInstancePreservesOAuth2RequirementOnIdentityMismatch(t *testi
 func TestRegisterNFInstanceMarksMalformedSuccessBodyAsRemoteRegistration(t *testing.T) {
 	t.Parallel()
 
-	server := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var server *httptest.Server
+	server = newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Location", server.URL+r.URL.Path)
 		w.WriteHeader(http.StatusCreated)
 		if _, err := w.Write([]byte(`{"incomplete"`)); err != nil {
 			t.Errorf("write malformed registration response: %v", err)
@@ -843,7 +848,7 @@ func TestDiscoverNFInstancesCachesIdenticalAdrfQuery(t *testing.T) {
 	}))
 	defer server.Close()
 	service := newTestNrfService()
-	query := NFDiscoveryQuery{
+	query := backend.NFDiscoveryQuery{
 		TargetNFType:    models.NrfNfManagementNfType("ADRF"),
 		RequesterNFType: models.NrfNfManagementNfType_NWDAF,
 		ServiceNames:    []models.ServiceName{models.ServiceName("nadrf-datamanagement")},
@@ -877,7 +882,7 @@ func TestDiscoverNFInstancesReturnsRemainingValidityAndRefreshesAfterExpiry(t *t
 	now := time.Date(2026, 7, 24, 0, 0, 0, 0, time.UTC)
 	service := newTestNrfService()
 	service.now = func() time.Time { return now }
-	query := NFDiscoveryQuery{
+	query := backend.NFDiscoveryQuery{
 		TargetNFType:    models.NrfNfManagementNfType("ADRF"),
 		RequesterNFType: models.NrfNfManagementNfType_NWDAF,
 		ServiceNames:    []models.ServiceName{models.ServiceName("nadrf-datamanagement")},
@@ -914,7 +919,7 @@ func TestDiscoverNFInstancesDoesNotCacheExplicitZeroValidity(t *testing.T) {
 	}))
 	defer server.Close()
 	service := newTestNrfService()
-	query := NFDiscoveryQuery{
+	query := backend.NFDiscoveryQuery{
 		TargetNFType:    models.NrfNfManagementNfType("ADRF"),
 		RequesterNFType: models.NrfNfManagementNfType_NWDAF,
 		ServiceNames:    []models.ServiceName{models.ServiceName("nadrf-datamanagement")},
@@ -947,7 +952,7 @@ func TestDiscoverNFInstancesPreservesUnknownFieldsOnCacheHit(t *testing.T) {
 	}))
 	defer server.Close()
 	service := newTestNrfService()
-	query := NFDiscoveryQuery{
+	query := backend.NFDiscoveryQuery{
 		TargetNFType:    models.NrfNfManagementNfType("ADRF"),
 		RequesterNFType: models.NrfNfManagementNfType_NWDAF,
 		ServiceNames:    []models.ServiceName{models.ServiceName("nadrf-datamanagement")},
@@ -989,7 +994,7 @@ func TestDiscoverNFInstancesRejectsMissingMandatoryValidity(t *testing.T) {
 	_, err := newTestNrfService().DiscoverNFInstances(
 		context.Background(),
 		newNFManagementTestContext(t, server.URL),
-		NFDiscoveryQuery{
+		backend.NFDiscoveryQuery{
 			TargetNFType:    models.NrfNfManagementNfType("ADRF"),
 			RequesterNFType: models.NrfNfManagementNfType_NWDAF,
 			ServiceNames:    []models.ServiceName{models.ServiceName("nadrf-datamanagement")},
@@ -997,6 +1002,106 @@ func TestDiscoverNFInstancesRejectsMissingMandatoryValidity(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "validityPeriod is missing") {
 		t.Fatalf("DiscoverNFInstances() error = %v", err)
+	}
+}
+
+func TestDiscoverNFInstancesPreservesRelease18ProfilesAndQuery(t *testing.T) {
+	t.Parallel()
+
+	var received url.Values
+	server := newH2CTestServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		received = request.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := w.Write([]byte(`{
+			"validityPeriod":60,
+			"nfInstances":[{
+				"nfInstanceId":"33333333-3333-4333-8333-333333333333",
+				"nfType":"NWDAF",
+				"nfStatus":"REGISTERED",
+				"nwdafInfo":{
+					"mlAnalyticsList":[{
+						"mlAnalyticsIds":["UE_COMMUNICATION"],
+						"mlModelInterInfo":{"vendorList":["001122"]},
+						"flCapabilityType":"FL_SERVER"
+					}]
+				}
+			}],
+			"nrfSupportedFeatures":"800010000"
+		}`)); err != nil {
+			t.Errorf("write discovery response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	result, err := newTestNrfService().DiscoverNFInstances(
+		context.Background(),
+		newNFManagementTestContext(t, server.URL),
+		backend.NFDiscoveryQuery{
+			TargetNFType:    models.NrfNfManagementNfType_NWDAF,
+			RequesterNFType: models.NrfNfManagementNfType_NWDAF,
+			ServiceNames:    []models.ServiceName{models.ServiceName_NNWDAF_MLMODELPROVISION},
+			MLAnalyticsInfoList: []compatnrf.MLAnalyticsInfo{{
+				MLAnalyticsIDs: []models.NwdafEvent{models.NwdafEvent_UE_COMMUNICATION},
+				MLModelInteroperabilityInfo: &compatnrf.MLModelInteroperabilityInfo{
+					VendorList: []string{"001122"},
+				},
+			}},
+		},
+	)
+	if err != nil {
+		t.Fatalf("DiscoverNFInstances() error = %v", err)
+	}
+	if received.Get("requester-nf-instance-id") != testNFInstanceID ||
+		received.Get("ml-analytics-info-list") !=
+			`[{"mlAnalyticsIds":["UE_COMMUNICATION"],"mlModelInterInfo":{"vendorList":["001122"]}}]` {
+		t.Fatalf("discovery query = %v", received)
+	}
+	profiles := result.CompatibilityProfiles()
+	if len(profiles) != 1 || profiles[0].NwdafInfo == nil ||
+		profiles[0].NwdafInfo.MLAnalyticsList[0].FLCapabilityType !=
+			compatnrf.FLCapabilityTypeServer {
+		t.Fatalf("CompatibilityProfiles() = %#v", profiles)
+	}
+}
+
+func TestDiscoveryCacheKeyCanonicalizesEquivalentMLQueries(t *testing.T) {
+	t.Parallel()
+
+	taiA := models.Tai{PlmnId: &models.PlmnId{Mcc: "466", Mnc: "92"}, Tac: "000001"}
+	taiB := models.Tai{PlmnId: &models.PlmnId{Mcc: "466", Mnc: "92"}, Tac: "000002"}
+	base := backend.NFDiscoveryQuery{
+		TargetNFType:    models.NrfNfManagementNfType_NWDAF,
+		RequesterNFType: models.NrfNfManagementNfType_NWDAF,
+		ServiceNames: []models.ServiceName{
+			models.ServiceName("nnwdaf-mlmodelmonitor"),
+			models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION,
+		},
+		MLAnalyticsInfoList: []compatnrf.MLAnalyticsInfo{{
+			MLAnalyticsIDs:   []models.NwdafEvent{models.NwdafEvent_UE_COMMUNICATION},
+			TrackingAreaList: []models.Tai{taiA, taiB},
+		}},
+	}
+	reordered := base
+	reordered.ServiceNames = []models.ServiceName{
+		models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION,
+		models.ServiceName("nnwdaf-mlmodelmonitor"),
+	}
+	reordered.MLAnalyticsInfoList = []compatnrf.MLAnalyticsInfo{{
+		TrackingAreaList: []models.Tai{taiB, taiA},
+		MLAnalyticsIDs:   []models.NwdafEvent{models.NwdafEvent_UE_COMMUNICATION},
+	}}
+	if discoveryCacheKey(base, "http://nrf.example", testNFInstanceID) !=
+		discoveryCacheKey(reordered, "http://nrf.example/", testNFInstanceID) {
+		t.Fatal("equivalent discovery queries produced different cache keys")
+	}
+	different := base
+	different.MLAnalyticsInfoList = []compatnrf.MLAnalyticsInfo{{
+		MLAnalyticsIDs:   []models.NwdafEvent{models.NwdafEvent_UE_COMMUNICATION},
+		TrackingAreaList: []models.Tai{taiA},
+	}}
+	if discoveryCacheKey(base, "http://nrf.example", testNFInstanceID) ==
+		discoveryCacheKey(different, "http://nrf.example", testNFInstanceID) {
+		t.Fatal("semantically different discovery queries collided")
 	}
 }
 
@@ -1064,18 +1169,18 @@ func newTestNrfService() *NrfService {
 func newNFManagementTestContext(t *testing.T, nrfURI string) *nwdaf_context.NWDAFContext {
 	t.Helper()
 	ctx := &nwdaf_context.NWDAFContext{NfId: testNFInstanceID}
-	if err := ctx.ConfigureNFManagement(
-		nrfURI,
-		"",
-		"NWDAF",
-		"http://192.0.2.10:8080",
-		"http",
-		"192.0.2.10",
-		8080,
-		true,
-		false,
-		false,
-	); err != nil {
+	if err := ctx.ConfigureNFManagement(nwdaf_context.NFManagementConfig{
+		NrfURI:       nrfURI,
+		NwdafName:    "NWDAF",
+		SBIURI:       "http://192.0.2.10:8080",
+		SBIScheme:    "http",
+		RegisterIPv4: "192.0.2.10",
+		SBIPort:      8080,
+		ServiceNames: []models.ServiceName{models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION},
+		NwdafInfo: &compatnrf.NwdafInfo{NwdafInfo: models.NwdafInfo{
+			NwdafEvents: []models.NwdafEvent{models.NwdafEvent_UE_COMMUNICATION},
+		}},
+	}); err != nil {
 		t.Fatalf("ConfigureNFManagement() error = %v", err)
 	}
 	return ctx

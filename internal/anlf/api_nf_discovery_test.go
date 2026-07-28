@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/free5gc/nwdaf/internal/backend"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/openapi/models"
 )
@@ -19,13 +20,13 @@ type nfDiscoveryProcessorStub struct {
 }
 
 func (s *nfDiscoveryProcessorStub) HandleNFDiscovery(
-	context.Context, consumer.NFDiscoveryQuery,
+	context.Context, backend.NFDiscoveryQuery,
 ) (*consumer.NFDiscoveryResult, error) {
 	s.calls++
 	return s.result, s.err
 }
 
-func TestHandleSmfNFDiscoveryRequiresStandardQuery(t *testing.T) {
+func TestHandleNFDiscoveryRequiresStandardQuery(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	processor := &nfDiscoveryProcessorStub{
 		result: &consumer.NFDiscoveryResult{
@@ -41,7 +42,7 @@ func TestHandleSmfNFDiscoveryRequiresStandardQuery(t *testing.T) {
 		"/internal/v1/nrf/nf-instances?target-nf-type=SMF",
 		nil,
 	)
-	server.HandleSmfNFDiscovery(invalidContext)
+	server.HandleNFDiscovery(invalidContext)
 	if invalidRecorder.Code != http.StatusBadRequest || processor.calls != 0 {
 		t.Fatalf("invalid status=%d calls=%d", invalidRecorder.Code, processor.calls)
 	}
@@ -53,7 +54,7 @@ func TestHandleSmfNFDiscoveryRequiresStandardQuery(t *testing.T) {
 		"/internal/v1/nrf/nf-instances?target-nf-type=SMF&requester-nf-type=NWDAF&service-names=nsmf-event-exposure",
 		nil,
 	)
-	server.HandleSmfNFDiscovery(validContext)
+	server.HandleNFDiscovery(validContext)
 	if validRecorder.Code != http.StatusOK || processor.calls != 1 {
 		t.Fatalf("valid status=%d calls=%d body=%s", validRecorder.Code, processor.calls, validRecorder.Body.String())
 	}

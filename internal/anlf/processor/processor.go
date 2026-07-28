@@ -3,6 +3,7 @@ package processor
 import (
 	"context"
 
+	"github.com/free5gc/nwdaf/internal/backend"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/openapi/models"
@@ -16,7 +17,7 @@ type eventsSubscriptionNotificationDispatcher interface {
 }
 
 type nfDiscoveryProxy interface {
-	DiscoverNFInstances(context.Context, consumer.NFDiscoveryQuery) (*consumer.NFDiscoveryResult, error)
+	DiscoverNFInstances(context.Context, backend.NFDiscoveryQuery) (*consumer.NFDiscoveryResult, error)
 }
 
 type smfEventExposureProxy interface {

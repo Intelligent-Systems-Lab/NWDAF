@@ -43,7 +43,7 @@ type mlModelGateway interface {
 }
 
 type nfDiscoveryProxy interface {
-	DiscoverNFInstances(context.Context, consumer.NFDiscoveryQuery) (*consumer.NFDiscoveryResult, error)
+	DiscoverNFInstances(context.Context, backend.NFDiscoveryQuery) (*consumer.NFDiscoveryResult, error)
 }
 
 type adrfRetrievalProxy interface {
@@ -127,7 +127,7 @@ func (p *Processor) HandleDeleteMLModelMonitorSubscriptionFromBackend(
 
 func (p *Processor) HandleNFDiscovery(
 	ctx context.Context,
-	query consumer.NFDiscoveryQuery,
+	query backend.NFDiscoveryQuery,
 ) (*consumer.NFDiscoveryResult, error) {
 	if p.nfDiscovery == nil {
 		return nil, ErrNFDiscoveryUnavailable

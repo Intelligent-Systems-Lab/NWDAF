@@ -72,24 +72,19 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 	nwdaf.ctx, nwdaf.cancel = context.WithCancel(ctx)
 
 	// Initialize context
-	nwdaf_context.Init()
+	nwdaf_context.InitWithNFInstanceID(cfg.GetNFInstanceID())
 	nwdaf.nwdafCtx = nwdaf_context.GetSelf()
-	if err := nwdaf.nwdafCtx.ConfigureNFManagement(
-		cfg.GetNrfUri(),
-		cfg.GetNrfCertPem(),
-		cfg.GetNwdafName(),
-		cfg.GetSbiUri(),
-		cfg.GetSbiScheme(),
-		cfg.GetSbiRegisterIP(),
-		cfg.GetSbiPort(),
-		cfg.Configuration != nil && cfg.Configuration.AnlfBackend != nil &&
-			cfg.Configuration.AnlfBackend.Enabled,
-		cfg.Configuration != nil && cfg.Configuration.MtlfBackend != nil &&
-			cfg.Configuration.MtlfBackend.Enabled,
-		cfg.Configuration != nil && cfg.Configuration.AnlfBackend != nil &&
-			cfg.Configuration.AnlfBackend.Enabled &&
-			cfg.Configuration.MtlfBackend != nil && cfg.Configuration.MtlfBackend.Enabled,
-	); err != nil {
+	if err := nwdaf.nwdafCtx.ConfigureNFManagement(nwdaf_context.NFManagementConfig{
+		NrfURI:       cfg.GetNrfUri(),
+		NrfCertPEM:   cfg.GetNrfCertPem(),
+		NwdafName:    cfg.GetNwdafName(),
+		SBIURI:       cfg.GetSbiUri(),
+		SBIScheme:    cfg.GetSbiScheme(),
+		RegisterIPv4: cfg.GetSbiRegisterIP(),
+		SBIPort:      cfg.GetSbiPort(),
+		ServiceNames: cfg.GetServiceNameList(),
+		NwdafInfo:    cfg.GetNwdafInfo(),
+	}); err != nil {
 		return nil, fmt.Errorf("configure NRF NFManagement context: %w", err)
 	}
 
@@ -160,7 +155,7 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 	}
 	nwdaf.anlfServer.SetMLModelGateway(nwdaf.processor)
 	var discoveryProxy interface {
-		DiscoverNFInstances(context.Context, consumer.NFDiscoveryQuery) (*consumer.NFDiscoveryResult, error)
+		DiscoverNFInstances(context.Context, backend.NFDiscoveryQuery) (*consumer.NFDiscoveryResult, error)
 	}
 	if cfg.NrfRegistrationEnabled() {
 		discoveryProxy = nwdaf.consumer

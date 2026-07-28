@@ -1,17 +1,24 @@
 package factory
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"os"
+	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
+	compatnrf "github.com/free5gc/nwdaf/internal/compat/nrf"
 	"github.com/free5gc/nwdaf/internal/logger"
+	"github.com/free5gc/openapi/models"
 )
 
 const (
@@ -27,6 +34,7 @@ const (
 	NwdafMLModelProvisionResURIPrefix = "/nnwdaf-mlmodelprovision/v1"
 	NwdafMLModelMonitorResURIPrefix   = "/nnwdaf-mlmodelmonitor/v1"
 	NwdafSupportedEventUEComm         = "UE_COMMUNICATION"
+	NwdafMLModelMonitorServiceName    = "nnwdaf-mlmodelmonitor"
 )
 
 var NwdafConfig *Config
@@ -34,6 +42,19 @@ var NwdafConfig *Config
 var supportedAnalyticsAllowlist = map[string]struct{}{
 	NwdafSupportedEventUEComm: {},
 }
+
+var supportedServiceAllowlist = map[models.ServiceName]struct{}{
+	models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION:       {},
+	models.ServiceName_NNWDAF_MLMODELPROVISION:         {},
+	models.ServiceName(NwdafMLModelMonitorServiceName): {},
+}
+
+var (
+	mccPattern = regexp.MustCompile(`^[0-9]{3}$`)
+	mncPattern = regexp.MustCompile(`^[0-9]{2,3}$`)
+	tacPattern = regexp.MustCompile(`^(?:[0-9A-Fa-f]{4}|[0-9A-Fa-f]{6})$`)
+	sdPattern  = regexp.MustCompile(`^[0-9A-Fa-f]{6}$`)
+)
 
 type Config struct {
 	Info          *Info          `yaml:"info"`
@@ -47,16 +68,42 @@ type Info struct {
 }
 
 type Configuration struct {
-	NwdafName              string             `yaml:"nwdafName,omitempty"`
-	Sbi                    *Sbi               `yaml:"sbi,omitempty"`
-	NrfRegistrationEnabled *bool              `yaml:"nrfRegistrationEnabled,omitempty"`
-	NrfUri                 string             `yaml:"nrfUri,omitempty"`
-	NrfCertPem             string             `yaml:"nrfCertPem,omitempty"`
-	SupportedAnalytics     []string           `yaml:"supportedAnalytics,omitempty"`
-	Anlf                   *AnlfConfig        `yaml:"anlf,omitempty"`
-	AnlfBackend            *AnlfBackendConfig `yaml:"anlfBackend,omitempty"`
-	MtlfBackend            *MtlfBackendConfig `yaml:"mtlfBackend,omitempty"`
-	Mtlf                   *MtlfConfig        `yaml:"mtlf,omitempty"`
+	NwdafName              string               `yaml:"nwdafName,omitempty"`
+	NfInstanceID           string               `yaml:"nfInstanceId,omitempty"`
+	Sbi                    *Sbi                 `yaml:"sbi,omitempty"`
+	NrfRegistrationEnabled *bool                `yaml:"nrfRegistrationEnabled,omitempty"`
+	NrfUri                 string               `yaml:"nrfUri,omitempty"`
+	NrfCertPem             string               `yaml:"nrfCertPem,omitempty"`
+	ServiceNameList        []models.ServiceName `yaml:"serviceNameList,omitempty"`
+	NwdafInfo              *NwdafInfoConfig     `yaml:"nwdafInfo,omitempty"`
+	SupportedAnalytics     []string             `yaml:"supportedAnalytics,omitempty"`
+	Anlf                   *AnlfConfig          `yaml:"anlf,omitempty"`
+	AnlfBackend            *AnlfBackendConfig   `yaml:"anlfBackend,omitempty"`
+	MtlfBackend            *MtlfBackendConfig   `yaml:"mtlfBackend,omitempty"`
+	Mtlf                   *MtlfConfig          `yaml:"mtlf,omitempty"`
+}
+
+// NwdafInfoConfig mirrors the Release 18 NwdafInfo wire property names used
+// by NF registration. It is configuration input, not a second capability
+// model.
+type NwdafInfoConfig struct {
+	NwdafEvents     []models.NwdafEvent     `yaml:"nwdafEvents,omitempty"`
+	MLAnalyticsList []MLAnalyticsInfoConfig `yaml:"mlAnalyticsList,omitempty"`
+}
+
+type MLAnalyticsInfoConfig struct {
+	MLAnalyticsIDs              []models.NwdafEvent            `yaml:"mlAnalyticsIds,omitempty"`
+	SNSSAIList                  []models.Snssai                `yaml:"snssaiList,omitempty"`
+	TrackingAreaList            []models.Tai                   `yaml:"trackingAreaList,omitempty"`
+	MLModelInteroperabilityInfo *MLModelInteroperabilityConfig `yaml:"mlModelInterInfo,omitempty"`
+	FLCapabilityType            compatnrf.FLCapabilityType     `yaml:"flCapabilityType,omitempty"`
+	FLTimeInterval              *models.TimeWindow             `yaml:"flTimeInterval,omitempty"`
+	NFTypeList                  []models.NrfNfManagementNfType `yaml:"nfTypeList,omitempty"`
+	NFSetIDList                 []string                       `yaml:"nfSetIdList,omitempty"`
+}
+
+type MLModelInteroperabilityConfig struct {
+	VendorList []string `yaml:"vendorList,omitempty"`
 }
 
 type AnlfConfig struct {
@@ -199,7 +246,17 @@ func (c *Config) Validate() (bool, error) {
 
 func (c *Configuration) validate() error {
 	var errs []error
+	c.NfInstanceID = strings.TrimSpace(c.NfInstanceID)
 	c.NrfCertPem = strings.TrimSpace(c.NrfCertPem)
+
+	if c.NfInstanceID != "" {
+		parsedID, parseErr := uuid.Parse(c.NfInstanceID)
+		if parseErr != nil || parsedID.Version() != 4 {
+			errs = append(errs, errors.New("nfInstanceId must be a UUIDv4 when configured"))
+		} else {
+			c.NfInstanceID = parsedID.String()
+		}
+	}
 
 	if strings.TrimSpace(c.NrfUri) != "" || c.NrfRegistrationEnabledOrDefault() {
 		normalizedNrfURI, nrfErr := normalizeNrfURI(c.NrfUri)
@@ -232,6 +289,24 @@ func (c *Configuration) validate() error {
 	} else {
 		c.SupportedAnalytics = normalizedAnalytics
 	}
+
+	explicitProfile := c.ServiceNameList != nil || c.NwdafInfo != nil
+	if explicitProfile {
+		normalizedServices, serviceErr := normalizeServiceNameList(c.ServiceNameList)
+		if serviceErr != nil {
+			errs = append(errs, serviceErr)
+		} else {
+			c.ServiceNameList = normalizedServices
+		}
+		if c.NwdafInfo != nil {
+			if infoErr := c.NwdafInfo.normalizeAndValidate(); infoErr != nil {
+				errs = append(errs, infoErr)
+			}
+		}
+		if dependencyErr := c.validateProfileDependencies(); dependencyErr != nil {
+			errs = append(errs, dependencyErr)
+		}
+	}
 	if c.AnlfBackend != nil && c.AnlfBackend.Enabled {
 		if validateErr := c.AnlfBackend.validate(); validateErr != nil {
 			errs = append(errs, validateErr)
@@ -246,6 +321,65 @@ func (c *Configuration) validate() error {
 		return errors.Join(errs...)
 	}
 	return nil
+}
+
+func (c *Configuration) validateProfileDependencies() error {
+	var errs []error
+	services := make(map[models.ServiceName]struct{}, len(c.ServiceNameList))
+	for _, serviceName := range c.ServiceNameList {
+		services[serviceName] = struct{}{}
+	}
+
+	_, advertisesEvents := services[models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION]
+	_, advertisesProvision := services[models.ServiceName_NNWDAF_MLMODELPROVISION]
+	_, advertisesMonitor := services[models.ServiceName(NwdafMLModelMonitorServiceName)]
+
+	hasAnlf := c.AnlfBackend != nil && c.AnlfBackend.Enabled
+	hasMtlf := c.MtlfBackend != nil && c.MtlfBackend.Enabled
+	hasEvents := c.NwdafInfo != nil && len(c.NwdafInfo.NwdafEvents) > 0
+	hasMLAnalytics := c.NwdafInfo != nil && len(c.NwdafInfo.MLAnalyticsList) > 0
+
+	if advertisesEvents && !hasAnlf {
+		errs = append(errs, errors.New(
+			"serviceNameList nnwdaf-eventssubscription requires an enabled anlfBackend",
+		))
+	}
+	if advertisesEvents && !hasEvents {
+		errs = append(errs, errors.New(
+			"serviceNameList nnwdaf-eventssubscription requires non-empty nwdafInfo.nwdafEvents",
+		))
+	}
+	if hasEvents && !advertisesEvents {
+		errs = append(errs, errors.New(
+			"nwdafInfo.nwdafEvents requires nnwdaf-eventssubscription in serviceNameList",
+		))
+	}
+	if advertisesProvision && !hasMtlf {
+		errs = append(errs, errors.New(
+			"serviceNameList nnwdaf-mlmodelprovision requires an enabled mtlfBackend",
+		))
+	}
+	if advertisesProvision && !hasMLAnalytics {
+		errs = append(errs, errors.New(
+			"serviceNameList nnwdaf-mlmodelprovision requires non-empty nwdafInfo.mlAnalyticsList",
+		))
+	}
+	if advertisesMonitor && !hasAnlf && !hasMtlf {
+		errs = append(errs, errors.New(
+			"serviceNameList nnwdaf-mlmodelmonitor requires an enabled anlfBackend or mtlfBackend",
+		))
+	}
+	if hasMLAnalytics {
+		for index, entry := range c.NwdafInfo.MLAnalyticsList {
+			if entry.FLCapabilityType != "" && !hasMtlf {
+				errs = append(errs, fmt.Errorf(
+					"nwdafInfo.mlAnalyticsList[%d].flCapabilityType requires an enabled mtlfBackend",
+					index,
+				))
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (s *Sbi) validate() error {
@@ -412,6 +546,297 @@ func normalizeSupportedAnalytics(values []string) ([]string, error) {
 	}
 
 	return normalized, nil
+}
+
+func normalizeServiceNameList(values []models.ServiceName) ([]models.ServiceName, error) {
+	if values == nil {
+		return nil, nil
+	}
+	if len(values) == 0 {
+		return nil, errors.New("serviceNameList must contain at least one entry when present")
+	}
+
+	normalized := make([]models.ServiceName, 0, len(values))
+	seen := make(map[models.ServiceName]struct{}, len(values))
+	var errs []error
+	for index, value := range values {
+		serviceName := models.ServiceName(strings.TrimSpace(string(value)))
+		if _, supported := supportedServiceAllowlist[serviceName]; !supported {
+			errs = append(errs, fmt.Errorf(
+				"serviceNameList[%d] %q is not implemented by the current runtime",
+				index,
+				value,
+			))
+			continue
+		}
+		if _, duplicate := seen[serviceName]; duplicate {
+			errs = append(errs, fmt.Errorf(
+				"serviceNameList[%d] duplicates %q",
+				index,
+				serviceName,
+			))
+			continue
+		}
+		seen[serviceName] = struct{}{}
+		normalized = append(normalized, serviceName)
+	}
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+	slices.SortFunc(normalized, func(left, right models.ServiceName) int {
+		return strings.Compare(string(left), string(right))
+	})
+	return normalized, nil
+}
+
+func (c *NwdafInfoConfig) normalizeAndValidate() error {
+	if c == nil {
+		return nil
+	}
+	var errs []error
+
+	var normalizedEvents []models.NwdafEvent
+	if c.NwdafEvents != nil {
+		normalizedEvents = make([]models.NwdafEvent, 0, len(c.NwdafEvents))
+	}
+	seenEvents := make(map[models.NwdafEvent]struct{}, len(c.NwdafEvents))
+	for index, event := range c.NwdafEvents {
+		normalized := models.NwdafEvent(strings.TrimSpace(string(event)))
+		if normalized != models.NwdafEvent_UE_COMMUNICATION {
+			errs = append(errs, fmt.Errorf(
+				"nwdafInfo.nwdafEvents[%d] %q is not supported by the current runtime",
+				index,
+				event,
+			))
+			continue
+		}
+		if _, duplicate := seenEvents[normalized]; duplicate {
+			continue
+		}
+		seenEvents[normalized] = struct{}{}
+		normalizedEvents = append(normalizedEvents, normalized)
+	}
+	c.NwdafEvents = normalizedEvents
+
+	seenEntries := make(map[string]struct{}, len(c.MLAnalyticsList))
+	for index := range c.MLAnalyticsList {
+		entry := &c.MLAnalyticsList[index]
+		if err := entry.normalizeAndValidate(); err != nil {
+			errs = append(errs, fmt.Errorf("nwdafInfo.mlAnalyticsList[%d]: %w", index, err))
+			continue
+		}
+		canonical, err := json.Marshal(entry.CompatibilityValue())
+		if err != nil {
+			errs = append(errs, fmt.Errorf(
+				"nwdafInfo.mlAnalyticsList[%d]: encode normalized entry: %w",
+				index,
+				err,
+			))
+			continue
+		}
+		key := string(canonical)
+		if _, duplicate := seenEntries[key]; duplicate {
+			errs = append(errs, fmt.Errorf(
+				"nwdafInfo.mlAnalyticsList[%d] duplicates an equivalent entry",
+				index,
+			))
+			continue
+		}
+		seenEntries[key] = struct{}{}
+	}
+
+	if c.NwdafEvents != nil && len(c.NwdafEvents) == 0 {
+		errs = append(errs, errors.New(
+			"nwdafInfo.nwdafEvents must contain at least one entry when present",
+		))
+	}
+	if c.MLAnalyticsList != nil && len(c.MLAnalyticsList) == 0 {
+		errs = append(errs, errors.New(
+			"nwdafInfo.mlAnalyticsList must contain at least one entry when present",
+		))
+	}
+	return errors.Join(errs...)
+}
+
+func (c *MLAnalyticsInfoConfig) normalizeAndValidate() error {
+	if c == nil {
+		return errors.New("entry is required")
+	}
+	var errs []error
+
+	c.MLAnalyticsIDs = normalizeNwdafEvents(c.MLAnalyticsIDs)
+	if len(c.MLAnalyticsIDs) == 0 {
+		errs = append(errs, errors.New("mlAnalyticsIds must contain at least one entry"))
+	}
+	for index, event := range c.MLAnalyticsIDs {
+		if event != models.NwdafEvent_UE_COMMUNICATION {
+			errs = append(errs, fmt.Errorf(
+				"mlAnalyticsIds[%d] %q is not supported by the current runtime",
+				index,
+				event,
+			))
+		}
+	}
+
+	slices.SortFunc(c.SNSSAIList, func(left, right models.Snssai) int {
+		if left.Sst != right.Sst {
+			return int(left.Sst - right.Sst)
+		}
+		return strings.Compare(strings.ToUpper(left.Sd), strings.ToUpper(right.Sd))
+	})
+	c.SNSSAIList = slices.CompactFunc(c.SNSSAIList, func(left, right models.Snssai) bool {
+		return left.Sst == right.Sst && strings.EqualFold(left.Sd, right.Sd)
+	})
+	for index := range c.SNSSAIList {
+		c.SNSSAIList[index].Sd = strings.ToUpper(strings.TrimSpace(c.SNSSAIList[index].Sd))
+		if c.SNSSAIList[index].Sst < 0 || c.SNSSAIList[index].Sst > 255 {
+			errs = append(errs, fmt.Errorf("snssaiList[%d].sst must be between 0 and 255", index))
+		}
+		if c.SNSSAIList[index].Sd != "" && !sdPattern.MatchString(c.SNSSAIList[index].Sd) {
+			errs = append(errs, fmt.Errorf("snssaiList[%d].sd must contain six hexadecimal digits", index))
+		}
+	}
+
+	for index := range c.TrackingAreaList {
+		tai := &c.TrackingAreaList[index]
+		tai.Tac = strings.ToUpper(strings.TrimSpace(tai.Tac))
+		if tai.PlmnId == nil {
+			errs = append(errs, fmt.Errorf("trackingAreaList[%d].plmnId is required", index))
+			continue
+		}
+		tai.PlmnId.Mcc = strings.TrimSpace(tai.PlmnId.Mcc)
+		tai.PlmnId.Mnc = strings.TrimSpace(tai.PlmnId.Mnc)
+		if !mccPattern.MatchString(tai.PlmnId.Mcc) {
+			errs = append(errs, fmt.Errorf("trackingAreaList[%d].plmnId.mcc must contain three digits", index))
+		}
+		if !mncPattern.MatchString(tai.PlmnId.Mnc) {
+			errs = append(errs, fmt.Errorf("trackingAreaList[%d].plmnId.mnc must contain two or three digits", index))
+		}
+		if !tacPattern.MatchString(tai.Tac) {
+			errs = append(errs, fmt.Errorf(
+				"trackingAreaList[%d].tac must contain four or six hexadecimal digits",
+				index,
+			))
+		}
+	}
+	slices.SortFunc(c.TrackingAreaList, func(left, right models.Tai) int {
+		return strings.Compare(taiSortKey(left), taiSortKey(right))
+	})
+	c.TrackingAreaList = slices.CompactFunc(c.TrackingAreaList, func(left, right models.Tai) bool {
+		return taiSortKey(left) == taiSortKey(right)
+	})
+
+	if c.MLModelInteroperabilityInfo != nil {
+		vendors := make([]string, 0, len(c.MLModelInteroperabilityInfo.VendorList))
+		for _, vendor := range c.MLModelInteroperabilityInfo.VendorList {
+			vendors = append(vendors, strings.TrimSpace(vendor))
+		}
+		sort.Strings(vendors)
+		c.MLModelInteroperabilityInfo.VendorList = slices.Compact(vendors)
+	}
+
+	c.NFTypeList = normalizeNFTypes(c.NFTypeList)
+	for index, nfType := range c.NFTypeList {
+		if nfType != models.NrfNfManagementNfType_UPF {
+			errs = append(errs, fmt.Errorf(
+				"nfTypeList[%d] %q is not supported as a local training data source",
+				index,
+				nfType,
+			))
+		}
+	}
+	c.NFSetIDList = normalizeStrings(c.NFSetIDList)
+	if c.FLCapabilityType != "" && !compatnrf.IsKnownFLCapability(c.FLCapabilityType) {
+		errs = append(errs, fmt.Errorf(
+			"flCapabilityType %q is not a supported Release 18 value",
+			c.FLCapabilityType,
+		))
+	}
+	if c.FLCapabilityType == "" &&
+		(c.FLTimeInterval != nil || len(c.NFTypeList) > 0 || len(c.NFSetIDList) > 0) {
+		errs = append(errs, errors.New(
+			"flTimeInterval, nfTypeList and nfSetIdList require flCapabilityType",
+		))
+	}
+	if compatErr := compatnrf.ValidateMLAnalyticsInfo(c.CompatibilityValue()); compatErr != nil {
+		errs = append(errs, compatErr)
+	}
+	return errors.Join(errs...)
+}
+
+func normalizeNwdafEvents(values []models.NwdafEvent) []models.NwdafEvent {
+	normalized := make([]models.NwdafEvent, 0, len(values))
+	for _, value := range values {
+		normalized = append(normalized, models.NwdafEvent(strings.TrimSpace(string(value))))
+	}
+	slices.SortFunc(normalized, func(left, right models.NwdafEvent) int {
+		return strings.Compare(string(left), string(right))
+	})
+	return slices.Compact(normalized)
+}
+
+func normalizeNFTypes(values []models.NrfNfManagementNfType) []models.NrfNfManagementNfType {
+	normalized := make([]models.NrfNfManagementNfType, 0, len(values))
+	for _, value := range values {
+		normalized = append(normalized, models.NrfNfManagementNfType(strings.TrimSpace(string(value))))
+	}
+	slices.SortFunc(normalized, func(left, right models.NrfNfManagementNfType) int {
+		return strings.Compare(string(left), string(right))
+	})
+	return slices.Compact(normalized)
+}
+
+func normalizeStrings(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		normalized = append(normalized, strings.TrimSpace(value))
+	}
+	sort.Strings(normalized)
+	return slices.Compact(normalized)
+}
+
+func taiSortKey(value models.Tai) string {
+	if value.PlmnId == nil {
+		return "\x00" + value.Tac
+	}
+	return value.PlmnId.Mcc + "\x00" + value.PlmnId.Mnc + "\x00" + value.Tac + "\x00" + value.Nid
+}
+
+func (c MLAnalyticsInfoConfig) CompatibilityValue() compatnrf.MLAnalyticsInfo {
+	var interoperability *compatnrf.MLModelInteroperabilityInfo
+	if c.MLModelInteroperabilityInfo != nil {
+		interoperability = &compatnrf.MLModelInteroperabilityInfo{
+			VendorList: append([]string(nil), c.MLModelInteroperabilityInfo.VendorList...),
+		}
+	}
+	return compatnrf.MLAnalyticsInfo{
+		MLAnalyticsIDs:              append([]models.NwdafEvent(nil), c.MLAnalyticsIDs...),
+		SNSSAIList:                  append([]models.Snssai(nil), c.SNSSAIList...),
+		TrackingAreaList:            append([]models.Tai(nil), c.TrackingAreaList...),
+		MLModelInteroperabilityInfo: interoperability,
+		FLCapabilityType:            c.FLCapabilityType,
+		FLTimeInterval:              c.FLTimeInterval,
+		NFTypeList:                  append([]models.NrfNfManagementNfType(nil), c.NFTypeList...),
+		NFSetIDList:                 append([]string(nil), c.NFSetIDList...),
+	}
+}
+
+func (c *NwdafInfoConfig) CompatibilityValue() *compatnrf.NwdafInfo {
+	if c == nil {
+		return nil
+	}
+	value := &compatnrf.NwdafInfo{
+		NwdafInfo: models.NwdafInfo{
+			NwdafEvents: append([]models.NwdafEvent(nil), c.NwdafEvents...),
+		},
+	}
+	if c.MLAnalyticsList != nil {
+		value.MLAnalyticsList = make([]compatnrf.MLAnalyticsInfo, len(c.MLAnalyticsList))
+		for index, entry := range c.MLAnalyticsList {
+			value.MLAnalyticsList[index] = entry.CompatibilityValue()
+		}
+	}
+	return value
 }
 
 func normalizeHTTPOrigin(fieldName string, raw string) (string, error) {
@@ -711,6 +1136,67 @@ func (c *Config) GetNwdafName() string {
 		return NwdafDefaultNwdafName
 	}
 	return c.Configuration.NwdafName
+}
+
+func (c *Config) GetNFInstanceID() string {
+	if c == nil || c.Configuration == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.Configuration.NfInstanceID)
+}
+
+func (c *Config) GetServiceNameList() []models.ServiceName {
+	if c == nil || c.Configuration == nil {
+		return nil
+	}
+	if c.Configuration.ServiceNameList != nil || c.Configuration.NwdafInfo != nil {
+		return append([]models.ServiceName(nil), c.Configuration.ServiceNameList...)
+	}
+
+	services := make([]models.ServiceName, 0, 3)
+	hasAnlf := c.Configuration.AnlfBackend != nil && c.Configuration.AnlfBackend.Enabled
+	hasMtlf := c.Configuration.MtlfBackend != nil && c.Configuration.MtlfBackend.Enabled
+	if hasAnlf {
+		services = append(services, models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION)
+	}
+	if hasMtlf {
+		services = append(services, models.ServiceName_NNWDAF_MLMODELPROVISION)
+	}
+	if hasAnlf && hasMtlf {
+		services = append(services, models.ServiceName(NwdafMLModelMonitorServiceName))
+	}
+	return services
+}
+
+func (c *Config) GetNwdafInfo() *compatnrf.NwdafInfo {
+	if c == nil || c.Configuration == nil {
+		return nil
+	}
+	if c.Configuration.ServiceNameList != nil || c.Configuration.NwdafInfo != nil {
+		return c.Configuration.NwdafInfo.CompatibilityValue()
+	}
+
+	services := c.GetServiceNameList()
+	info := &compatnrf.NwdafInfo{}
+	for _, serviceName := range services {
+		switch serviceName {
+		case models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION:
+			info.NwdafEvents = []models.NwdafEvent{models.NwdafEvent_UE_COMMUNICATION}
+		case models.ServiceName_NNWDAF_MLMODELPROVISION:
+			info.MLAnalyticsList = []compatnrf.MLAnalyticsInfo{{
+				MLAnalyticsIDs: []models.NwdafEvent{models.NwdafEvent_UE_COMMUNICATION},
+			}}
+		}
+	}
+	if len(info.NwdafEvents) == 0 && len(info.MLAnalyticsList) == 0 {
+		return nil
+	}
+	return info
+}
+
+func (c *Config) HasExplicitNFProfile() bool {
+	return c != nil && c.Configuration != nil &&
+		(c.Configuration.ServiceNameList != nil || c.Configuration.NwdafInfo != nil)
 }
 
 func (c *Config) GetNrfUri() string {

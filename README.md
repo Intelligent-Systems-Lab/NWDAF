@@ -33,14 +33,14 @@ Current runtime notes:
   modes never merge and NRF mode never silently falls back to configured
   endpoints. Discovery results are reused only for the positive NRF
   `validityPeriod`; refresh failures do not return stale endpoints.
-- The private `GET /internal/v1/nrf/nf-instances` boundary supports the SMF
-  Event Exposure and ADRF Data Management discovery profiles. Go injects the
-  containing NWDAF requester identity and shares valid results by canonical
-  query; backend processes still own candidate selection.
-- The pinned workspace free5GC NRF accepts ADRF registration but its older NF
-  Discovery schema rejects `target-nf-type=ADRF`. Backends must use configured
-  ADRF mode with that build; Go does not hide the incompatibility through a
-  non-standard NF Management listing fallback.
+- The private `GET /internal/v1/nrf/nf-instances` boundary accepts the
+  standard NF Discovery query property names used by the current AnLF and MTLF
+  backends. It supports NWDAF, SMF, UDM, and ADRF targets within the implemented
+  query matrix. Go injects the containing NWDAF requester identity, forwards
+  the request to NRF, preserves Release 18 profiles in the `SearchResult`, and
+  shares valid results by a canonical query key. Backend processes still own
+  candidate selection. Unsupported or malformed filter combinations fail
+  before an NRF request is sent.
 - The AnLF and MTLF backends independently select ADRF origins. Their standard-shaped
   storage and retrieval-control requests carry `Target-Api-Root`; Go validates
   that origin, performs ADRF POST/DELETE as the containing NWDAF, and forwards
@@ -66,6 +66,40 @@ make build
 # Run
 ./bin/nwdaf --config config/nwdafcfg.yaml
 ```
+
+## Role-Aware Configuration
+
+`configuration.nfInstanceId` may pin the UUIDv4 used for NRF registration so
+that one deployment identity survives process restarts.
+`configuration.serviceNameList` is the explicit list of public services that
+the process mounts and registers; `configuration.nwdafInfo` is the Release 18
+capability description and uses the standard JSON property names in YAML:
+
+```yaml
+configuration:
+  nfInstanceId: "11111111-1111-4111-8111-111111111111"
+  serviceNameList:
+    - nnwdaf-eventssubscription
+    - nnwdaf-mlmodelmonitor
+  nwdafInfo:
+    nwdafEvents: [UE_COMMUNICATION]
+    mlAnalyticsList:
+      - mlAnalyticsIds: [UE_COMMUNICATION]
+        trackingAreaList:
+          - plmnId: {mcc: "466", mnc: "92"}
+            tac: "000001"
+        mlModelInterInfo:
+          vendorList: ["001122"]
+        flCapabilityType: FL_CLIENT
+        nfTypeList: [UPF]
+```
+
+The runtime rejects advertised services without the required backend and
+capability entry. Existing configs that omit both explicit profile fields keep
+the legacy backend-derived service behavior. The distributed role examples are
+`config/nwdafcfg-a.yaml`, `config/nwdafcfg-b.yaml`, and
+`config/nwdafcfg-c.yaml`. They do not advertise Model Training because that
+public service is not implemented yet.
 
 ## Testing
 

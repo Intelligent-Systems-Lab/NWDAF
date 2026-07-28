@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	compatnrf "github.com/free5gc/nwdaf/internal/compat/nrf"
 	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/openapi/models"
 	"github.com/free5gc/openapi/oauth"
@@ -28,8 +29,16 @@ const (
 )
 
 func Init() {
+	InitWithNFInstanceID("")
+}
+
+func InitWithNFInstanceID(nfInstanceID string) {
+	nfInstanceID = strings.TrimSpace(nfInstanceID)
+	if nfInstanceID == "" {
+		nfInstanceID = uuid.New().String()
+	}
 	nwdafContext = &NWDAFContext{
-		NfId:                              uuid.New().String(),
+		NfId:                              nfInstanceID,
 		nfServiceInstanceId:               uuid.New().String(),
 		mlModelProvisionServiceInstanceID: uuid.New().String(),
 		mlModelMonitorServiceInstanceID:   uuid.New().String(),
@@ -56,7 +65,7 @@ type NWDAFContext struct {
 	mlModelMonitorServiceInstanceID   string
 	nrfUri                            string
 	nrfCertPem                        string
-	nfProfile                         models.NrfNfManagementNfProfile
+	nfProfile                         compatnrf.NFProfile
 	registered                        bool
 	registrationUri                   string
 	oauth2Required                    bool
@@ -300,18 +309,19 @@ type NFRegistrationState struct {
 	HeartBeatTimer int32
 }
 
-func (c *NWDAFContext) ConfigureNFManagement(
-	nrfUri string,
-	nrfCertPem string,
-	nwdafName string,
-	sbiUri string,
-	sbiScheme string,
-	registerIPv4 string,
-	sbiPort int,
-	advertiseEventsSubscription bool,
-	advertiseMLModelProvision bool,
-	advertiseMLModelMonitor bool,
-) error {
+type NFManagementConfig struct {
+	NrfURI       string
+	NrfCertPEM   string
+	NwdafName    string
+	SBIURI       string
+	SBIScheme    string
+	RegisterIPv4 string
+	SBIPort      int
+	ServiceNames []models.ServiceName
+	NwdafInfo    *compatnrf.NwdafInfo
+}
+
+func (c *NWDAFContext) ConfigureNFManagement(config NFManagementConfig) error {
 	if c == nil {
 		return fmt.Errorf("NWDAF context is nil")
 	}
@@ -327,96 +337,88 @@ func (c *NWDAFContext) ConfigureNFManagement(
 	if c.mlModelMonitorServiceInstanceID == "" {
 		c.mlModelMonitorServiceInstanceID = uuid.New().String()
 	}
-	registerIPv4 = strings.TrimSpace(registerIPv4)
+	registerIPv4 := strings.TrimSpace(config.RegisterIPv4)
 	parsedRegisterIPv4 := net.ParseIP(registerIPv4)
 	if strings.Contains(registerIPv4, ":") || parsedRegisterIPv4 == nil ||
 		parsedRegisterIPv4.To4() == nil || parsedRegisterIPv4.IsUnspecified() {
 		return fmt.Errorf("SBI registration address must be a valid non-wildcard IPv4 address")
 	}
-	if sbiPort <= 0 || sbiPort > 65535 {
+	if config.SBIPort <= 0 || config.SBIPort > 65535 {
 		return fmt.Errorf("SBI port must be between 1 and 65535")
 	}
 
 	var scheme models.UriScheme
-	switch sbiScheme {
+	switch config.SBIScheme {
 	case string(models.UriScheme_HTTP):
 		scheme = models.UriScheme_HTTP
 	case string(models.UriScheme_HTTPS):
 		scheme = models.UriScheme_HTTPS
 	default:
-		return fmt.Errorf("unsupported SBI scheme %q", sbiScheme)
+		return fmt.Errorf("unsupported SBI scheme %q", config.SBIScheme)
 	}
 
-	profile := models.NrfNfManagementNfProfile{
-		NfInstanceId:   c.NfId,
-		NfInstanceName: nwdafName,
-		NfType:         models.NrfNfManagementNfType_NWDAF,
-		NfStatus:       models.NrfNfManagementNfStatus_REGISTERED,
-		Ipv4Addresses:  []string{registerIPv4},
+	profile := compatnrf.NFProfile{
+		NrfNfManagementNfProfile: models.NrfNfManagementNfProfile{
+			NfInstanceId:   c.NfId,
+			NfInstanceName: config.NwdafName,
+			NfType:         models.NrfNfManagementNfType_NWDAF,
+			NfStatus:       models.NrfNfManagementNfStatus_REGISTERED,
+			Ipv4Addresses:  []string{registerIPv4},
+		},
+		NwdafInfo: config.NwdafInfo,
 	}
-	if advertiseEventsSubscription || advertiseMLModelProvision {
-		profile.NwdafInfo = &models.NwdafInfo{}
-		if advertiseEventsSubscription {
-			profile.NwdafInfo.NwdafEvents = []models.NwdafEvent{
-				models.NwdafEvent_UE_COMMUNICATION,
-			}
+	for _, serviceName := range config.ServiceNames {
+		serviceInstanceID, apiVersion, apiFullVersion, err := c.serviceMetadata(serviceName)
+		if err != nil {
+			return err
 		}
-		if advertiseMLModelProvision {
-			profile.NwdafInfo.MlAnalyticsList = []models.MlAnalyticsInfo{{
-				MlAnalyticsIds: []models.NwdafEvent{
-					models.NwdafEvent_UE_COMMUNICATION,
-				},
-			}}
-		}
-	}
-	if advertiseEventsSubscription {
 		profile.NfServices = append(profile.NfServices, buildNwdafService(
-			c.nfServiceInstanceId,
-			models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION,
-			nwdafEventsSubscriptionAPIVersion,
-			nwdafEventsSubscriptionAPIFullVersion,
+			serviceInstanceID,
+			serviceName,
+			apiVersion,
+			apiFullVersion,
 			scheme,
 			registerIPv4,
-			sbiPort,
-			sbiUri,
-		))
-	}
-	if advertiseMLModelProvision {
-		profile.NfServices = append(profile.NfServices, buildNwdafService(
-			c.mlModelProvisionServiceInstanceID,
-			models.ServiceName_NNWDAF_MLMODELPROVISION,
-			nwdafMLModelProvisionAPIVersion,
-			nwdafMLModelProvisionAPIFullVersion,
-			scheme,
-			registerIPv4,
-			sbiPort,
-			sbiUri,
-		))
-	}
-	if advertiseMLModelMonitor {
-		profile.NfServices = append(profile.NfServices, buildNwdafService(
-			c.mlModelMonitorServiceInstanceID,
-			nwdafMLModelMonitorServiceName,
-			nwdafMLModelMonitorAPIVersion,
-			nwdafMLModelMonitorAPIFullVersion,
-			scheme,
-			registerIPv4,
-			sbiPort,
-			sbiUri,
+			config.SBIPort,
+			config.SBIURI,
 		))
 	}
 
 	c.nfManagementMu.Lock()
 	defer c.nfManagementMu.Unlock()
-	c.NwdafName = nwdafName
-	c.nrfUri = nrfUri
-	c.nrfCertPem = strings.TrimSpace(nrfCertPem)
+	c.NwdafName = config.NwdafName
+	c.nrfUri = config.NrfURI
+	c.nrfCertPem = strings.TrimSpace(config.NrfCertPEM)
 	c.nfProfile = profile
 	c.registered = false
 	c.registrationUri = ""
 	c.oauth2Required = false
 	c.heartBeatTimer = 0
 	return nil
+}
+
+func (c *NWDAFContext) serviceMetadata(
+	serviceName models.ServiceName,
+) (string, string, string, error) {
+	switch serviceName {
+	case models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION:
+		return c.nfServiceInstanceId,
+			nwdafEventsSubscriptionAPIVersion,
+			nwdafEventsSubscriptionAPIFullVersion,
+			nil
+	case models.ServiceName_NNWDAF_MLMODELPROVISION:
+		return c.mlModelProvisionServiceInstanceID,
+			nwdafMLModelProvisionAPIVersion,
+			nwdafMLModelProvisionAPIFullVersion,
+			nil
+	case nwdafMLModelMonitorServiceName:
+		return c.mlModelMonitorServiceInstanceID,
+			nwdafMLModelMonitorAPIVersion,
+			nwdafMLModelMonitorAPIFullVersion,
+			nil
+	default:
+		return "", "", "", fmt.Errorf("unsupported NWDAF service %q", serviceName)
+	}
 }
 
 func buildNwdafService(
@@ -471,7 +473,24 @@ func (c *NWDAFContext) NFProfile() models.NrfNfManagementNfProfile {
 	}
 	c.nfManagementMu.RLock()
 	defer c.nfManagementMu.RUnlock()
-	return c.nfProfile
+	return c.nfProfile.NrfNfManagementNfProfile
+}
+
+func (c *NWDAFContext) NFProfileSnapshot() (compatnrf.NFProfile, error) {
+	if c == nil {
+		return compatnrf.NFProfile{}, fmt.Errorf("NWDAF context is nil")
+	}
+	c.nfManagementMu.RLock()
+	defer c.nfManagementMu.RUnlock()
+	encoded, err := json.Marshal(c.nfProfile)
+	if err != nil {
+		return compatnrf.NFProfile{}, fmt.Errorf("encode NF profile snapshot: %w", err)
+	}
+	var snapshot compatnrf.NFProfile
+	if err = json.Unmarshal(encoded, &snapshot); err != nil {
+		return compatnrf.NFProfile{}, fmt.Errorf("decode NF profile snapshot: %w", err)
+	}
+	return snapshot, nil
 }
 
 func (c *NWDAFContext) MarkRegistered(resourceURI string) {

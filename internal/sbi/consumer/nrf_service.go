@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,7 +24,10 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/sync/singleflight"
 
+	"github.com/free5gc/nwdaf/internal/backend"
+	compatnrf "github.com/free5gc/nwdaf/internal/compat/nrf"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
+	"github.com/free5gc/nwdaf/internal/logger"
 	"github.com/free5gc/openapi"
 	"github.com/free5gc/openapi/models"
 	"github.com/free5gc/openapi/nrf/AccessToken"
@@ -55,6 +59,7 @@ type NFManagementService interface {
 type NrfService struct {
 	mu                  sync.Mutex
 	nfManagementClients map[string]*NFManagement.APIClient
+	nfManagementHTTP    map[string]*http.Client
 	nfDiscoveryClients  map[string]*NFDiscovery.APIClient
 	accessTokenClients  map[string]*AccessToken.APIClient
 	httpClientFactory   func(string) (*http.Client, error)
@@ -65,17 +70,18 @@ type NrfService struct {
 	discoveryGroup      singleflight.Group
 }
 
-type NFDiscoveryQuery struct {
-	TargetNFType    models.NrfNfManagementNfType
-	RequesterNFType models.NrfNfManagementNfType
-	ServiceNames    []models.ServiceName
-}
-
 // NFDiscoveryResult keeps the generated model for Go callers while retaining
 // the complete peer JSON envelope for backend pass-through and cache hits.
 type NFDiscoveryResult struct {
 	models.SearchResult
-	raw map[string]json.RawMessage
+	raw      map[string]json.RawMessage
+	profiles []compatnrf.NFProfile
+}
+
+func (r NFDiscoveryResult) CompatibilityProfiles() []compatnrf.NFProfile {
+	profiles := make([]compatnrf.NFProfile, len(r.profiles))
+	copy(profiles, r.profiles)
+	return profiles
 }
 
 func (r NFDiscoveryResult) MarshalJSON() ([]byte, error) {
@@ -135,6 +141,7 @@ func (t rawDiscoveryCaptureTransport) RoundTrip(request *http.Request) (*http.Re
 func newNrfService() *NrfService {
 	return &NrfService{
 		nfManagementClients: make(map[string]*NFManagement.APIClient),
+		nfManagementHTTP:    make(map[string]*http.Client),
 		nfDiscoveryClients:  make(map[string]*NFDiscovery.APIClient),
 		accessTokenClients:  make(map[string]*AccessToken.APIClient),
 		httpClientFactory:   newNRFHTTPClient,
@@ -143,6 +150,27 @@ func newNrfService() *NrfService {
 		now:                 time.Now,
 		discoveryCache:      make(map[string]cachedDiscovery),
 	}
+}
+
+func (s *NrfService) getNFManagementHTTPClient(nrfURI string) (*http.Client, error) {
+	if nrfURI == "" {
+		return nil, errors.New("NRF URI is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if client, ok := s.nfManagementHTTP[nrfURI]; ok {
+		return client, nil
+	}
+	httpClientFactory := s.httpClientFactory
+	if httpClientFactory == nil {
+		httpClientFactory = newNRFHTTPClient
+	}
+	client, err := httpClientFactory(nrfURI)
+	if err != nil {
+		return nil, err
+	}
+	s.nfManagementHTTP[nrfURI] = client
+	return client, nil
 }
 
 func (s *NrfService) getNFDiscoveryClient(nrfURI string) (*NFDiscovery.APIClient, error) {
@@ -302,12 +330,12 @@ func (e *NFDiscoveryError) RedirectLocation() string {
 func (s *NrfService) DiscoverNFInstances(
 	ctx context.Context,
 	nwdafCtx *nwdaf_context.NWDAFContext,
-	query NFDiscoveryQuery,
+	query backend.NFDiscoveryQuery,
 ) (*NFDiscoveryResult, error) {
 	if nwdafCtx == nil {
 		return nil, errors.New("NWDAF context is unavailable")
 	}
-	client, err := s.getNFDiscoveryClient(nwdafCtx.NrfUri())
+	client, err := s.getNFManagementHTTPClient(nwdafCtx.NrfUri())
 	if err != nil {
 		return nil, fmt.Errorf("create NRF NFDiscovery client: %w", err)
 	}
@@ -340,50 +368,60 @@ func (s *NrfService) DiscoverNFInstances(
 	s.mu.Unlock()
 
 	value, err, _ := s.discoveryGroup.Do(key, func() (any, error) {
-		request := &NFDiscovery.SearchNFInstancesRequest{}
-		request.SetTargetNfType(query.TargetNFType)
-		request.SetRequesterNfType(query.RequesterNFType)
-		request.SetRequesterNfInstanceId(nwdafCtx.NfId)
-		request.SetServiceNames(query.ServiceNames)
-
-		capture := &rawDiscoveryCapture{}
-		capturedContext := context.WithValue(
-			requestCtx,
-			rawDiscoveryCaptureContextKey{},
-			capture,
+		endpoint, buildErr := buildNFDiscoveryURL(
+			nwdafCtx.NrfUri(),
+			nwdafCtx.NfId,
+			query,
 		)
-		response, searchErr := client.NFInstancesStoreApi.SearchNFInstances(capturedContext, request)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		request, requestErr := http.NewRequestWithContext(
+			requestCtx,
+			http.MethodGet,
+			endpoint,
+			nil,
+		)
+		if requestErr != nil {
+			return nil, fmt.Errorf("create NRF discovery request: %w", requestErr)
+		}
+		request.Header.Set("Accept", "application/json, application/problem+json")
+		if source, ok := requestCtx.Value(openapi.ContextOAuth2).(oauth2.TokenSource); ok {
+			token, tokenErr := source.Token()
+			if tokenErr != nil {
+				return nil, fmt.Errorf("obtain NRF discovery access token: %w", tokenErr)
+			}
+			token.SetAuthHeader(request)
+		}
+		response, searchErr := client.Do(request)
 		if searchErr != nil {
 			if ctx.Err() != nil {
-				return nil, fmt.Errorf("NRF SMF discovery canceled: %w", ctx.Err())
+				return nil, fmt.Errorf("NRF discovery canceled: %w", ctx.Err())
 			}
-			var apiErr openapi.GenericOpenAPIError
-			if errors.As(searchErr, &apiErr) {
-				standardError := &NFDiscoveryError{StatusCode: apiErr.ErrorStatus}
-				switch model := apiErr.Model().(type) {
-				case NFDiscovery.SearchNFInstancesError:
-					standardError.Location = model.Location
-					standardError.ProblemDetails = model.ProblemDetails
-				case *NFDiscovery.SearchNFInstancesError:
-					if model != nil {
-						standardError.Location = model.Location
-						standardError.ProblemDetails = model.ProblemDetails
-					}
-				case models.ProblemDetails:
-					standardError.ProblemDetails = model
-				case *models.ProblemDetails:
-					if model != nil {
-						standardError.ProblemDetails = *model
-					}
+			return nil, fmt.Errorf("NRF discovery failed: %w", searchErr)
+		}
+		defer func() {
+			if closeErr := response.Body.Close(); closeErr != nil {
+				logger.ConsLog.Warnf("Close NRF discovery response body: %v", closeErr)
+			}
+		}()
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, 8<<20))
+		if readErr != nil {
+			return nil, fmt.Errorf("read NRF discovery response: %w", readErr)
+		}
+		if response.StatusCode != http.StatusOK {
+			standardError := &NFDiscoveryError{
+				StatusCode: response.StatusCode,
+				Location:   response.Header.Get("Location"),
+			}
+			if len(bytes.TrimSpace(body)) > 0 {
+				if decodeErr := json.Unmarshal(body, &standardError.ProblemDetails); decodeErr != nil {
+					standardError.ProblemDetails.Detail = "NRF returned a malformed problem response"
 				}
-				return nil, standardError
 			}
-			return nil, fmt.Errorf("NRF SMF discovery failed: %w", searchErr)
+			return nil, standardError
 		}
-		if response == nil {
-			return nil, errors.New("malformed NRF SMF discovery success: response is nil")
-		}
-		result, parseErr := parseNFDiscoveryResult(capture.body, response.SearchResult)
+		result, parseErr := parseNFDiscoveryResult(body)
 		if parseErr != nil {
 			return nil, fmt.Errorf("malformed NRF discovery success: %w", parseErr)
 		}
@@ -423,7 +461,6 @@ func (s *NrfService) DiscoverNFInstances(
 
 func parseNFDiscoveryResult(
 	raw []byte,
-	typed models.SearchResult,
 ) (NFDiscoveryResult, error) {
 	var envelope map[string]json.RawMessage
 	if len(raw) == 0 {
@@ -448,29 +485,200 @@ func parseNFDiscoveryResult(
 	if err := json.Unmarshal(rawInstances, &instances); err != nil {
 		return NFDiscoveryResult{}, errors.New("nfInstances is invalid")
 	}
+	var typed models.SearchResult
+	if err := json.Unmarshal(raw, &typed); err != nil {
+		return NFDiscoveryResult{}, fmt.Errorf("generated SearchResult decode failed: %w", err)
+	}
+	profiles := make([]compatnrf.NFProfile, 0, len(instances))
+	for index, instance := range instances {
+		var profile compatnrf.NFProfile
+		if err := json.Unmarshal(instance, &profile); err != nil {
+			return NFDiscoveryResult{}, fmt.Errorf("nfInstances[%d] is invalid: %w", index, err)
+		}
+		profiles = append(profiles, profile)
+	}
 	if typed.NfInstances == nil {
 		typed.NfInstances = []models.NrfNfDiscoveryNfProfile{}
 	}
 	typed.ValidityPeriod = validity
-	return NFDiscoveryResult{SearchResult: typed, raw: envelope}, nil
+	return NFDiscoveryResult{SearchResult: typed, raw: envelope, profiles: profiles}, nil
 }
 
-func discoveryCacheKey(query NFDiscoveryQuery, nrfURI, requesterNFInstanceID string) string {
-	names := make([]string, len(query.ServiceNames))
-	for index, name := range query.ServiceNames {
-		names[index] = string(name)
+func discoveryCacheKey(
+	query backend.NFDiscoveryQuery,
+	nrfURI,
+	requesterNFInstanceID string,
+) string {
+	values, err := serializeNFDiscoveryQuery(requesterNFInstanceID, query)
+	if err != nil {
+		return "invalid|" + err.Error()
 	}
-	sort.Strings(names)
-	return nrfURI + "|" + requesterNFInstanceID + "|" +
-		string(query.TargetNFType) + "|" + string(query.RequesterNFType) + "|" +
-		strings.Join(names, ",")
+	return strings.TrimRight(nrfURI, "/") + "|" + values.Encode()
+}
+
+func buildNFDiscoveryURL(
+	nrfURI string,
+	requesterNFInstanceID string,
+	query backend.NFDiscoveryQuery,
+) (string, error) {
+	endpoint, err := url.JoinPath(nrfURI, "nnrf-disc", "v1", "nf-instances")
+	if err != nil {
+		return "", fmt.Errorf("build NRF discovery endpoint: %w", err)
+	}
+	values, err := serializeNFDiscoveryQuery(requesterNFInstanceID, query)
+	if err != nil {
+		return "", err
+	}
+	return endpoint + "?" + values.Encode(), nil
+}
+
+func serializeNFDiscoveryQuery(
+	requesterNFInstanceID string,
+	query backend.NFDiscoveryQuery,
+) (url.Values, error) {
+	values := url.Values{}
+	values.Set("target-nf-type", string(query.TargetNFType))
+	values.Set("requester-nf-type", string(query.RequesterNFType))
+	values.Set("requester-nf-instance-id", requesterNFInstanceID)
+	if query.TargetNFInstanceID != "" {
+		values.Set("target-nf-instance-id", query.TargetNFInstanceID)
+	}
+	if len(query.ServiceNames) > 0 {
+		names := make([]string, 0, len(query.ServiceNames))
+		for _, name := range query.ServiceNames {
+			names = append(names, string(name))
+		}
+		values.Set("service-names", strings.Join(sortedUniqueStrings(names), ","))
+	}
+	if len(query.NwdafEventList) > 0 {
+		events := make([]string, 0, len(query.NwdafEventList))
+		for _, event := range query.NwdafEventList {
+			events = append(events, string(event))
+		}
+		values.Set("nwdaf-event-list", strings.Join(sortedUniqueStrings(events), ","))
+	}
+	if query.MLAnalyticsInfoList != nil {
+		canonical, err := canonicalMLAnalyticsInfoList(query.MLAnalyticsInfoList)
+		if err != nil {
+			return nil, fmt.Errorf("encode ml-analytics-info-list: %w", err)
+		}
+		values.Set("ml-analytics-info-list", string(canonical))
+	}
+	if query.InternalGroupIdentity != "" {
+		values.Set("internal-group-identity", query.InternalGroupIdentity)
+	}
+	if query.MLModelStorageInd != nil {
+		values.Set("ml-model-storage-ind", strconv.FormatBool(*query.MLModelStorageInd))
+	}
+	if query.DataStorageInd != nil {
+		values.Set("data-storage-ind", strconv.FormatBool(*query.DataStorageInd))
+	}
+	return values, nil
+}
+
+func canonicalMLAnalyticsInfoList(
+	input []compatnrf.MLAnalyticsInfo,
+) ([]byte, error) {
+	if len(input) == 0 {
+		return nil, errors.New("list must contain at least one entry")
+	}
+	entries := make([]json.RawMessage, 0, len(input))
+	for _, value := range input {
+		value.MLAnalyticsIDs = sortedUniqueNwdafEvents(value.MLAnalyticsIDs)
+		value.SNSSAIList = sortedUniqueJSONValues(value.SNSSAIList)
+		value.TrackingAreaList = sortedUniqueJSONValues(value.TrackingAreaList)
+		value.NFTypeList = sortedUniqueNFTypes(value.NFTypeList)
+		value.NFSetIDList = sortedUniqueStrings(value.NFSetIDList)
+		if value.MLModelInteroperabilityInfo != nil {
+			value.MLModelInteroperabilityInfo.VendorList = sortedUniqueStrings(
+				value.MLModelInteroperabilityInfo.VendorList,
+			)
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, encoded)
+	}
+	sort.Slice(entries, func(left, right int) bool {
+		return bytes.Compare(entries[left], entries[right]) < 0
+	})
+	return json.Marshal(entries)
+}
+
+func sortedUniqueNwdafEvents(values []models.NwdafEvent) []models.NwdafEvent {
+	stringsValue := make([]string, 0, len(values))
+	for _, value := range values {
+		stringsValue = append(stringsValue, string(value))
+	}
+	normalized := sortedUniqueStrings(stringsValue)
+	result := make([]models.NwdafEvent, 0, len(normalized))
+	for _, value := range normalized {
+		result = append(result, models.NwdafEvent(value))
+	}
+	return result
+}
+
+func sortedUniqueNFTypes(
+	values []models.NrfNfManagementNfType,
+) []models.NrfNfManagementNfType {
+	stringsValue := make([]string, 0, len(values))
+	for _, value := range values {
+		stringsValue = append(stringsValue, string(value))
+	}
+	normalized := sortedUniqueStrings(stringsValue)
+	result := make([]models.NrfNfManagementNfType, 0, len(normalized))
+	for _, value := range normalized {
+		result = append(result, models.NrfNfManagementNfType(value))
+	}
+	return result
+}
+
+func sortedUniqueJSONValues[T any](values []T) []T {
+	byJSON := make(map[string]T, len(values))
+	keys := make([]string, 0, len(values))
+	for _, value := range values {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			continue
+		}
+		key := string(encoded)
+		if _, exists := byJSON[key]; exists {
+			continue
+		}
+		byJSON[key] = value
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := make([]T, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, byJSON[key])
+	}
+	return result
+}
+
+func sortedUniqueStrings(values []string) []string {
+	result := append([]string(nil), values...)
+	sort.Strings(result)
+	if len(result) == 0 {
+		return result
+	}
+	write := 1
+	for read := 1; read < len(result); read++ {
+		if result[read] == result[write-1] {
+			continue
+		}
+		result[write] = result[read]
+		write++
+	}
+	return result[:write]
 }
 
 func (s *NrfService) DiscoverSmfProfiles(
 	ctx context.Context,
 	nwdafCtx *nwdaf_context.NWDAFContext,
 ) (*NFDiscoveryResult, error) {
-	return s.DiscoverNFInstances(ctx, nwdafCtx, NFDiscoveryQuery{
+	return s.DiscoverNFInstances(ctx, nwdafCtx, backend.NFDiscoveryQuery{
 		TargetNFType:    models.NrfNfManagementNfType_SMF,
 		RequesterNFType: models.NrfNfManagementNfType_NWDAF,
 		ServiceNames:    []models.ServiceName{models.ServiceName_NSMF_EVENT_EXPOSURE},
@@ -488,27 +696,36 @@ func (s *NrfService) RegisterNFInstance(
 		return RegistrationResult{}, errors.New("register NF instance requires NWDAF context")
 	}
 
-	profile := nwdafCtx.NFProfile()
-	if profile.NfInstanceId == "" {
-		return RegistrationResult{}, errors.New("register NF instance requires configured NF profile")
-	}
-	client, err := s.getNFManagementClient(nwdafCtx.NrfUri())
+	profile, err := nwdafCtx.NFProfileSnapshot()
 	if err != nil {
 		return RegistrationResult{}, err
 	}
-	request := &NFManagement.RegisterNFInstanceRequest{
-		NfInstanceID:             &profile.NfInstanceId,
-		NrfNfManagementNfProfile: &profile,
+	if profile.NfInstanceId == "" {
+		return RegistrationResult{}, errors.New("register NF instance requires configured NF profile")
+	}
+	client, err := s.getNFManagementHTTPClient(nwdafCtx.NrfUri())
+	if err != nil {
+		return RegistrationResult{}, err
+	}
+	endpoint, err := url.JoinPath(
+		nwdafCtx.NrfUri(),
+		"nnrf-nfm",
+		"v1",
+		"nf-instances",
+		profile.NfInstanceId,
+	)
+	if err != nil {
+		return RegistrationResult{}, fmt.Errorf("build NRF registration URI: %w", err)
+	}
+	body, err := json.Marshal(profile)
+	if err != nil {
+		return RegistrationResult{}, fmt.Errorf("encode Release 18 NF profile: %w", err)
 	}
 
 	startedAt := time.Now()
 	for attempt := 1; ; attempt++ {
-		response, registerErr := client.NFInstanceIDDocumentApi.RegisterNFInstance(ctx, request)
+		result, registerErr := registerNFProfile(ctx, client, endpoint, body, profile.NfInstanceId)
 		if registerErr == nil {
-			result, validateErr := validateRegistrationResponse(response, profile.NfInstanceId)
-			if validateErr != nil {
-				return result, validateErr
-			}
 			if attempt > 1 {
 				consumerLog.Infof(
 					"NRF registration recovered after %d attempts in %s",
@@ -523,9 +740,6 @@ func (s *NrfService) RegisterNFInstance(
 			return RegistrationResult{}, fmt.Errorf("register NF instance canceled: %w", ctx.Err())
 		}
 		if !isRetryableRegistrationError(registerErr) {
-			result := RegistrationResult{
-				RemoteRegistered: isPotentialRegistrationResponseError(registerErr),
-			}
 			return result, classifyRegistrationError(registerErr)
 		}
 
@@ -549,6 +763,125 @@ func (s *NrfService) RegisterNFInstance(
 			return RegistrationResult{}, waitErr
 		}
 	}
+}
+
+type registrationHTTPError struct {
+	statusCode     int
+	location       string
+	problemDetails models.ProblemDetails
+}
+
+func (e *registrationHTTPError) Error() string {
+	return fmt.Sprintf("NRF registration HTTP status=%d", e.statusCode)
+}
+
+func registerNFProfile(
+	ctx context.Context,
+	client *http.Client,
+	endpoint string,
+	body []byte,
+	expectedInstanceID string,
+) (RegistrationResult, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return RegistrationResult{}, fmt.Errorf("create NRF registration request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, application/problem+json")
+	response, err := client.Do(request)
+	if err != nil {
+		return RegistrationResult{}, err
+	}
+	defer func() {
+		if closeErr := response.Body.Close(); closeErr != nil {
+			logger.ConsLog.Warnf("Close NRF registration response body: %v", closeErr)
+		}
+	}()
+	responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+	if readErr != nil {
+		return RegistrationResult{}, fmt.Errorf("read NRF registration response: %w", readErr)
+	}
+
+	switch response.StatusCode {
+	case http.StatusOK, http.StatusCreated:
+		result := RegistrationResult{
+			RemoteRegistered: true,
+			ResourceURI:      response.Header.Get("Location"),
+		}
+		if response.StatusCode == http.StatusCreated && result.ResourceURI == "" {
+			return result, errors.New("malformed NRF registration success: Location is required for 201")
+		}
+		var profile compatnrf.NFProfile
+		if len(bytes.TrimSpace(responseBody)) == 0 {
+			return result, errors.New("malformed NRF registration success: response body is empty")
+		}
+		if err = json.Unmarshal(responseBody, &profile); err != nil {
+			return result, fmt.Errorf("malformed NRF registration success: %w", err)
+		}
+		result.HeartBeatTimer = profile.HeartBeatTimer
+		if profile.CustomInfo != nil {
+			if value, ok := profile.CustomInfo["oauth2"]; ok {
+				oauth2Required, valid := value.(bool)
+				if !valid {
+					return result, errors.New(
+						"malformed NRF registration success: customInfo.oauth2 is not boolean",
+					)
+				}
+				result.OAuth2Required = oauth2Required
+			}
+		}
+		if err = validateRegistrationProfile(&profile, expectedInstanceID, result.ResourceURI); err != nil {
+			return result, err
+		}
+		return result, nil
+	default:
+		httpErr := &registrationHTTPError{
+			statusCode: response.StatusCode,
+			location:   response.Header.Get("Location"),
+		}
+		if len(bytes.TrimSpace(responseBody)) > 0 {
+			if decodeErr := json.Unmarshal(responseBody, &httpErr.problemDetails); decodeErr != nil {
+				httpErr.problemDetails.Detail = "NRF returned a malformed problem response"
+			}
+		}
+		return RegistrationResult{}, httpErr
+	}
+}
+
+func validateRegistrationProfile(
+	profile *compatnrf.NFProfile,
+	expectedInstanceID string,
+	locationValue string,
+) error {
+	if profile == nil {
+		return errors.New("malformed NRF registration success: profile is missing")
+	}
+	if profile.NfInstanceId == "" {
+		return errors.New("malformed NRF registration success: nfInstanceId is missing")
+	}
+	if profile.NfInstanceId != expectedInstanceID {
+		return fmt.Errorf(
+			"malformed NRF registration success: nfInstanceId %q does not match %q",
+			profile.NfInstanceId,
+			expectedInstanceID,
+		)
+	}
+	if profile.NfType != models.NrfNfManagementNfType_NWDAF {
+		return fmt.Errorf("malformed NRF registration success: nfType is %q", profile.NfType)
+	}
+	if profile.NfStatus != models.NrfNfManagementNfStatus_REGISTERED {
+		return fmt.Errorf("malformed NRF registration success: nfStatus is %q", profile.NfStatus)
+	}
+	if locationValue != "" {
+		location, err := url.Parse(locationValue)
+		if err != nil || path.Base(location.Path) != expectedInstanceID {
+			return fmt.Errorf(
+				"malformed NRF registration success: Location does not identify NF instance %q",
+				expectedInstanceID,
+			)
+		}
+	}
+	return nil
 }
 
 func (s *NrfService) DeregisterNFInstance(
@@ -659,77 +992,12 @@ func (s *NrfService) getTokenContext(
 	return context.WithValue(ctx, openapi.ContextOAuth2, oauth2.StaticTokenSource(token)), nil
 }
 
-func validateRegistrationResponse(
-	response *NFManagement.RegisterNFInstanceResponse,
-	expectedInstanceID string,
-) (RegistrationResult, error) {
-	result := RegistrationResult{RemoteRegistered: true}
-	if response == nil {
-		return result, errors.New("malformed NRF registration success: response is nil")
-	}
-	profile := response.NrfNfManagementNfProfile
-	result.ResourceURI = response.Location
-	result.HeartBeatTimer = profile.HeartBeatTimer
-	if profile.CustomInfo != nil {
-		value, ok := profile.CustomInfo["oauth2"]
-		if ok {
-			oauth2Required, valid := value.(bool)
-			if !valid {
-				return result, errors.New("malformed NRF registration success: customInfo.oauth2 is not boolean")
-			}
-			result.OAuth2Required = oauth2Required
-		}
-	}
-	if profile.NfInstanceId == "" {
-		return result, errors.New("malformed NRF registration success: nfInstanceId is missing")
-	}
-	if profile.NfInstanceId != expectedInstanceID {
-		return result, fmt.Errorf(
-			"malformed NRF registration success: nfInstanceId %q does not match %q",
-			profile.NfInstanceId,
-			expectedInstanceID,
-		)
-	}
-	if profile.NfType != models.NrfNfManagementNfType_NWDAF {
-		return result, fmt.Errorf(
-			"malformed NRF registration success: nfType is %q",
-			profile.NfType,
-		)
-	}
-	if profile.NfStatus != models.NrfNfManagementNfStatus_REGISTERED {
-		return result, fmt.Errorf(
-			"malformed NRF registration success: nfStatus is %q",
-			profile.NfStatus,
-		)
-	}
-
-	if response.Location != "" {
-		location, err := url.Parse(response.Location)
-		if err != nil || path.Base(location.Path) != expectedInstanceID {
-			return result, fmt.Errorf(
-				"malformed NRF registration success: Location does not identify NF instance %q",
-				expectedInstanceID,
-			)
-		}
-	}
-
-	return result, nil
-}
-
-func isPotentialRegistrationResponseError(err error) bool {
-	var apiErr openapi.GenericOpenAPIError
-	if errors.As(err, &apiErr) {
-		return false
-	}
-	var urlError *url.Error
-	if errors.As(err, &urlError) {
-		return false
-	}
-	var networkError net.Error
-	return !errors.As(err, &networkError)
-}
-
 func isRetryableRegistrationError(err error) bool {
+	var httpErr *registrationHTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.statusCode >= http.StatusInternalServerError &&
+			httpErr.statusCode <= http.StatusNetworkAuthenticationRequired
+	}
 	var apiErr openapi.GenericOpenAPIError
 	if errors.As(err, &apiErr) {
 		return apiErr.ErrorStatus >= http.StatusInternalServerError &&
@@ -757,6 +1025,21 @@ func isRetryableRegistrationError(err error) bool {
 }
 
 func classifyRegistrationError(err error) error {
+	var httpErr *registrationHTTPError
+	if errors.As(err, &httpErr) {
+		switch httpErr.statusCode {
+		case http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+			return fmt.Errorf("%w: status=%d", ErrUnsupportedNRFRedirect, httpErr.statusCode)
+		default:
+			if httpErr.statusCode >= http.StatusOK && httpErr.statusCode < http.StatusMultipleChoices {
+				return fmt.Errorf(
+					"unexpected NRF registration success: status=%d; contract supports only 200 and 201",
+					httpErr.statusCode,
+				)
+			}
+			return fmt.Errorf("register NF instance rejected by NRF: status=%d", httpErr.statusCode)
+		}
+	}
 	var apiErr openapi.GenericOpenAPIError
 	if errors.As(err, &apiErr) {
 		switch apiErr.ErrorStatus {
