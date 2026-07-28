@@ -26,7 +26,7 @@ type MLModelProvisionSubscription struct {
 	MLEventNotifications []MLEventNotification `json:"mLEventNotifs,omitempty"`
 	SupportedFeatures    string                `json:"suppFeats,omitempty"`
 	NotificationID       string                `json:"notifCorreId,omitempty"`
-	EventRequest         json.RawMessage       `json:"eventReq,omitempty"`
+	EventRequest         *ReportingInformation `json:"eventReq,omitempty"`
 	FailureEventReports  []json.RawMessage     `json:"failEventReports,omitempty"`
 }
 
@@ -87,7 +87,7 @@ type MLModelMonitorSubscription struct {
 	NotificationID     string                      `json:"notifCorrId"`
 	ModelMetric        string                      `json:"modelMetric,omitempty"`
 	AccuracyThreshold  *int64                      `json:"accuThreshold,omitempty"`
-	EventReportRequest json.RawMessage             `json:"eventReportReq,omitempty"`
+	EventReportRequest *ReportingInformation       `json:"eventReportReq,omitempty"`
 	ImmediateReport    *MLModelMonitorNotification `json:"immReport,omitempty"`
 	MLEvent            models.NwdafEvent           `json:"mLEvent,omitempty"`
 	MLEventFilter      json.RawMessage             `json:"mLEventFilter,omitempty"`
@@ -155,6 +155,9 @@ func ParseMLModelProvisionSubscription(body []byte) (*MLModelProvisionSubscripti
 	if value.FailureEventReports != nil && len(value.FailureEventReports) == 0 {
 		return nil, errors.New("failEventReports must contain at least one item when present")
 	}
+	if err := ValidateReportingInformation(value.EventRequest); err != nil {
+		return nil, fmt.Errorf("eventReq: %w", err)
+	}
 	return &value, nil
 }
 
@@ -174,7 +177,7 @@ func ParseMLModelProvisionNotifications(body []byte) ([]MLModelProvisionNotifica
 			return nil, fmt.Errorf("notifications[%d].eventNotifs must contain at least one item", index)
 		}
 		for eventIndex, event := range value.EventNotifications {
-			if err := validateMLEventNotification(event); err != nil {
+			if err := ValidateMLEventNotification(event); err != nil {
 				return nil, fmt.Errorf("notifications[%d].eventNotifs[%d]: %w", index, eventIndex, err)
 			}
 		}
@@ -229,6 +232,9 @@ func ParseMLModelMonitorSubscription(body []byte) (*MLModelMonitorSubscription, 
 	if value.AccuracyThreshold != nil && *value.AccuracyThreshold < 0 {
 		return nil, errors.New("accuThreshold must be non-negative")
 	}
+	if err := ValidateReportingInformation(value.EventReportRequest); err != nil {
+		return nil, fmt.Errorf("eventReportReq: %w", err)
+	}
 	if value.ImmediateReport != nil {
 		if err := validateMLModelMonitorNotification(*value.ImmediateReport); err != nil {
 			return nil, fmt.Errorf("immReport: %w", err)
@@ -263,7 +269,7 @@ func ReplaceStringField(body []byte, field, value string) ([]byte, error) {
 	return json.Marshal(object)
 }
 
-func validateMLEventNotification(value MLEventNotification) error {
+func ValidateMLEventNotification(value MLEventNotification) error {
 	if value.Event == "" {
 		return errors.New("event is required")
 	}
