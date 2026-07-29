@@ -31,9 +31,9 @@ type SmfServiceClient interface {
 type Consumer struct {
 	nwdaf
 
-	smfService              SmfServiceClient
-	mlModelProvisionService *MLModelProvisionService
-	nrfService              *NrfService
+	smfService            SmfServiceClient
+	nrfService            *NrfService
+	mlModelPeerHTTPClient *http.Client
 
 	adrfClientsMu sync.Mutex
 	adrfClients   map[string]*AdrfClient
@@ -42,14 +42,13 @@ type Consumer struct {
 func newConsumerWithServices(
 	nwdaf nwdaf,
 	smfService SmfServiceClient,
-	mlModelProvisionService *MLModelProvisionService,
 ) *Consumer {
 	return &Consumer{
-		nwdaf:                   nwdaf,
-		smfService:              smfService,
-		mlModelProvisionService: mlModelProvisionService,
-		nrfService:              newNrfService(),
-		adrfClients:             make(map[string]*AdrfClient),
+		nwdaf:                 nwdaf,
+		smfService:            smfService,
+		nrfService:            newNrfService(),
+		mlModelPeerHTTPClient: http.DefaultClient,
+		adrfClients:           make(map[string]*AdrfClient),
 	}
 }
 
@@ -58,7 +57,6 @@ func NewConsumer(nwdaf nwdaf) (*Consumer, error) {
 	c := newConsumerWithServices(
 		nwdaf,
 		NewNsmfService(),
-		NewMLModelProvisionService(),
 	)
 
 	consumerLog.Info("Consumer initialized")
@@ -103,10 +101,6 @@ func (c *Consumer) smfRequestContext(ctx context.Context) (context.Context, erro
 
 func (c *Consumer) SmfService() SmfServiceClient {
 	return c.smfService
-}
-
-func (c *Consumer) MLModelProvisionService() *MLModelProvisionService {
-	return c.mlModelProvisionService
 }
 
 func (c *Consumer) StoreAdrfDataRecord(

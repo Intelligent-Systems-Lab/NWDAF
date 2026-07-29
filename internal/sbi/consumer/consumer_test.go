@@ -54,8 +54,6 @@ func TestNewConsumer(t *testing.T) {
 		t.Fatal("NewConsumer() returned nil")
 	} else if c.SmfService() == nil {
 		t.Error("SMF service should be initialized")
-	} else if c.MLModelProvisionService() == nil {
-		t.Error("ML Model Provision service should be initialized")
 	}
 }
 

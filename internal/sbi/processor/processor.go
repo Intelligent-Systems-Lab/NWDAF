@@ -54,17 +54,41 @@ type backendAvailability interface {
 	Refresh()
 }
 
+type mlModelPeerConsumer interface {
+	CreatePeerMLModelProvision(
+		context.Context,
+		backend.SelectedTarget,
+		[]byte,
+	) (*backend.StandardResponse, error)
+	ReplacePeerMLModelProvision(context.Context, string, []byte) (*backend.StandardResponse, error)
+	DeletePeerMLModelProvision(context.Context, string) (*backend.StandardResponse, error)
+	CreatePeerMLModelMonitorRegistration(
+		context.Context,
+		backend.SelectedTarget,
+		[]byte,
+	) (*backend.StandardResponse, error)
+	DeletePeerMLModelMonitorRegistration(context.Context, string) (*backend.StandardResponse, error)
+	CreatePeerMLModelMonitorSubscription(
+		context.Context,
+		backend.SelectedTarget,
+		[]byte,
+	) (*backend.StandardResponse, error)
+	ReplacePeerMLModelMonitorSubscription(context.Context, string, []byte) (*backend.StandardResponse, error)
+	DeletePeerMLModelMonitorSubscription(context.Context, string) (*backend.StandardResponse, error)
+}
+
 type Processor struct {
-	nwdaf              NwdafApp
-	eventsBackend      eventsSubscriptionBackend
-	eventsAvailability backendAvailability
-	eventsMu           sync.Mutex
-	mlModelMu          sync.Mutex
-	mtlfMLModelBackend mtlfMLModelBackend
-	anlfMLModelBackend anlfMLModelBackend
-	mtlfAvailability   backendAvailability
-	anlfAvailability   backendAvailability
-	mlModelHTTPClient  *http.Client
+	nwdaf               NwdafApp
+	eventsBackend       eventsSubscriptionBackend
+	eventsAvailability  backendAvailability
+	eventsMu            sync.Mutex
+	mlModelMu           sync.Mutex
+	mtlfMLModelBackend  mtlfMLModelBackend
+	anlfMLModelBackend  anlfMLModelBackend
+	mtlfAvailability    backendAvailability
+	anlfAvailability    backendAvailability
+	mlModelHTTPClient   *http.Client
+	mlModelPeerConsumer mlModelPeerConsumer
 }
 
 func (p *Processor) config() *factory.Config {
@@ -88,6 +112,10 @@ func (p *Processor) SetMLModelHTTPClient(client *http.Client) {
 	if client != nil {
 		p.mlModelHTTPClient = client
 	}
+}
+
+func (p *Processor) SetMLModelPeerConsumer(consumer mlModelPeerConsumer) {
+	p.mlModelPeerConsumer = consumer
 }
 
 func (p *Processor) SetEventsSubscriptionBackend(

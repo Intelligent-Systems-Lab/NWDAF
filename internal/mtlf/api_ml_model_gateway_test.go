@@ -34,6 +34,7 @@ func (s *mlModelGatewayStub) HandleCreateMLModelMonitorSubscriptionFromBackend(
 	_ context.Context,
 	body []byte,
 	ownerRegistrationID string,
+	_ *backend.SelectedTarget,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
 	s.subscriptionID = ownerRegistrationID
 	s.body = append([]byte(nil), body...)

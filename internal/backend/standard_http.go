@@ -23,10 +23,13 @@ const MaxStandardMLModelBodyBytes = 4 * 1024 * 1024
 
 // StandardResponse preserves an accepted standard-shaped backend response.
 type StandardResponse struct {
-	StatusCode  int
-	Location    string
-	ContentType string
-	Body        json.RawMessage
+	StatusCode           int
+	Location             string
+	RequestURI           string
+	EffectiveURI         string
+	PermanentRedirectURI string
+	ContentType          string
+	Body                 json.RawMessage
 }
 
 // StandardOperationContract describes the response surface declared by one
@@ -57,6 +60,88 @@ func ResourceIDFromLocation(location string) (string, error) {
 		return "", errors.New("create Location must end in a UUIDv4 resource ID")
 	}
 	return resourceID, nil
+}
+
+func ParseSelectedTargetHeaders(
+	header http.Header,
+	expectedService string,
+) (*SelectedTarget, error) {
+	values := []string{
+		strings.TrimSpace(header.Get(TargetNFInstanceIDHeader)),
+		strings.TrimSpace(header.Get(TargetNFServiceInstanceIDHeader)),
+		strings.TrimSpace(header.Get(TargetAPIRootHeader)),
+		strings.TrimSpace(header.Get(TargetSelectionSourceHeader)),
+	}
+	present := 0
+	for _, value := range values {
+		if value != "" {
+			present++
+		}
+	}
+	if present == 0 {
+		return nil, nil
+	}
+	if present != len(values) {
+		return nil, errors.New("all selected target headers are required when routing to a peer")
+	}
+	nfID, err := uuid.Parse(values[0])
+	if err != nil || nfID.Version() != 4 {
+		return nil, errors.New("selected target NF instance ID must be a UUIDv4")
+	}
+	if values[1] == "" {
+		return nil, errors.New("selected target NF service instance ID is required")
+	}
+	apiRoot, err := ValidateAbsoluteHTTPURI(values[2], false)
+	if err != nil {
+		return nil, fmt.Errorf("selected target API root: %w", err)
+	}
+	parsedAPIRoot, err := url.Parse(apiRoot)
+	if err != nil || parsedAPIRoot.RawQuery != "" {
+		return nil, errors.New("selected target API root must not contain a query")
+	}
+	if values[3] != SelectionSourceNRF && values[3] != SelectionSourceConfigured {
+		return nil, errors.New("selected target source must be NRF or CONFIGURED")
+	}
+	if strings.TrimSpace(expectedService) == "" {
+		return nil, errors.New("selected target expected service is required")
+	}
+	return &SelectedTarget{
+		NFInstanceID:        nfID.String(),
+		NFServiceInstanceID: values[1],
+		ServiceName:         expectedService,
+		APIRoot:             apiRoot,
+		SelectionSource:     values[3],
+	}, nil
+}
+
+func ValidateAbsoluteHTTPURI(value string, allowFragment bool) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", errors.New("must be an absolute HTTP(S) URI")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", errors.New("must use HTTP or HTTPS")
+	}
+	if parsed.User != nil {
+		return "", errors.New("must not contain userinfo")
+	}
+	if !allowFragment && parsed.Fragment != "" {
+		return "", errors.New("must not contain a fragment")
+	}
+	return parsed.String(), nil
+}
+
+func ResolvePeerLocation(effectiveRequestURI, location string) (string, error) {
+	base, err := url.Parse(strings.TrimSpace(effectiveRequestURI))
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return "", errors.New("effective peer request URI is invalid")
+	}
+	reference, err := url.Parse(strings.TrimSpace(location))
+	if err != nil || strings.TrimSpace(location) == "" {
+		return "", errors.New("create response is missing a valid Location")
+	}
+	resolved := base.ResolveReference(reference)
+	return ValidateAbsoluteHTTPURI(resolved.String(), false)
 }
 
 // StandardError represents a well-formed ProblemDetails response from a
@@ -135,6 +220,7 @@ func ExecuteStandardRequest(
 		request.Header.Set("Content-Type", "application/json")
 	}
 	transport := *client
+	permanentRedirectURI := ""
 	transport.CheckRedirect = func(request *http.Request, via []*http.Request) error {
 		if !contract.FollowRedirects {
 			return http.ErrUseLastResponse
@@ -146,6 +232,15 @@ func ExecuteStandardRequest(
 		}
 		if len(via) >= 3 {
 			return http.ErrUseLastResponse
+		}
+		if request.URL.User != nil {
+			return errors.New("redirect URI must not contain userinfo")
+		}
+		if len(via) > 0 && via[len(via)-1].URL.Scheme == "https" && request.URL.Scheme == "http" {
+			return errors.New("redirect must not downgrade HTTPS to HTTP")
+		}
+		if request.Response.StatusCode == http.StatusPermanentRedirect {
+			permanentRedirectURI = request.URL.String()
 		}
 		return nil
 	}
@@ -168,36 +263,39 @@ func ExecuteStandardRequest(
 		return nil, &ContractError{Operation: operation, Detail: "could not close backend response"}
 	}
 	result := &StandardResponse{
-		StatusCode:  response.StatusCode,
-		Location:    response.Header.Get("Location"),
-		ContentType: response.Header.Get("Content-Type"),
-		Body:        append(json.RawMessage(nil), responseBody...),
+		StatusCode:           response.StatusCode,
+		Location:             response.Header.Get("Location"),
+		RequestURI:           requestURL,
+		EffectiveURI:         response.Request.URL.String(),
+		PermanentRedirectURI: permanentRedirectURI,
+		ContentType:          response.Header.Get("Content-Type"),
+		Body:                 append(json.RawMessage(nil), responseBody...),
 	}
 	validator, supported := contract.SuccessValidators[response.StatusCode]
 	if response.StatusCode == http.StatusTemporaryRedirect ||
 		response.StatusCode == http.StatusPermanentRedirect {
-		return nil, &ContractError{
+		return result, &ContractError{
 			Operation: operation,
 			Detail:    fmt.Sprintf("unresolved redirect status %d", response.StatusCode),
 		}
 	}
 	if response.StatusCode >= http.StatusBadRequest {
 		if _, declared := contract.ErrorStatuses[response.StatusCode]; !declared {
-			return nil, &ContractError{
+			return result, &ContractError{
 				Operation: operation,
 				Detail:    fmt.Sprintf("undeclared backend error status %d", response.StatusCode),
 			}
 		}
 		mediaType, _, mediaErr := mime.ParseMediaType(result.ContentType)
 		if mediaErr != nil || mediaType != "application/problem+json" {
-			return nil, &ContractError{
+			return result, &ContractError{
 				Operation: operation,
 				Detail:    "backend error response Content-Type must be application/problem+json",
 			}
 		}
 		var problem models.ProblemDetails
 		if err = json.Unmarshal(responseBody, &problem); err != nil {
-			return nil, &ContractError{Operation: operation, Detail: "backend returned malformed ProblemDetails"}
+			return result, &ContractError{Operation: operation, Detail: "backend returned malformed ProblemDetails"}
 		}
 		return result, &StandardError{
 			StatusCode:     response.StatusCode,
@@ -206,30 +304,30 @@ func ExecuteStandardRequest(
 		}
 	}
 	if !supported {
-		return nil, &ContractError{
+		return result, &ContractError{
 			Operation: operation,
 			Detail:    fmt.Sprintf("unexpected backend success status %d", response.StatusCode),
 		}
 	}
 	if response.StatusCode == http.StatusNoContent {
 		if len(bytes.TrimSpace(responseBody)) != 0 {
-			return nil, &ContractError{Operation: operation, Detail: "204 response must not contain a body"}
+			return result, &ContractError{Operation: operation, Detail: "204 response must not contain a body"}
 		}
 		return result, nil
 	}
 	mediaType, _, mediaErr := mime.ParseMediaType(result.ContentType)
 	if mediaErr != nil || mediaType != "application/json" {
-		return nil, &ContractError{
+		return result, &ContractError{
 			Operation: operation,
 			Detail:    "backend success response Content-Type must be application/json",
 		}
 	}
 	if len(bytes.TrimSpace(responseBody)) == 0 {
-		return nil, &ContractError{Operation: operation, Detail: "backend success representation is required"}
+		return result, &ContractError{Operation: operation, Detail: "backend success representation is required"}
 	}
 	if validator != nil {
 		if err = validator(responseBody); err != nil {
-			return nil, &ContractError{
+			return result, &ContractError{
 				Operation: operation,
 				Detail:    "backend returned an invalid success representation: " + err.Error(),
 			}

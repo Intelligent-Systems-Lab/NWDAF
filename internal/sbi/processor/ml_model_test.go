@@ -24,9 +24,10 @@ const (
 )
 
 type mlModelAvailabilityStub struct {
-	usable    bool
-	marked    int
-	refreshed int
+	usable     bool
+	marked     int
+	refreshed  int
+	generation string
 }
 
 func (s *mlModelAvailabilityStub) Usable() bool { return s.usable }
@@ -34,6 +35,12 @@ func (s *mlModelAvailabilityStub) MarkUnavailable(string) {
 	s.marked++
 }
 func (s *mlModelAvailabilityStub) Refresh() { s.refreshed++ }
+func (s *mlModelAvailabilityStub) Snapshot() backend.Snapshot {
+	return backend.Snapshot{
+		State:             backend.StateUsable,
+		ProcessInstanceID: s.generation,
+	}
+}
 
 type mtlfMLModelBackendStub struct {
 	provisionBody       []byte
@@ -133,6 +140,166 @@ type anlfMLModelBackendStub struct {
 	deleted  string
 }
 
+type mlModelPeerConsumerStub struct {
+	provisionTarget          backend.SelectedTarget
+	provisionBody            []byte
+	provisionLocation        string
+	registrationTarget       backend.SelectedTarget
+	registrationBody         []byte
+	monitorTarget            backend.SelectedTarget
+	monitorBody              []byte
+	monitorLocation          string
+	deletedProvision         string
+	deletedRegistration      string
+	deletedMonitor           string
+	provisionResponse        *backend.StandardResponse
+	provisionError           error
+	provisionReplaceResponse *backend.StandardResponse
+	provisionReplaceError    error
+	registrationResponse     *backend.StandardResponse
+	registrationError        error
+	monitorResponse          *backend.StandardResponse
+	monitorError             error
+	deleteProvisionErrors    []error
+	deleteRegistrationErrors []error
+	deleteMonitorErrors      []error
+}
+
+func (s *mlModelPeerConsumerStub) CreatePeerMLModelProvision(
+	_ context.Context,
+	target backend.SelectedTarget,
+	body []byte,
+) (*backend.StandardResponse, error) {
+	s.provisionTarget = target
+	s.provisionBody = append([]byte(nil), body...)
+	if s.provisionResponse != nil || s.provisionError != nil {
+		return s.provisionResponse, s.provisionError
+	}
+	return &backend.StandardResponse{
+		StatusCode:   http.StatusCreated,
+		Location:     "/nnwdaf-mlmodelprovision/v1/subscriptions/peer-provision",
+		EffectiveURI: "http://nwdaf-c.example/nnwdaf-mlmodelprovision/v1/subscriptions",
+		ContentType:  "application/json",
+		Body:         append([]byte(nil), body...),
+	}, nil
+}
+
+func (s *mlModelPeerConsumerStub) ReplacePeerMLModelProvision(
+	_ context.Context,
+	location string,
+	body []byte,
+) (*backend.StandardResponse, error) {
+	s.provisionLocation = location
+	s.provisionBody = append([]byte(nil), body...)
+	if s.provisionReplaceResponse != nil || s.provisionReplaceError != nil {
+		return s.provisionReplaceResponse, s.provisionReplaceError
+	}
+	return &backend.StandardResponse{
+		StatusCode:   http.StatusOK,
+		EffectiveURI: location,
+		ContentType:  "application/json",
+		Body:         append([]byte(nil), body...),
+	}, nil
+}
+
+func (s *mlModelPeerConsumerStub) DeletePeerMLModelProvision(
+	_ context.Context,
+	location string,
+) (*backend.StandardResponse, error) {
+	s.deletedProvision = location
+	if len(s.deleteProvisionErrors) > 0 {
+		err := s.deleteProvisionErrors[0]
+		s.deleteProvisionErrors = s.deleteProvisionErrors[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+}
+
+func (s *mlModelPeerConsumerStub) CreatePeerMLModelMonitorRegistration(
+	_ context.Context,
+	target backend.SelectedTarget,
+	body []byte,
+) (*backend.StandardResponse, error) {
+	s.registrationTarget = target
+	s.registrationBody = append([]byte(nil), body...)
+	if s.registrationResponse != nil || s.registrationError != nil {
+		return s.registrationResponse, s.registrationError
+	}
+	return &backend.StandardResponse{
+		StatusCode:   http.StatusCreated,
+		Location:     "peer-registration",
+		EffectiveURI: "http://nwdaf-c.example/nnwdaf-mlmodelmonitor/v1/registrations",
+		ContentType:  "application/json",
+		Body:         append([]byte(nil), body...),
+	}, nil
+}
+
+func (s *mlModelPeerConsumerStub) DeletePeerMLModelMonitorRegistration(
+	_ context.Context,
+	location string,
+) (*backend.StandardResponse, error) {
+	s.deletedRegistration = location
+	if len(s.deleteRegistrationErrors) > 0 {
+		err := s.deleteRegistrationErrors[0]
+		s.deleteRegistrationErrors = s.deleteRegistrationErrors[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+}
+
+func (s *mlModelPeerConsumerStub) CreatePeerMLModelMonitorSubscription(
+	_ context.Context,
+	target backend.SelectedTarget,
+	body []byte,
+) (*backend.StandardResponse, error) {
+	s.monitorTarget = target
+	s.monitorBody = append([]byte(nil), body...)
+	if s.monitorResponse != nil || s.monitorError != nil {
+		return s.monitorResponse, s.monitorError
+	}
+	return &backend.StandardResponse{
+		StatusCode:   http.StatusCreated,
+		Location:     "peer-monitor",
+		EffectiveURI: "http://nwdaf-a.example/nnwdaf-mlmodelmonitor/v1/subscriptions",
+		ContentType:  "application/json",
+		Body:         append([]byte(nil), body...),
+	}, nil
+}
+
+func (s *mlModelPeerConsumerStub) ReplacePeerMLModelMonitorSubscription(
+	_ context.Context,
+	location string,
+	body []byte,
+) (*backend.StandardResponse, error) {
+	s.monitorLocation = location
+	s.monitorBody = append([]byte(nil), body...)
+	return &backend.StandardResponse{
+		StatusCode:   http.StatusOK,
+		EffectiveURI: location,
+		ContentType:  "application/json",
+		Body:         append([]byte(nil), body...),
+	}, nil
+}
+
+func (s *mlModelPeerConsumerStub) DeletePeerMLModelMonitorSubscription(
+	_ context.Context,
+	location string,
+) (*backend.StandardResponse, error) {
+	s.deletedMonitor = location
+	if len(s.deleteMonitorErrors) > 0 {
+		err := s.deleteMonitorErrors[0]
+		s.deleteMonitorErrors = s.deleteMonitorErrors[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+}
+
 func (s *anlfMLModelBackendStub) DeliverMLModelProvisionNotification(
 	_ context.Context,
 	_ string,
@@ -203,8 +370,12 @@ func newMLModelProcessorTestSubject() (
 	}
 	mtlfBackend := &mtlfMLModelBackendStub{}
 	anlfBackend := &anlfMLModelBackendStub{}
-	mtlfAvailability := &mlModelAvailabilityStub{usable: true}
-	anlfAvailability := &mlModelAvailabilityStub{usable: true}
+	mtlfAvailability := &mlModelAvailabilityStub{
+		usable: true, generation: "44444444-4444-4444-8444-444444444444",
+	}
+	anlfAvailability := &mlModelAvailabilityStub{
+		usable: true, generation: "55555555-5555-4555-8555-555555555555",
+	}
 	processor := &Processor{nwdaf: app}
 	processor.SetMLModelBackends(mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability)
 	return processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability
@@ -222,7 +393,8 @@ func TestMLModelProvisionRoutingPreservesUnknownFieldsAndExternalURI(t *testing.
 	if problem != nil {
 		t.Fatalf("HandleCreateMLModelProvision() problem = %+v", problem)
 	}
-	if response.StatusCode != http.StatusCreated || !strings.HasSuffix(response.Location, "/"+testProvisionID) {
+	localProvisionID, err := backend.ResourceIDFromLocation(response.Location)
+	if err != nil || response.StatusCode != http.StatusCreated || localProvisionID == testProvisionID {
 		t.Fatalf("response = %+v", response)
 	}
 	if strings.Contains(string(mtlfBackend.provisionBody), "consumer.example") ||
@@ -233,8 +405,9 @@ func TestMLModelProvisionRoutingPreservesUnknownFieldsAndExternalURI(t *testing.
 		!strings.Contains(string(response.Body), "futureTopLevel") {
 		t.Fatalf("external response lost URI or unknown field: %s", response.Body)
 	}
-	route, found := ctx.GetMLModelProvisionSubscriptionRoute(testProvisionID)
+	route, found := ctx.GetMLModelProvisionSubscriptionRoute(localProvisionID)
 	if !found || route.DestinationNotificationURI != "http://consumer.example/provision" ||
+		route.PeerRoute.BackendResourceID != testProvisionID ||
 		!strings.Contains(string(route.BackendRepresentation), "192.0.2.21:8091") {
 		t.Fatalf("route = %+v found=%v", route, found)
 	}
@@ -247,21 +420,21 @@ func TestMLModelProvisionRoutingPreservesUnknownFieldsAndExternalURI(t *testing.
 		"notifUri":"http://consumer.example/replaced"
 	}`)
 	response, problem = processor.HandleReplaceMLModelProvision(
-		context.Background(), testProvisionID, replacement,
+		context.Background(), localProvisionID, replacement,
 	)
 	if problem != nil || response.StatusCode != http.StatusNoContent || len(response.Body) != 0 {
 		t.Fatalf("replace response=%+v problem=%+v", response, problem)
 	}
-	route, _ = ctx.GetMLModelProvisionSubscriptionRoute(testProvisionID)
+	route, _ = ctx.GetMLModelProvisionSubscriptionRoute(localProvisionID)
 	if route.DestinationNotificationURI != "http://consumer.example/replaced" {
 		t.Fatalf("updated route = %+v", route)
 	}
 
-	response, problem = processor.HandleDeleteMLModelProvision(context.Background(), testProvisionID)
+	response, problem = processor.HandleDeleteMLModelProvision(context.Background(), localProvisionID)
 	if problem != nil || response.StatusCode != http.StatusNoContent || mtlfBackend.deletedProvision != testProvisionID {
 		t.Fatalf("delete response=%+v problem=%+v backend=%+v", response, problem, mtlfBackend)
 	}
-	if _, found = ctx.GetMLModelProvisionSubscriptionRoute(testProvisionID); found {
+	if _, found = ctx.GetMLModelProvisionSubscriptionRoute(localProvisionID); found {
 		t.Fatal("provision route remains after delete")
 	}
 }
@@ -279,11 +452,16 @@ func TestMLModelProvisionBackendInitiatorAndNotificationRouting(t *testing.T) {
 	response, problem := processor.HandleCreateMLModelProvisionFromBackend(
 		context.Background(),
 		body,
+		nil,
 	)
 	if problem != nil || response.StatusCode != http.StatusCreated {
 		t.Fatalf("create response=%+v problem=%+v", response, problem)
 	}
-	route, found := ctx.GetMLModelProvisionSubscriptionRoute(testProvisionID)
+	localProvisionID, err := backend.ResourceIDFromLocation(response.Location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, found := ctx.GetMLModelProvisionSubscriptionRoute(localProvisionID)
 	if !found ||
 		route.Initiator != nwdaf_context.MLModelRoutePartyAnLFBackend ||
 		route.Destination != nwdaf_context.MLModelRoutePartyAnLFBackend {
@@ -300,14 +478,18 @@ func TestMLModelProvisionBackendInitiatorAndNotificationRouting(t *testing.T) {
 	}]`)
 	response, problem = processor.HandleMLModelProvisionNotification(
 		context.Background(),
-		testProvisionID,
+		"",
 		notification,
 	)
 	if problem != nil || response.StatusCode != http.StatusNoContent {
 		t.Fatalf("notification response=%+v problem=%+v", response, problem)
 	}
 	if !bytes.Equal(anlfBackend.body, notification) {
-		t.Fatalf("AnLF backend notification=%s", anlfBackend.body)
+		var delivered []map[string]any
+		if decodeErr := json.Unmarshal(anlfBackend.body, &delivered); decodeErr != nil ||
+			delivered[0]["subscriptionId"] != localProvisionID {
+			t.Fatalf("AnLF backend notification=%s", anlfBackend.body)
+		}
 	}
 
 	updatedNotification := []byte(`[{
@@ -325,13 +507,15 @@ func TestMLModelProvisionBackendInitiatorAndNotificationRouting(t *testing.T) {
 	}]`)
 	response, problem = processor.HandleMLModelProvisionNotification(
 		context.Background(),
-		testProvisionID,
+		"",
 		updatedNotification,
 	)
 	if problem != nil || response.StatusCode != http.StatusNoContent {
 		t.Fatalf("updated notification response=%+v problem=%+v", response, problem)
 	}
-	if !bytes.Equal(anlfBackend.body, updatedNotification) {
+	var delivered []map[string]any
+	if decodeErr := json.Unmarshal(anlfBackend.body, &delivered); decodeErr != nil ||
+		delivered[0]["subscriptionId"] != localProvisionID {
 		t.Fatalf("updated AnLF backend notification=%s", anlfBackend.body)
 	}
 }
@@ -363,11 +547,16 @@ func TestMLModelProvisionNotificationReachesExternalURI(t *testing.T) {
 		"notifUri":"` + server.URL + `",
 		"notifCorreId":"corr-external"
 	}`)
-	if _, problem := processor.HandleCreateMLModelProvision(
+	created, problem := processor.HandleCreateMLModelProvision(
 		context.Background(),
 		createBody,
-	); problem != nil {
+	)
+	if problem != nil {
 		t.Fatal(problem)
+	}
+	localProvisionID, err := backend.ResourceIDFromLocation(created.Location)
+	if err != nil {
+		t.Fatal(err)
 	}
 	notification := []byte(`[{
 		"subscriptionId":"` + testProvisionID + `",
@@ -385,7 +574,7 @@ func TestMLModelProvisionNotificationReachesExternalURI(t *testing.T) {
 	if problem != nil || response.StatusCode != http.StatusNoContent {
 		t.Fatalf("response=%+v problem=%+v", response, problem)
 	}
-	if body := <-delivered; !bytes.Equal(body, notification) {
+	if body := <-delivered; !strings.Contains(string(body), localProvisionID) {
 		t.Fatalf("external body=%s", body)
 	}
 }
@@ -401,7 +590,12 @@ func TestMLModelMonitorResourcesRouteToTheirOwners(t *testing.T) {
 	if problem != nil || response.StatusCode != http.StatusCreated || len(mtlfBackend.registrationBody) == 0 {
 		t.Fatalf("registration response=%+v problem=%+v", response, problem)
 	}
-	if _, found := ctx.GetMLModelMonitorRegistrationRoute(testRegistrationID); !found {
+	localRegistrationID, err := backend.ResourceIDFromLocation(response.Location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route, found := ctx.GetMLModelMonitorRegistrationRoute(localRegistrationID); !found ||
+		route.PeerRoute.BackendResourceID != testRegistrationID {
 		t.Fatal("registration route was not recorded")
 	}
 
@@ -419,7 +613,12 @@ func TestMLModelMonitorResourcesRouteToTheirOwners(t *testing.T) {
 		!strings.Contains(string(response.Body), "futureSubscription") {
 		t.Fatalf("monitor URI separation failed: backend=%s response=%s", anlfBackend.body, response.Body)
 	}
-	if _, found := ctx.GetMLModelMonitorSubscriptionRoute(testMonitorID); !found {
+	localMonitorID, err := backend.ResourceIDFromLocation(response.Location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route, found := ctx.GetMLModelMonitorSubscriptionRoute(localMonitorID); !found ||
+		route.PeerRoute.BackendResourceID != testMonitorID {
 		t.Fatal("monitor subscription route was not recorded")
 	}
 	if mtlfAvailability.refreshed != 1 || anlfAvailability.refreshed != 1 {
@@ -442,11 +641,16 @@ func TestMLModelMonitorBackendSubscriptionRoutesNotificationToMTLFBackend(t *tes
 		context.Background(),
 		subscription,
 		"registration-7",
+		nil,
 	)
 	if problem != nil || response == nil || response.StatusCode != http.StatusCreated {
 		t.Fatalf("create response=%+v problem=%+v", response, problem)
 	}
-	route, found := ctx.GetMLModelMonitorSubscriptionRoute(testMonitorID)
+	localMonitorID, err := backend.ResourceIDFromLocation(response.Location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, found := ctx.GetMLModelMonitorSubscriptionRoute(localMonitorID)
 	if !found || route.Destination != nwdaf_context.MLModelRoutePartyMTLFBackend {
 		t.Fatalf("route=%+v found=%v", route, found)
 	}
@@ -540,8 +744,13 @@ func TestMLModelPrivateBackendRedirectIsNotExposed(t *testing.T) {
 		"mLEventSubscs":[{"mLEvent":"UE_COMMUNICATION","mLEventFilter":{}}],
 		"notifUri":"http://consumer.example/provision"
 	}`)
-	if _, problem := processor.HandleCreateMLModelProvision(context.Background(), body); problem != nil {
+	created, problem := processor.HandleCreateMLModelProvision(context.Background(), body)
+	if problem != nil {
 		t.Fatalf("create problem = %+v", problem)
+	}
+	localProvisionID, err := backend.ResourceIDFromLocation(created.Location)
+	if err != nil {
+		t.Fatal(err)
 	}
 	mtlfBackend.response = &backend.StandardResponse{
 		StatusCode: http.StatusTemporaryRedirect,
@@ -549,7 +758,7 @@ func TestMLModelPrivateBackendRedirectIsNotExposed(t *testing.T) {
 	}
 	response, problem := processor.HandleReplaceMLModelProvision(
 		context.Background(),
-		testProvisionID,
+		localProvisionID,
 		body,
 	)
 	if response != nil || problem == nil || problem.Status != http.StatusBadGateway {
@@ -564,13 +773,423 @@ func TestMLModelMonitorRegistrationRawRepresentationIsCopied(t *testing.T) {
 	_ = mtlfAvailability
 	_ = anlfAvailability
 	body := []byte(`{"consumerId":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","modelId":7}`)
-	_, problem := processor.HandleCreateMLModelMonitorRegistration(context.Background(), body)
+	response, problem := processor.HandleCreateMLModelMonitorRegistration(context.Background(), body)
 	if problem != nil {
 		t.Fatal(problem)
 	}
-	route, _ := ctx.GetMLModelMonitorRegistrationRoute(testRegistrationID)
+	localRegistrationID, err := backend.ResourceIDFromLocation(response.Location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, _ := ctx.GetMLModelMonitorRegistrationRoute(localRegistrationID)
 	var value map[string]json.RawMessage
-	if err := json.Unmarshal(route.AcceptedRepresentation, &value); err != nil || value["modelId"] == nil {
-		t.Fatalf("stored representation = %s error=%v", route.AcceptedRepresentation, err)
+	decodeErr := json.Unmarshal(route.AcceptedRepresentation, &value)
+	if decodeErr != nil || value["modelId"] == nil {
+		t.Fatalf("stored representation = %s error=%v", route.AcceptedRepresentation, decodeErr)
+	}
+}
+
+func TestRemoteMLModelProvisionUsesLocalIdentityAndRelaysCallback(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+	_ = mtlfBackend
+	_ = mtlfAvailability
+	_ = anlfAvailability
+	peer := &mlModelPeerConsumerStub{}
+	processor.SetMLModelPeerConsumer(peer)
+	target := backend.SelectedTarget{
+		NFInstanceID:        "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+		NFServiceInstanceID: "model-provision-c",
+		ServiceName:         "nnwdaf-mlmodelprovision",
+		APIRoot:             "http://nwdaf-c.example",
+		SelectionSource:     backend.SelectionSourceNRF,
+	}
+	body := []byte(`{
+		"mLEventSubscs":[{"mLEvent":"UE_COMMUNICATION","mLEventFilter":{}}],
+		"notifUri":"http://anlf-a.internal/provision",
+		"notifCorreId":"corr-a",
+		"suppFeats":"8"
+	}`)
+	response, problem := processor.HandleCreateMLModelProvisionFromBackend(
+		context.Background(),
+		body,
+		&target,
+	)
+	if problem != nil || response == nil || response.StatusCode != http.StatusCreated {
+		t.Fatalf("create response=%+v problem=%+v", response, problem)
+	}
+	localRouteID, err := backend.ResourceIDFromLocation(response.Location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if localRouteID == "peer-provision" ||
+		!strings.Contains(string(peer.provisionBody), "/nnwdaf-callback/v1/ml-model-provision/"+localRouteID) ||
+		strings.Contains(string(response.Body), "X-NWDAF-Target") {
+		t.Fatalf("local identity or callback rewrite failed: response=%s peer=%s", response.Body, peer.provisionBody)
+	}
+	route, found := ctx.GetMLModelProvisionSubscriptionRoute(localRouteID)
+	if !found || route.PeerRoute.SelectedTarget == nil ||
+		route.PeerRoute.SelectedTarget.NFInstanceID != target.NFInstanceID ||
+		!strings.HasSuffix(route.PeerRoute.PeerLocation, "/peer-provision") {
+		t.Fatalf("remote route=%+v found=%v", route, found)
+	}
+
+	notification := []byte(`[{
+		"subscriptionId":"peer-provision",
+		"eventNotifs":[{
+			"event":"UE_COMMUNICATION",
+			"notifCorreId":"corr-a",
+			"modelUniqueId":1,
+			"mLFileAddr":{"mLModelUrl":"http://nwdaf-c.example/artifacts/m1"}
+		}]
+	}]`)
+	spoofed := bytes.Replace(
+		notification,
+		[]byte(`"subscriptionId":"peer-provision"`),
+		[]byte(`"subscriptionId":"`+localRouteID+`"`),
+		1,
+	)
+	if _, spoofProblem := processor.HandleMLModelProvisionNotification(
+		context.Background(),
+		localRouteID,
+		spoofed,
+	); spoofProblem == nil || spoofProblem.Status != http.StatusBadRequest {
+		t.Fatalf("local-ID callback spoof problem=%+v", spoofProblem)
+	}
+	callbackResponse, callbackProblem := processor.HandleMLModelProvisionNotification(
+		context.Background(),
+		localRouteID,
+		notification,
+	)
+	if callbackProblem != nil || callbackResponse.StatusCode != http.StatusNoContent ||
+		!strings.Contains(string(anlfBackend.body), localRouteID) {
+		t.Fatalf(
+			"callback response=%+v problem=%+v body=%s",
+			callbackResponse,
+			callbackProblem,
+			anlfBackend.body,
+		)
+	}
+
+	deleteResponse, deleteProblem := processor.HandleDeleteMLModelProvisionFromBackend(
+		context.Background(),
+		localRouteID,
+	)
+	if deleteProblem != nil || deleteResponse.StatusCode != http.StatusNoContent ||
+		!strings.HasSuffix(peer.deletedProvision, "/peer-provision") {
+		t.Fatalf(
+			"delete response=%+v problem=%+v peerLocation=%s",
+			deleteResponse,
+			deleteProblem,
+			peer.deletedProvision,
+		)
+	}
+}
+
+func TestRemoteMonitorSubscriptionRejectsUnknownOwner(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+	_ = ctx
+	_ = mtlfBackend
+	_ = anlfBackend
+	_ = mtlfAvailability
+	_ = anlfAvailability
+	peer := &mlModelPeerConsumerStub{}
+	processor.SetMLModelPeerConsumer(peer)
+	target := backend.SelectedTarget{
+		NFInstanceID:        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		NFServiceInstanceID: "model-monitor-a",
+		ServiceName:         "nnwdaf-mlmodelmonitor",
+		APIRoot:             "http://nwdaf-a.example",
+		SelectionSource:     backend.SelectionSourceNRF,
+	}
+	body := []byte(`{
+		"modelIds":[7],
+		"notificationUri":"http://mtlf-c.internal/monitor",
+		"notifCorrId":"scope-a-generation-1",
+		"mLEvent":"UE_COMMUNICATION"
+	}`)
+	response, problem := processor.HandleCreateMLModelMonitorSubscriptionFromBackend(
+		context.Background(),
+		body,
+		"unknown-registration",
+		&target,
+	)
+	if response != nil || problem == nil || problem.Status != http.StatusBadRequest {
+		t.Fatalf("response=%+v problem=%+v", response, problem)
+	}
+	if len(peer.monitorBody) != 0 {
+		t.Fatal("peer create ran before owner validation")
+	}
+}
+
+func TestFailedPeerCreateRetainsPendingCleanupUntilDeleteSucceeds(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+	_ = mtlfBackend
+	_ = anlfBackend
+	_ = mtlfAvailability
+	_ = anlfAvailability
+	deleteFailure := &backend.TransportError{
+		Operation: "delete peer provision",
+		Cause:     errors.New("peer unavailable"),
+	}
+	peer := &mlModelPeerConsumerStub{
+		provisionResponse: &backend.StandardResponse{
+			StatusCode:   http.StatusCreated,
+			Location:     "peer-provision",
+			EffectiveURI: "http://nwdaf-c.example/nnwdaf-mlmodelprovision/v1/subscriptions",
+			ContentType:  "application/json",
+			Body:         []byte(`[]`),
+		},
+		deleteProvisionErrors: []error{deleteFailure},
+	}
+	processor.SetMLModelPeerConsumer(peer)
+	target := backend.SelectedTarget{
+		NFInstanceID:        "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+		NFServiceInstanceID: "model-provision-c",
+		ServiceName:         "nnwdaf-mlmodelprovision",
+		APIRoot:             "http://nwdaf-c.example",
+		SelectionSource:     backend.SelectionSourceNRF,
+	}
+	body := []byte(`{
+		"mLEventSubscs":[{"mLEvent":"UE_COMMUNICATION","mLEventFilter":{}}],
+		"notifUri":"http://anlf-a.internal/provision",
+		"notifCorreId":"corr-a"
+	}`)
+	response, problem := processor.HandleCreateMLModelProvisionFromBackend(
+		context.Background(),
+		body,
+		&target,
+	)
+	if response != nil || problem == nil || problem.Status != http.StatusBadGateway {
+		t.Fatalf("response=%+v problem=%+v", response, problem)
+	}
+	routes := ctx.GetAllMLModelProvisionSubscriptionRoutes()
+	if len(routes) != 1 ||
+		routes[0].PeerRoute.LifecycleState != nwdaf_context.MLModelRoutePendingCleanup ||
+		routes[0].PeerRoute.PeerLocation == "" ||
+		len(routes[0].AcceptedRepresentation) != 0 {
+		t.Fatalf("pending cleanup route=%+v", routes)
+	}
+	processor.ReconcilePendingMLModelPeerCleanup(
+		context.Background(),
+		routes[0].PeerRoute.NextCleanupAt,
+	)
+	if remaining := ctx.GetAllMLModelProvisionSubscriptionRoutes(); len(remaining) != 0 {
+		t.Fatalf("cleanup route remained after successful retry: %+v", remaining)
+	}
+}
+
+func TestPublicMonitorCallbackRejectsInboundAndPendingRoutes(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+	_ = mtlfBackend
+	_ = anlfBackend
+	_ = mtlfAvailability
+	_ = anlfAvailability
+	report := []byte(`{
+		"notifCorrId":"corr-a",
+		"modelAccuInfos":[{"modelId":7,"deviation":0.2}]
+	}`)
+	representation := []byte(`{
+		"modelIds":[7],
+		"notificationUri":"http://consumer.example/monitor",
+		"notifCorrId":"corr-a"
+	}`)
+	for _, test := range []struct {
+		id        string
+		peerRoute nwdaf_context.MLModelPeerRoute
+		status    int32
+	}{
+		{
+			id: "inbound",
+			peerRoute: nwdaf_context.MLModelPeerRoute{
+				Direction:      nwdaf_context.MLModelRouteDirectionInbound,
+				LifecycleState: nwdaf_context.MLModelRouteActive,
+			},
+			status: http.StatusBadRequest,
+		},
+		{
+			id: "pending",
+			peerRoute: nwdaf_context.MLModelPeerRoute{
+				Direction:      nwdaf_context.MLModelRouteDirectionOutbound,
+				LifecycleState: nwdaf_context.MLModelRoutePendingCleanup,
+				SelectedTarget: &backend.SelectedTarget{NFInstanceID: "peer"},
+			},
+			status: http.StatusServiceUnavailable,
+		},
+	} {
+		if !ctx.AddMLModelMonitorSubscriptionRoute(
+			nwdaf_context.MLModelMonitorSubscriptionRoute{
+				SubscriptionID:            test.id,
+				PeerRoute:                 test.peerRoute,
+				AcceptedRepresentation:    representation,
+				NotificationCorrelationID: "corr-a",
+				Destination:               nwdaf_context.MLModelRoutePartyMTLFBackend,
+			},
+		) {
+			t.Fatalf("could not add %s route", test.id)
+		}
+		response, problem := processor.HandleMLModelMonitorNotification(
+			context.Background(),
+			test.id,
+			report,
+		)
+		if response != nil || problem == nil || problem.Status != test.status {
+			t.Fatalf("%s response=%+v problem=%+v", test.id, response, problem)
+		}
+	}
+}
+
+func TestRemoteProvisionPersistsOnlyPermanentRedirectLocation(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		permanentURI       string
+		expectedDeleteTail string
+	}{
+		{
+			name:               "temporary",
+			expectedDeleteTail: "/peer-provision",
+		},
+		{
+			name:               "permanent",
+			permanentURI:       "http://nwdaf-new.example/subscriptions/permanent",
+			expectedDeleteTail: "/subscriptions/permanent",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+			_ = ctx
+			_ = mtlfBackend
+			_ = anlfBackend
+			_ = mtlfAvailability
+			_ = anlfAvailability
+			peer := &mlModelPeerConsumerStub{}
+			processor.SetMLModelPeerConsumer(peer)
+			target := backend.SelectedTarget{
+				NFInstanceID:        "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+				NFServiceInstanceID: "model-provision-c",
+				ServiceName:         "nnwdaf-mlmodelprovision",
+				APIRoot:             "http://nwdaf-c.example",
+				SelectionSource:     backend.SelectionSourceNRF,
+			}
+			body := []byte(`{
+				"mLEventSubscs":[{"mLEvent":"UE_COMMUNICATION","mLEventFilter":{}}],
+				"notifUri":"http://anlf-a.internal/provision",
+				"notifCorreId":"corr-a"
+			}`)
+			created, problem := processor.HandleCreateMLModelProvisionFromBackend(
+				context.Background(),
+				body,
+				&target,
+			)
+			if problem != nil {
+				t.Fatal(problem)
+			}
+			routeID, err := backend.ResourceIDFromLocation(created.Location)
+			if err != nil {
+				t.Fatal(err)
+			}
+			peer.provisionReplaceResponse = &backend.StandardResponse{
+				StatusCode:           http.StatusNoContent,
+				EffectiveURI:         "http://nwdaf-temp.example/subscriptions/temporary",
+				PermanentRedirectURI: test.permanentURI,
+			}
+			if response, replaceProblem := processor.HandleReplaceMLModelProvisionFromBackend(
+				context.Background(),
+				routeID,
+				body,
+			); replaceProblem != nil || response.StatusCode != http.StatusNoContent {
+				t.Fatalf("replace response=%+v problem=%+v", response, replaceProblem)
+			}
+			if _, deleteProblem := processor.HandleDeleteMLModelProvisionFromBackend(
+				context.Background(),
+				routeID,
+			); deleteProblem != nil {
+				t.Fatal(deleteProblem)
+			}
+			if !strings.HasSuffix(peer.deletedProvision, test.expectedDeleteTail) {
+				t.Fatalf("delete location=%q", peer.deletedProvision)
+			}
+		})
+	}
+}
+
+func TestRemoteMonitorSubscriptionKeepsOwnerAndIsolatesReportRoute(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+	_ = anlfBackend
+	_ = mtlfAvailability
+	_ = anlfAvailability
+	peer := &mlModelPeerConsumerStub{}
+	processor.SetMLModelPeerConsumer(peer)
+	if !ctx.AddMLModelMonitorRegistrationRoute(
+		nwdaf_context.MLModelMonitorRegistrationRoute{
+			RegistrationID: "registration-go",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				Direction:         nwdaf_context.MLModelRouteDirectionInbound,
+				BackendResourceID: "registration-a",
+				LifecycleState:    nwdaf_context.MLModelRouteActive,
+			},
+		},
+	) {
+		t.Fatal("could not seed local monitor registration route")
+	}
+	target := backend.SelectedTarget{
+		NFInstanceID:        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		NFServiceInstanceID: "model-monitor-a",
+		ServiceName:         "nnwdaf-mlmodelmonitor",
+		APIRoot:             "http://nwdaf-a.example",
+		SelectionSource:     backend.SelectionSourceNRF,
+	}
+	body := []byte(`{
+		"modelIds":[7],
+		"notificationUri":"http://mtlf-c.internal/monitor",
+		"notifCorrId":"scope-a-generation-1",
+		"modelMetric":"ACCURACY",
+		"mLEvent":"UE_COMMUNICATION",
+		"mLEventFilter":{"aoi":{"tais":[{"plmnId":{"mcc":"001","mnc":"01"},"tac":"000001"}]}},
+		"tgtUe":{"intGroupIds":["group-a"]}
+	}`)
+	response, problem := processor.HandleCreateMLModelMonitorSubscriptionFromBackend(
+		context.Background(),
+		body,
+		"registration-a",
+		&target,
+	)
+	if problem != nil || response == nil || response.StatusCode != http.StatusCreated {
+		t.Fatalf("create response=%+v problem=%+v", response, problem)
+	}
+	localRouteID, err := backend.ResourceIDFromLocation(response.Location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, found := ctx.GetMLModelMonitorSubscriptionRoute(localRouteID)
+	if !found || route.OwnerRegistrationID != "registration-go" ||
+		route.NotificationCorrelationID != "scope-a-generation-1" ||
+		route.PeerRoute.SelectedTarget == nil ||
+		!strings.Contains(string(peer.monitorBody), "/nnwdaf-callback/v1/ml-model-monitor/"+localRouteID) {
+		t.Fatalf("remote monitor route=%+v found=%v peerBody=%s", route, found, peer.monitorBody)
+	}
+
+	report := []byte(`{
+		"notifCorrId":"scope-a-generation-1",
+		"modelAccuInfos":[{
+			"modelId":7,
+			"deviation":0.25,
+			"inferenceNum":10,
+			"modelMetric":"ACCURACY"
+		}],
+		"mLEvent":"UE_COMMUNICATION"
+	}`)
+	callbackResponse, callbackProblem := processor.HandleMLModelMonitorNotification(
+		context.Background(),
+		localRouteID,
+		report,
+	)
+	if callbackProblem != nil || callbackResponse.StatusCode != http.StatusNoContent ||
+		!bytes.Equal(mtlfBackend.registrationBody, report) {
+		t.Fatalf(
+			"callback response=%+v problem=%+v backendBody=%s",
+			callbackResponse,
+			callbackProblem,
+			mtlfBackend.registrationBody,
+		)
 	}
 }

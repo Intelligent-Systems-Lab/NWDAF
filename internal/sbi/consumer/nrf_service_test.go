@@ -1166,6 +1166,56 @@ func newTestNrfService() *NrfService {
 	return service
 }
 
+func TestValidateCachedSelectedTargetRequiresExactUnexpiredService(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
+	service := newNrfService()
+	service.now = func() time.Time { return now }
+	service.discoveryCache["query"] = cachedDiscovery{
+		result: NFDiscoveryResult{profiles: []compatnrf.NFProfile{{
+			NrfNfManagementNfProfile: models.NrfNfManagementNfProfile{
+				NfInstanceId: testNFInstanceID,
+				NfStatus:     models.NrfNfManagementNfStatus_REGISTERED,
+				NfServices: []models.NrfNfManagementNfService{{
+					ServiceInstanceId: "provision-service",
+					ServiceName:       models.ServiceName("nnwdaf-mlmodelprovision"),
+					Scheme:            models.UriScheme_HTTP,
+					NfServiceStatus:   models.NfServiceStatus_REGISTERED,
+					ApiPrefix:         "http://192.0.2.20:8000",
+				}},
+			},
+		}}},
+		expiresAt: now.Add(time.Minute),
+		usedAt:    now,
+	}
+	target := backend.SelectedTarget{
+		NFInstanceID:        testNFInstanceID,
+		NFServiceInstanceID: "provision-service",
+		ServiceName:         "nnwdaf-mlmodelprovision",
+		APIRoot:             "http://192.0.2.20:8000/",
+		SelectionSource:     backend.SelectionSourceNRF,
+	}
+	if err := service.ValidateCachedSelectedTarget(target); err != nil {
+		t.Fatalf("ValidateCachedSelectedTarget() error = %v", err)
+	}
+
+	target.NFServiceInstanceID = "different-service"
+	if err := service.ValidateCachedSelectedTarget(target); err == nil {
+		t.Fatal("ValidateCachedSelectedTarget() accepted a different service instance")
+	}
+
+	target.NFServiceInstanceID = "provision-service"
+	service.discoveryCache["query"] = cachedDiscovery{
+		result:    service.discoveryCache["query"].result,
+		expiresAt: now,
+		usedAt:    now,
+	}
+	if err := service.ValidateCachedSelectedTarget(target); err == nil {
+		t.Fatal("ValidateCachedSelectedTarget() accepted an expired result")
+	}
+}
+
 func newNFManagementTestContext(t *testing.T, nrfURI string) *nwdaf_context.NWDAFContext {
 	t.Helper()
 	ctx := &nwdaf_context.NWDAFContext{NfId: testNFInstanceID}

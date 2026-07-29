@@ -3,7 +3,7 @@ package consumer
 import "testing"
 
 func TestAdrfClientForTargetReusesNormalizedTarget(t *testing.T) {
-	consumer := newConsumerWithServices(nil, nil, nil)
+	consumer := newConsumerWithServices(nil, nil)
 
 	first := consumer.adrfClientForTarget(" http://adrf.example/ ")
 	second := consumer.adrfClientForTarget("http://adrf.example")

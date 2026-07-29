@@ -119,6 +119,9 @@ func NewServer(nwdaf nwdafApp, tlsKeyLogPath string) (*Server, error) {
 		}
 	}
 
+	callbackGroup := s.router.Group("/nnwdaf-callback/v1")
+	applyRoutes(callbackGroup, s.getMLModelCallbackRoutes())
+
 	// Collector routes (for SMF callbacks)
 	collectorRoutes := s.getCollectorRoutes()
 	collectorGroup := s.router.Group("/collector")

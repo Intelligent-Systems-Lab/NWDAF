@@ -51,6 +51,7 @@ type mlModelGateway interface {
 	HandleCreateMLModelProvisionFromBackend(
 		context.Context,
 		[]byte,
+		*backend.SelectedTarget,
 	) (*backend.StandardResponse, *models.ProblemDetails)
 	HandleReplaceMLModelProvisionFromBackend(
 		context.Context,
@@ -64,6 +65,7 @@ type mlModelGateway interface {
 	HandleCreateMLModelMonitorRegistrationFromBackend(
 		context.Context,
 		[]byte,
+		*backend.SelectedTarget,
 	) (*backend.StandardResponse, *models.ProblemDetails)
 	HandleDeleteMLModelMonitorRegistrationFromBackend(
 		context.Context,

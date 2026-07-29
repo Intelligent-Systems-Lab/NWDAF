@@ -114,10 +114,37 @@ func TestBuildBackendSyncRequestProjectsMLModelResourcesToTheirOwners(t *testing
 			Initiator:              nwdaf_context.MLModelRoutePartyExternal,
 			Destination:            nwdaf_context.MLModelRoutePartyExternal,
 		},
+		{
+			SubscriptionID:         "provision-remote",
+			AcceptedRepresentation: json.RawMessage(`{"owner":"anlf-remote"}`),
+			BackendRepresentation:  json.RawMessage(`{"owner":"peer"}`),
+			Initiator:              nwdaf_context.MLModelRoutePartyAnLFBackend,
+			Destination:            nwdaf_context.MLModelRoutePartyAnLFBackend,
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				SelectedTarget: &backend.SelectedTarget{
+					NFInstanceID: "33333333-3333-4333-8333-333333333333",
+				},
+			},
+		},
 	} {
+		route.PeerRoute.LifecycleState = nwdaf_context.MLModelRouteActive
 		if !nwdafContext.AddMLModelProvisionSubscriptionRoute(route) {
 			t.Fatalf("could not add provision route %s", route.SubscriptionID)
 		}
+	}
+	if !nwdafContext.AddMLModelProvisionSubscriptionRoute(
+		nwdaf_context.MLModelProvisionSubscriptionRoute{
+			SubscriptionID: "provision-pending-cleanup",
+			Initiator:      nwdaf_context.MLModelRoutePartyAnLFBackend,
+			Destination:    nwdaf_context.MLModelRoutePartyAnLFBackend,
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				Direction:      nwdaf_context.MLModelRouteDirectionOutbound,
+				LifecycleState: nwdaf_context.MLModelRoutePendingCleanup,
+				PeerLocation:   "http://peer.example/subscriptions/pending",
+			},
+		},
+	) {
+		t.Fatal("could not add pending cleanup route")
 	}
 	for _, route := range []nwdaf_context.MLModelMonitorRegistrationRoute{
 		{
@@ -132,7 +159,19 @@ func TestBuildBackendSyncRequestProjectsMLModelResourcesToTheirOwners(t *testing
 			BackendRepresentation:  json.RawMessage(`{"owner":"mtlf"}`),
 			Initiator:              nwdaf_context.MLModelRoutePartyExternal,
 		},
+		{
+			RegistrationID:         "registration-remote",
+			AcceptedRepresentation: json.RawMessage(`{"owner":"anlf-remote"}`),
+			BackendRepresentation:  json.RawMessage(`{"owner":"peer"}`),
+			Initiator:              nwdaf_context.MLModelRoutePartyAnLFBackend,
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				SelectedTarget: &backend.SelectedTarget{
+					NFInstanceID: "33333333-3333-4333-8333-333333333333",
+				},
+			},
+		},
 	} {
+		route.PeerRoute.LifecycleState = nwdaf_context.MLModelRouteActive
 		if !nwdafContext.AddMLModelMonitorRegistrationRoute(route) {
 			t.Fatalf("could not add registration route %s", route.RegistrationID)
 		}
@@ -150,7 +189,19 @@ func TestBuildBackendSyncRequestProjectsMLModelResourcesToTheirOwners(t *testing
 			BackendRepresentation:  json.RawMessage(`{"owner":"anlf","callback":"go"}`),
 			Destination:            nwdaf_context.MLModelRoutePartyExternal,
 		},
+		{
+			SubscriptionID:         "monitor-remote",
+			AcceptedRepresentation: json.RawMessage(`{"owner":"mtlf-remote"}`),
+			BackendRepresentation:  json.RawMessage(`{"owner":"peer"}`),
+			Destination:            nwdaf_context.MLModelRoutePartyMTLFBackend,
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				SelectedTarget: &backend.SelectedTarget{
+					NFInstanceID: "11111111-1111-4111-8111-111111111111",
+				},
+			},
+		},
 	} {
+		route.PeerRoute.LifecycleState = nwdaf_context.MLModelRouteActive
 		if !nwdafContext.AddMLModelMonitorSubscriptionRoute(route) {
 			t.Fatalf("could not add monitor route %s", route.SubscriptionID)
 		}
@@ -158,27 +209,67 @@ func TestBuildBackendSyncRequestProjectsMLModelResourcesToTheirOwners(t *testing
 	app := &NwdafApp{nwdafCtx: nwdafContext}
 
 	anlfSnapshot := app.buildBackendSyncRequest(backend.KindAnLF)
-	if len(anlfSnapshot.MLModelProvisionSubscriptions) != 1 ||
-		anlfSnapshot.MLModelProvisionSubscriptions[0].SubscriptionID != "provision-anlf" {
+	anlfProvisionIDs := make(map[string]json.RawMessage)
+	for _, item := range anlfSnapshot.MLModelProvisionSubscriptions {
+		anlfProvisionIDs[item.SubscriptionID] = item.Representation
+	}
+	if len(anlfProvisionIDs) != 2 ||
+		anlfProvisionIDs["provision-anlf"] == nil ||
+		anlfProvisionIDs["provision-remote"] == nil {
 		t.Fatalf("AnLF provision snapshots = %+v", anlfSnapshot.MLModelProvisionSubscriptions)
 	}
-	if len(anlfSnapshot.MLModelMonitorRegistrations) != 1 ||
-		anlfSnapshot.MLModelMonitorRegistrations[0].RegistrationID != "registration-anlf" {
+	anlfRegistrationIDs := make(map[string]struct{})
+	for _, item := range anlfSnapshot.MLModelMonitorRegistrations {
+		anlfRegistrationIDs[item.RegistrationID] = struct{}{}
+	}
+	if len(anlfRegistrationIDs) != 2 {
+		t.Fatalf("AnLF registration snapshots = %+v", anlfSnapshot.MLModelMonitorRegistrations)
+	}
+	if _, found := anlfRegistrationIDs["registration-anlf"]; !found {
+		t.Fatalf("AnLF registration snapshots = %+v", anlfSnapshot.MLModelMonitorRegistrations)
+	}
+	if _, found := anlfRegistrationIDs["registration-remote"]; !found {
 		t.Fatalf("AnLF registration snapshots = %+v", anlfSnapshot.MLModelMonitorRegistrations)
 	}
 	if len(anlfSnapshot.MLModelMonitorSubscriptions) != 2 {
 		t.Fatalf("AnLF monitor snapshots = %+v", anlfSnapshot.MLModelMonitorSubscriptions)
+	}
+	for _, item := range anlfSnapshot.MLModelMonitorSubscriptions {
+		if item.SubscriptionID == "monitor-remote" {
+			t.Fatalf("AnLF received remote MTLF monitor route: %+v", item)
+		}
+		if !bytes.Contains(item.Representation, []byte(`"owner":"anlf"`)) {
+			t.Fatalf("AnLF monitor representation = %s", item.Representation)
+		}
 	}
 
 	mtlfSnapshot := app.buildBackendSyncRequest(backend.KindMTLF)
 	if len(mtlfSnapshot.MLModelProvisionSubscriptions) != 2 {
 		t.Fatalf("MTLF provision snapshots = %+v", mtlfSnapshot.MLModelProvisionSubscriptions)
 	}
+	for _, item := range mtlfSnapshot.MLModelProvisionSubscriptions {
+		if item.SubscriptionID == "provision-remote" {
+			t.Fatalf("MTLF received remote AnLF provision route: %+v", item)
+		}
+		if !bytes.Contains(item.Representation, []byte(`"owner":"mtlf"`)) {
+			t.Fatalf("MTLF provision representation = %s", item.Representation)
+		}
+	}
 	if len(mtlfSnapshot.MLModelMonitorRegistrations) != 2 {
 		t.Fatalf("MTLF registration snapshots = %+v", mtlfSnapshot.MLModelMonitorRegistrations)
 	}
-	if len(mtlfSnapshot.MLModelMonitorSubscriptions) != 1 ||
-		mtlfSnapshot.MLModelMonitorSubscriptions[0].SubscriptionID != "monitor-mtlf" {
+	for _, item := range mtlfSnapshot.MLModelMonitorRegistrations {
+		if item.RegistrationID == "registration-remote" {
+			t.Fatalf("MTLF received remote AnLF registration route: %+v", item)
+		}
+	}
+	mtlfMonitorIDs := make(map[string]json.RawMessage)
+	for _, item := range mtlfSnapshot.MLModelMonitorSubscriptions {
+		mtlfMonitorIDs[item.SubscriptionID] = item.Representation
+	}
+	if len(mtlfMonitorIDs) != 2 ||
+		mtlfMonitorIDs["monitor-mtlf"] == nil ||
+		mtlfMonitorIDs["monitor-remote"] == nil {
 		t.Fatalf("MTLF monitor snapshots = %+v", mtlfSnapshot.MLModelMonitorSubscriptions)
 	}
 }

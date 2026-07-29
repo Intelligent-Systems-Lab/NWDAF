@@ -1,6 +1,11 @@
 package context
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+
+	"github.com/free5gc/nwdaf/internal/backend"
+)
 
 type MLModelRouteParty string
 
@@ -10,8 +15,38 @@ const (
 	MLModelRoutePartyExternal    MLModelRouteParty = "EXTERNAL"
 )
 
+type MLModelRouteDirection string
+
+const (
+	MLModelRouteDirectionInbound  MLModelRouteDirection = "INBOUND"
+	MLModelRouteDirectionOutbound MLModelRouteDirection = "OUTBOUND"
+)
+
+type MLModelRouteLifecycle string
+
+const (
+	MLModelRouteCreating       MLModelRouteLifecycle = "CREATING"
+	MLModelRouteActive         MLModelRouteLifecycle = "ACTIVE"
+	MLModelRouteReplacing      MLModelRouteLifecycle = "REPLACING"
+	MLModelRouteDeleting       MLModelRouteLifecycle = "DELETING"
+	MLModelRoutePendingCleanup MLModelRouteLifecycle = "PENDING_CLEANUP"
+)
+
+type MLModelPeerRoute struct {
+	Direction         MLModelRouteDirection
+	SelectedTarget    *backend.SelectedTarget
+	PeerLocation      string
+	BackendLocation   string
+	BackendResourceID string
+	LifecycleState    MLModelRouteLifecycle
+	ProcessGeneration string
+	CleanupAttempts   int
+	NextCleanupAt     time.Time
+}
+
 type MLModelProvisionSubscriptionRoute struct {
 	SubscriptionID             string
+	PeerRoute                  MLModelPeerRoute
 	AcceptedRepresentation     json.RawMessage
 	BackendRepresentation      json.RawMessage
 	Initiator                  MLModelRouteParty
@@ -22,6 +57,7 @@ type MLModelProvisionSubscriptionRoute struct {
 
 type MLModelMonitorRegistrationRoute struct {
 	RegistrationID         string
+	PeerRoute              MLModelPeerRoute
 	AcceptedRepresentation json.RawMessage
 	BackendRepresentation  json.RawMessage
 	Initiator              MLModelRouteParty
@@ -29,6 +65,7 @@ type MLModelMonitorRegistrationRoute struct {
 
 type MLModelMonitorSubscriptionRoute struct {
 	SubscriptionID             string
+	PeerRoute                  MLModelPeerRoute
 	OwnerRegistrationID        string
 	AcceptedRepresentation     json.RawMessage
 	BackendRepresentation      json.RawMessage
@@ -108,6 +145,22 @@ func (c *NWDAFContext) GetAllMLModelProvisionSubscriptionRoutes() []MLModelProvi
 	return routes
 }
 
+func (c *NWDAFContext) FindMLModelProvisionSubscriptionRouteByBackendResourceID(
+	backendResourceID string,
+) (MLModelProvisionSubscriptionRoute, bool) {
+	if c == nil || backendResourceID == "" {
+		return MLModelProvisionSubscriptionRoute{}, false
+	}
+	c.mlModelRouteMu.RLock()
+	defer c.mlModelRouteMu.RUnlock()
+	for _, route := range c.mlModelProvisionRoutes {
+		if route.PeerRoute.BackendResourceID == backendResourceID {
+			return cloneProvisionRoute(route), true
+		}
+	}
+	return MLModelProvisionSubscriptionRoute{}, false
+}
+
 func (c *NWDAFContext) AddMLModelMonitorRegistrationRoute(route MLModelMonitorRegistrationRoute) bool {
 	if c == nil || route.RegistrationID == "" {
 		return false
@@ -136,6 +189,21 @@ func (c *NWDAFContext) GetMLModelMonitorRegistrationRoute(
 	return cloneRegistrationRoute(route), exists
 }
 
+func (c *NWDAFContext) UpdateMLModelMonitorRegistrationRoute(
+	route MLModelMonitorRegistrationRoute,
+) bool {
+	if c == nil || route.RegistrationID == "" {
+		return false
+	}
+	c.mlModelRouteMu.Lock()
+	defer c.mlModelRouteMu.Unlock()
+	if _, exists := c.mlModelRegistrationRoutes[route.RegistrationID]; !exists {
+		return false
+	}
+	c.mlModelRegistrationRoutes[route.RegistrationID] = cloneRegistrationRoute(route)
+	return true
+}
+
 func (c *NWDAFContext) DeleteMLModelMonitorRegistrationRoute(registrationID string) bool {
 	if c == nil {
 		return false
@@ -160,6 +228,22 @@ func (c *NWDAFContext) GetAllMLModelMonitorRegistrationRoutes() []MLModelMonitor
 		routes = append(routes, cloneRegistrationRoute(route))
 	}
 	return routes
+}
+
+func (c *NWDAFContext) FindMLModelMonitorRegistrationRouteByBackendResourceID(
+	backendResourceID string,
+) (MLModelMonitorRegistrationRoute, bool) {
+	if c == nil || backendResourceID == "" {
+		return MLModelMonitorRegistrationRoute{}, false
+	}
+	c.mlModelRouteMu.RLock()
+	defer c.mlModelRouteMu.RUnlock()
+	for _, route := range c.mlModelRegistrationRoutes {
+		if route.PeerRoute.BackendResourceID == backendResourceID {
+			return cloneRegistrationRoute(route), true
+		}
+	}
+	return MLModelMonitorRegistrationRoute{}, false
 }
 
 func (c *NWDAFContext) AddMLModelMonitorSubscriptionRoute(route MLModelMonitorSubscriptionRoute) bool {
@@ -219,6 +303,22 @@ func (c *NWDAFContext) FindMLModelMonitorSubscriptionRouteByCorrelation(
 	return MLModelMonitorSubscriptionRoute{}, false
 }
 
+func (c *NWDAFContext) FindMLModelMonitorSubscriptionRouteByBackendResourceID(
+	backendResourceID string,
+) (MLModelMonitorSubscriptionRoute, bool) {
+	if c == nil || backendResourceID == "" {
+		return MLModelMonitorSubscriptionRoute{}, false
+	}
+	c.mlModelRouteMu.RLock()
+	defer c.mlModelRouteMu.RUnlock()
+	for _, route := range c.mlModelMonitorRoutes {
+		if route.PeerRoute.BackendResourceID == backendResourceID {
+			return cloneMonitorSubscriptionRoute(route), true
+		}
+	}
+	return MLModelMonitorSubscriptionRoute{}, false
+}
+
 func (c *NWDAFContext) DeleteMLModelMonitorSubscriptionRoute(subscriptionID string) bool {
 	if c == nil {
 		return false
@@ -246,19 +346,109 @@ func (c *NWDAFContext) GetAllMLModelMonitorSubscriptionRoutes() []MLModelMonitor
 }
 
 func cloneProvisionRoute(route MLModelProvisionSubscriptionRoute) MLModelProvisionSubscriptionRoute {
+	route.PeerRoute = clonePeerRoute(route.PeerRoute)
 	route.AcceptedRepresentation = append(json.RawMessage(nil), route.AcceptedRepresentation...)
 	route.BackendRepresentation = append(json.RawMessage(nil), route.BackendRepresentation...)
 	return route
 }
 
 func cloneRegistrationRoute(route MLModelMonitorRegistrationRoute) MLModelMonitorRegistrationRoute {
+	route.PeerRoute = clonePeerRoute(route.PeerRoute)
 	route.AcceptedRepresentation = append(json.RawMessage(nil), route.AcceptedRepresentation...)
 	route.BackendRepresentation = append(json.RawMessage(nil), route.BackendRepresentation...)
 	return route
 }
 
 func cloneMonitorSubscriptionRoute(route MLModelMonitorSubscriptionRoute) MLModelMonitorSubscriptionRoute {
+	route.PeerRoute = clonePeerRoute(route.PeerRoute)
 	route.AcceptedRepresentation = append(json.RawMessage(nil), route.AcceptedRepresentation...)
 	route.BackendRepresentation = append(json.RawMessage(nil), route.BackendRepresentation...)
 	return route
+}
+
+func clonePeerRoute(route MLModelPeerRoute) MLModelPeerRoute {
+	if route.SelectedTarget != nil {
+		target := *route.SelectedTarget
+		route.SelectedTarget = &target
+	}
+	return route
+}
+
+// ReconcileMTLFMLModelRoutes records that the current MTLF process accepted
+// the Go-owned snapshot. Locally owned MTLF resources are recreated under the
+// Go route ID; outbound peer mappings keep their peer Location unchanged.
+func (c *NWDAFContext) ReconcileMTLFMLModelRoutes(processGeneration string) {
+	if c == nil || processGeneration == "" {
+		return
+	}
+	c.mlModelRouteMu.Lock()
+	defer c.mlModelRouteMu.Unlock()
+	for routeID, route := range c.mlModelProvisionRoutes {
+		if route.PeerRoute.LifecycleState != MLModelRouteActive {
+			continue
+		}
+		if route.PeerRoute.SelectedTarget == nil {
+			route.PeerRoute.ProcessGeneration = processGeneration
+			route.PeerRoute.BackendResourceID = route.SubscriptionID
+			c.mlModelProvisionRoutes[routeID] = route
+		}
+	}
+	for routeID, route := range c.mlModelRegistrationRoutes {
+		if route.PeerRoute.LifecycleState != MLModelRouteActive {
+			continue
+		}
+		if route.PeerRoute.SelectedTarget == nil {
+			route.PeerRoute.ProcessGeneration = processGeneration
+			route.PeerRoute.BackendResourceID = route.RegistrationID
+			c.mlModelRegistrationRoutes[routeID] = route
+		}
+	}
+	for routeID, route := range c.mlModelMonitorRoutes {
+		if route.PeerRoute.LifecycleState != MLModelRouteActive {
+			continue
+		}
+		if route.PeerRoute.SelectedTarget != nil {
+			route.PeerRoute.ProcessGeneration = processGeneration
+			c.mlModelMonitorRoutes[routeID] = route
+		}
+	}
+}
+
+// ReconcileAnLFMLModelRoutes records that the current AnLF process accepted
+// the Go-owned snapshot. Locally owned monitor resources are recreated under
+// the Go route ID; outbound peer mappings retain their peer Location.
+func (c *NWDAFContext) ReconcileAnLFMLModelRoutes(processGeneration string) {
+	if c == nil || processGeneration == "" {
+		return
+	}
+	c.mlModelRouteMu.Lock()
+	defer c.mlModelRouteMu.Unlock()
+	for routeID, route := range c.mlModelMonitorRoutes {
+		if route.PeerRoute.LifecycleState != MLModelRouteActive {
+			continue
+		}
+		if route.PeerRoute.SelectedTarget == nil {
+			route.PeerRoute.ProcessGeneration = processGeneration
+			route.PeerRoute.BackendResourceID = route.SubscriptionID
+			c.mlModelMonitorRoutes[routeID] = route
+		}
+	}
+	for routeID, route := range c.mlModelProvisionRoutes {
+		if route.PeerRoute.LifecycleState != MLModelRouteActive {
+			continue
+		}
+		if route.PeerRoute.SelectedTarget != nil {
+			route.PeerRoute.ProcessGeneration = processGeneration
+			c.mlModelProvisionRoutes[routeID] = route
+		}
+	}
+	for routeID, route := range c.mlModelRegistrationRoutes {
+		if route.PeerRoute.LifecycleState != MLModelRouteActive {
+			continue
+		}
+		if route.PeerRoute.SelectedTarget != nil {
+			route.PeerRoute.ProcessGeneration = processGeneration
+			c.mlModelRegistrationRoutes[routeID] = route
+		}
+	}
 }

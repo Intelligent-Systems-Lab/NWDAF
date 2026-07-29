@@ -30,6 +30,7 @@ type mlModelGateway interface {
 		context.Context,
 		[]byte,
 		string,
+		*backend.SelectedTarget,
 	) (*backend.StandardResponse, *models.ProblemDetails)
 	HandleReplaceMLModelMonitorSubscriptionFromBackend(
 		context.Context,
@@ -93,6 +94,7 @@ func (p *Processor) HandleCreateMLModelMonitorSubscriptionFromBackend(
 	ctx context.Context,
 	body []byte,
 	ownerRegistrationID string,
+	target *backend.SelectedTarget,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
 	if p.mlModel == nil {
 		return nil, nil
@@ -101,6 +103,7 @@ func (p *Processor) HandleCreateMLModelMonitorSubscriptionFromBackend(
 		ctx,
 		body,
 		ownerRegistrationID,
+		target,
 	)
 }
 

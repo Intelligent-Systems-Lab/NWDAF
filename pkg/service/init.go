@@ -143,6 +143,7 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		nwdaf.mtlfAvailability,
 		nwdaf.anlfAvailability,
 	)
+	nwdaf.processor.SetMLModelPeerConsumer(nwdaf.consumer)
 
 	// Initialize SBI server
 	nwdaf.sbiServer, err = sbi.NewServer(nwdaf, "")
@@ -280,6 +281,11 @@ func (a *NwdafApp) startRuntime() error {
 	a.wg.Add(1)
 	go a.listenShutdownEvent()
 	a.startBackendAvailabilityMonitors()
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		a.processor.RunMLModelPeerCleanup(a.ctx)
+	}()
 	logger.InitLog.Infoln("NWDAF startup complete")
 	return nil
 }
@@ -314,6 +320,9 @@ func (a *NwdafApp) probeMtlfBackend(ctx context.Context) (backend.ProbeResult, e
 	if response.ProcessInstanceID != health.ProcessInstanceID {
 		return backend.ProbeResult{}, errors.New("MTLF backend process changed during sync")
 	}
+	if a.nwdafCtx != nil {
+		a.nwdafCtx.ReconcileMTLFMLModelRoutes(health.ProcessInstanceID)
+	}
 	return backend.ProbeResult{
 		ProcessInstanceID: health.ProcessInstanceID,
 		Selection:         string(a.currentTrainingDataSource()),
@@ -336,6 +345,9 @@ func (a *NwdafApp) probeAnlfBackend(ctx context.Context) (backend.ProbeResult, e
 	}
 	if response.ProcessInstanceID != health.ProcessInstanceID {
 		return backend.ProbeResult{}, errors.New("AnLF backend process changed during sync")
+	}
+	if a.nwdafCtx != nil {
+		a.nwdafCtx.ReconcileAnLFMLModelRoutes(health.ProcessInstanceID)
 	}
 	if response.TrainingDataSource == "" {
 		response.TrainingDataSource = backend.DataSourceUnavailable
@@ -373,8 +385,14 @@ func (a *NwdafApp) buildBackendSyncRequest(kind backend.Kind) backend.SyncReques
 		return request
 	}
 	for _, route := range a.nwdafCtx.GetAllMLModelProvisionSubscriptionRoutes() {
+		if route.PeerRoute.LifecycleState != nwdaf_context.MLModelRouteActive {
+			continue
+		}
 		if kind == backend.KindAnLF &&
 			route.Initiator != nwdaf_context.MLModelRoutePartyAnLFBackend {
+			continue
+		}
+		if kind == backend.KindMTLF && route.PeerRoute.SelectedTarget != nil {
 			continue
 		}
 		representation := route.BackendRepresentation
@@ -384,10 +402,15 @@ func (a *NwdafApp) buildBackendSyncRequest(kind backend.Kind) backend.SyncReques
 		request.MLModelProvisionSubscriptions = append(
 			request.MLModelProvisionSubscriptions,
 			backend.MLModelProvisionSubscriptionSnapshot{
-				SubscriptionID: route.SubscriptionID,
-				Representation: append([]byte(nil), representation...),
-				Initiator:      string(route.Initiator),
-				Destination:    string(route.Destination),
+				SubscriptionID:    route.SubscriptionID,
+				Representation:    append([]byte(nil), representation...),
+				Initiator:         string(route.Initiator),
+				Destination:       string(route.Destination),
+				Direction:         string(route.PeerRoute.Direction),
+				SelectedTarget:    route.PeerRoute.SelectedTarget,
+				PeerLocation:      route.PeerRoute.PeerLocation,
+				LifecycleState:    string(route.PeerRoute.LifecycleState),
+				ProcessGeneration: route.PeerRoute.ProcessGeneration,
 			},
 		)
 	}
@@ -414,20 +437,37 @@ func (a *NwdafApp) buildBackendSyncRequest(kind backend.Kind) backend.SyncReques
 		}
 	}
 	for _, route := range a.nwdafCtx.GetAllMLModelMonitorRegistrationRoutes() {
+		if route.PeerRoute.LifecycleState != nwdaf_context.MLModelRouteActive {
+			continue
+		}
 		if kind == backend.KindAnLF &&
 			route.Initiator != nwdaf_context.MLModelRoutePartyAnLFBackend {
+			continue
+		}
+		if kind == backend.KindMTLF && route.PeerRoute.SelectedTarget != nil {
 			continue
 		}
 		request.MLModelMonitorRegistrations = append(
 			request.MLModelMonitorRegistrations,
 			backend.MLModelMonitorRegistrationSnapshot{
-				RegistrationID: route.RegistrationID,
-				Representation: append([]byte(nil), route.AcceptedRepresentation...),
-				Initiator:      string(route.Initiator),
+				RegistrationID:    route.RegistrationID,
+				Representation:    append([]byte(nil), route.AcceptedRepresentation...),
+				Initiator:         string(route.Initiator),
+				Direction:         string(route.PeerRoute.Direction),
+				SelectedTarget:    route.PeerRoute.SelectedTarget,
+				PeerLocation:      route.PeerRoute.PeerLocation,
+				LifecycleState:    string(route.PeerRoute.LifecycleState),
+				ProcessGeneration: route.PeerRoute.ProcessGeneration,
 			},
 		)
 	}
 	for _, route := range a.nwdafCtx.GetAllMLModelMonitorSubscriptionRoutes() {
+		if route.PeerRoute.LifecycleState != nwdaf_context.MLModelRouteActive {
+			continue
+		}
+		if kind == backend.KindAnLF && route.PeerRoute.SelectedTarget != nil {
+			continue
+		}
 		if kind == backend.KindMTLF &&
 			route.Destination != nwdaf_context.MLModelRoutePartyMTLFBackend {
 			continue
@@ -443,6 +483,11 @@ func (a *NwdafApp) buildBackendSyncRequest(kind backend.Kind) backend.SyncReques
 				Representation:    append([]byte(nil), representation...),
 				Destination:       string(route.Destination),
 				OwnerRegistration: route.OwnerRegistrationID,
+				Direction:         string(route.PeerRoute.Direction),
+				SelectedTarget:    route.PeerRoute.SelectedTarget,
+				PeerLocation:      route.PeerRoute.PeerLocation,
+				LifecycleState:    string(route.PeerRoute.LifecycleState),
+				ProcessGeneration: route.PeerRoute.ProcessGeneration,
 			},
 		)
 	}

@@ -63,9 +63,18 @@ func (s *Server) HandleCreateMLModelProvisionFromBackend(c *gin.Context) {
 		writeMLModelGatewayUnavailable(c)
 		return
 	}
+	target, err := backend.ParseSelectedTargetHeaders(
+		c.Request.Header,
+		"nnwdaf-mlmodelprovision",
+	)
+	if err != nil {
+		util.GinProblemJson(c, malformedRequestProblem(err.Error()))
+		return
+	}
 	response, problem := s.mlModel.HandleCreateMLModelProvisionFromBackend(
 		c.Request.Context(),
 		body,
+		target,
 	)
 	writeMLModelGatewayResponse(c, response, problem)
 }
@@ -114,9 +123,18 @@ func (s *Server) HandleCreateMLModelMonitorRegistrationFromBackend(c *gin.Contex
 		writeMLModelGatewayUnavailable(c)
 		return
 	}
+	target, err := backend.ParseSelectedTargetHeaders(
+		c.Request.Header,
+		"nnwdaf-mlmodelmonitor",
+	)
+	if err != nil {
+		util.GinProblemJson(c, malformedRequestProblem(err.Error()))
+		return
+	}
 	response, problem := s.mlModel.HandleCreateMLModelMonitorRegistrationFromBackend(
 		c.Request.Context(),
 		body,
+		target,
 	)
 	writeMLModelGatewayResponse(c, response, problem)
 }

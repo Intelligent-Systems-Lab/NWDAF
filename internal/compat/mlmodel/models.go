@@ -269,6 +269,26 @@ func ReplaceStringField(body []byte, field, value string) ([]byte, error) {
 	return json.Marshal(object)
 }
 
+// ReplaceProvisionNotificationSubscriptionID rewrites the standard
+// subscriptionId in every notification object while retaining unknown fields.
+func ReplaceProvisionNotificationSubscriptionID(body []byte, value string) ([]byte, error) {
+	var notifications []map[string]json.RawMessage
+	if err := json.Unmarshal(body, &notifications); err != nil {
+		return nil, err
+	}
+	if len(notifications) == 0 {
+		return nil, errors.New("notification array must contain at least one item")
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	for _, notification := range notifications {
+		notification["subscriptionId"] = encoded
+	}
+	return json.Marshal(notifications)
+}
+
 func ValidateMLEventNotification(value MLEventNotification) error {
 	if value.Event == "" {
 		return errors.New("event is required")

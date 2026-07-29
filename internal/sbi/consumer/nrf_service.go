@@ -106,6 +106,99 @@ type cachedDiscovery struct {
 	usedAt    time.Time
 }
 
+// ValidateCachedSelectedTarget confirms that NRF-selected private routing
+// metadata still identifies one exact, unexpired discovery result. Explicitly
+// configured targets are validated by the backend configuration and do not
+// depend on the NRF cache.
+func (s *NrfService) ValidateCachedSelectedTarget(target backend.SelectedTarget) error {
+	if target.SelectionSource == backend.SelectionSourceConfigured {
+		return nil
+	}
+	if target.SelectionSource != backend.SelectionSourceNRF {
+		return errors.New("selected target source is unsupported")
+	}
+	if s == nil {
+		return errors.New("NRF discovery service is unavailable")
+	}
+
+	now := s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for cacheKey, entry := range s.discoveryCache {
+		if !now.Before(entry.expiresAt) {
+			delete(s.discoveryCache, cacheKey)
+			continue
+		}
+		for profileIndex := range entry.result.profiles {
+			profile := &entry.result.profiles[profileIndex]
+			if profile.NfInstanceId != target.NFInstanceID ||
+				(profile.NfStatus != "" && string(profile.NfStatus) != "REGISTERED") {
+				continue
+			}
+			services := append(
+				[]models.NrfNfManagementNfService(nil),
+				profile.NfServices...,
+			)
+			for key, service := range profile.NfServiceList {
+				if service.ServiceInstanceId == "" {
+					service.ServiceInstanceId = key
+				}
+				services = append(services, service)
+			}
+			for _, service := range services {
+				if service.ServiceInstanceId != target.NFServiceInstanceID ||
+					string(service.ServiceName) != target.ServiceName ||
+					(service.NfServiceStatus != "" &&
+						string(service.NfServiceStatus) != "REGISTERED") {
+					continue
+				}
+				apiRoot := nrfServiceAPIRoot(&profile.NrfNfManagementNfProfile, service)
+				if strings.TrimRight(apiRoot, "/") == strings.TrimRight(target.APIRoot, "/") {
+					entry.usedAt = now
+					s.discoveryCache[cacheKey] = entry
+					return nil
+				}
+			}
+		}
+	}
+	return errors.New("selected target does not match an unexpired NRF discovery result")
+}
+
+func nrfServiceAPIRoot(
+	profile *models.NrfNfManagementNfProfile,
+	service models.NrfNfManagementNfService,
+) string {
+	if apiPrefix := strings.TrimSpace(service.ApiPrefix); apiPrefix != "" {
+		return strings.TrimRight(apiPrefix, "/")
+	}
+	host := strings.TrimSpace(service.Fqdn)
+	if host == "" {
+		host = strings.TrimSpace(profile.Fqdn)
+	}
+	var port int32
+	if host == "" && len(service.IpEndPoints) > 0 {
+		host = strings.TrimSpace(service.IpEndPoints[0].Ipv4Address)
+		if host == "" {
+			host = strings.TrimSpace(service.IpEndPoints[0].Ipv6Address)
+		}
+		port = service.IpEndPoints[0].Port
+	}
+	if host == "" && len(profile.Ipv4Addresses) > 0 {
+		host = strings.TrimSpace(profile.Ipv4Addresses[0])
+	}
+	scheme := string(service.Scheme)
+	if host == "" || (scheme != "http" && scheme != httpsScheme) {
+		return ""
+	}
+	authority := host
+	if port > 0 {
+		authority = net.JoinHostPort(host, strconv.Itoa(int(port)))
+	} else if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		authority = "[" + host + "]"
+	}
+	return (&url.URL{Scheme: scheme, Host: authority}).String()
+}
+
 type rawDiscoveryCapture struct {
 	body []byte
 }

@@ -23,6 +23,7 @@ type mtlfMLModelGateway interface {
 		context.Context,
 		[]byte,
 		string,
+		*backend.SelectedTarget,
 	) (*backend.StandardResponse, *models.ProblemDetails)
 	HandleReplaceMLModelMonitorSubscriptionFromBackend(
 		context.Context,
@@ -106,10 +107,19 @@ func (s *Server) HandleCreateMLModelMonitorSubscriptionFromBackend(c *gin.Contex
 		))
 		return
 	}
+	target, err := backend.ParseSelectedTargetHeaders(
+		c.Request.Header,
+		"nnwdaf-mlmodelmonitor",
+	)
+	if err != nil {
+		util.GinProblemJson(c, malformedRequestProblem(err.Error()))
+		return
+	}
 	response, problem := gateway.HandleCreateMLModelMonitorSubscriptionFromBackend(
 		c.Request.Context(),
 		body,
 		ownerRegistrationID,
+		target,
 	)
 	writeMLModelGatewayResponse(c, response, problem)
 }

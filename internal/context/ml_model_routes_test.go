@@ -1,6 +1,10 @@
 package context
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/free5gc/nwdaf/internal/backend"
+)
 
 func TestMLModelRouteMirrorsCopyRawRepresentations(t *testing.T) {
 	t.Parallel()
@@ -55,5 +59,112 @@ func TestMLModelRouteMirrorsKeepResourceKindsSeparate(t *testing.T) {
 	if len(ctx.GetAllMLModelMonitorRegistrationRoutes()) != 1 ||
 		len(ctx.GetAllMLModelMonitorSubscriptionRoutes()) != 1 {
 		t.Fatal("resource kinds collided")
+	}
+}
+
+func TestBackendSyncRebindsOnlyLocallyOwnedResourceIDs(t *testing.T) {
+	t.Parallel()
+
+	const anlfGeneration = "anlf-generation-2"
+
+	ctx := &NWDAFContext{}
+	if !ctx.AddMLModelProvisionSubscriptionRoute(MLModelProvisionSubscriptionRoute{
+		SubscriptionID: "local-provision",
+		Destination:    MLModelRoutePartyMTLFBackend,
+		PeerRoute: MLModelPeerRoute{
+			BackendResourceID: "old-mtlf-resource",
+			LifecycleState:    MLModelRouteActive,
+		},
+	}) {
+		t.Fatal("could not add local provision route")
+	}
+	if !ctx.AddMLModelProvisionSubscriptionRoute(MLModelProvisionSubscriptionRoute{
+		SubscriptionID: "remote-provision",
+		Initiator:      MLModelRoutePartyAnLFBackend,
+		Destination:    MLModelRoutePartyAnLFBackend,
+		PeerRoute: MLModelPeerRoute{
+			BackendResourceID: "unchanged",
+			PeerLocation:      "http://peer.example/subscriptions/1",
+			LifecycleState:    MLModelRouteActive,
+			SelectedTarget: &backend.SelectedTarget{
+				NFInstanceID: "11111111-1111-4111-8111-111111111111",
+			},
+		},
+	}) {
+		t.Fatal("could not add remote provision route")
+	}
+	if !ctx.AddMLModelMonitorSubscriptionRoute(MLModelMonitorSubscriptionRoute{
+		SubscriptionID: "local-monitor",
+		Destination:    MLModelRoutePartyAnLFBackend,
+		PeerRoute: MLModelPeerRoute{
+			BackendResourceID: "old-anlf-resource",
+			LifecycleState:    MLModelRouteActive,
+		},
+	}) {
+		t.Fatal("could not add local monitor route")
+	}
+
+	ctx.ReconcileMTLFMLModelRoutes("mtlf-generation-2")
+	ctx.ReconcileAnLFMLModelRoutes(anlfGeneration)
+
+	localProvision, _ := ctx.GetMLModelProvisionSubscriptionRoute("local-provision")
+	remoteProvision, _ := ctx.GetMLModelProvisionSubscriptionRoute("remote-provision")
+	localMonitor, _ := ctx.GetMLModelMonitorSubscriptionRoute("local-monitor")
+	if localProvision.PeerRoute.BackendResourceID != "local-provision" ||
+		localProvision.PeerRoute.ProcessGeneration != "mtlf-generation-2" {
+		t.Fatalf("local provision route = %+v", localProvision)
+	}
+	if remoteProvision.PeerRoute.BackendResourceID != "unchanged" ||
+		remoteProvision.PeerRoute.PeerLocation != "http://peer.example/subscriptions/1" ||
+		remoteProvision.PeerRoute.ProcessGeneration != anlfGeneration {
+		t.Fatalf("remote provision route = %+v", remoteProvision)
+	}
+	if localMonitor.PeerRoute.BackendResourceID != "local-monitor" ||
+		localMonitor.PeerRoute.ProcessGeneration != anlfGeneration {
+		t.Fatalf("local monitor route = %+v", localMonitor)
+	}
+}
+
+func TestBackendSyncDoesNotClaimOtherBackendRoutes(t *testing.T) {
+	t.Parallel()
+
+	ctx := &NWDAFContext{}
+	if !ctx.AddMLModelMonitorRegistrationRoute(MLModelMonitorRegistrationRoute{
+		RegistrationID: "anlf-outbound-registration",
+		Initiator:      MLModelRoutePartyAnLFBackend,
+		PeerRoute: MLModelPeerRoute{
+			ProcessGeneration: "anlf-generation-1",
+			LifecycleState:    MLModelRouteActive,
+			SelectedTarget: &backend.SelectedTarget{
+				NFInstanceID: "11111111-1111-4111-8111-111111111111",
+			},
+		},
+	}) {
+		t.Fatal("could not add outbound registration route")
+	}
+	if !ctx.AddMLModelMonitorSubscriptionRoute(MLModelMonitorSubscriptionRoute{
+		SubscriptionID: "mtlf-outbound-monitor",
+		Destination:    MLModelRoutePartyMTLFBackend,
+		PeerRoute: MLModelPeerRoute{
+			ProcessGeneration: "mtlf-generation-1",
+			LifecycleState:    MLModelRouteActive,
+			SelectedTarget: &backend.SelectedTarget{
+				NFInstanceID: "22222222-2222-4222-8222-222222222222",
+			},
+		},
+	}) {
+		t.Fatal("could not add outbound monitor route")
+	}
+
+	ctx.ReconcileMTLFMLModelRoutes("mtlf-generation-2")
+	ctx.ReconcileAnLFMLModelRoutes("anlf-generation-2")
+
+	registration, _ := ctx.GetMLModelMonitorRegistrationRoute("anlf-outbound-registration")
+	monitor, _ := ctx.GetMLModelMonitorSubscriptionRoute("mtlf-outbound-monitor")
+	if registration.PeerRoute.ProcessGeneration != "anlf-generation-2" {
+		t.Fatalf("registration generation = %q", registration.PeerRoute.ProcessGeneration)
+	}
+	if monitor.PeerRoute.ProcessGeneration != "mtlf-generation-2" {
+		t.Fatalf("monitor generation = %q", monitor.PeerRoute.ProcessGeneration)
 	}
 }

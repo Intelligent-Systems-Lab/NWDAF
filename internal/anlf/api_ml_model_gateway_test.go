@@ -23,6 +23,7 @@ type mlModelGatewayStub struct {
 func (s *mlModelGatewayStub) HandleCreateMLModelProvisionFromBackend(
 	_ context.Context,
 	body []byte,
+	_ *backend.SelectedTarget,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
 	s.body = append([]byte(nil), body...)
 	return s.response, s.problem
@@ -49,6 +50,7 @@ func (s *mlModelGatewayStub) HandleDeleteMLModelProvisionFromBackend(
 func (s *mlModelGatewayStub) HandleCreateMLModelMonitorRegistrationFromBackend(
 	_ context.Context,
 	body []byte,
+	_ *backend.SelectedTarget,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
 	s.body = append([]byte(nil), body...)
 	return s.response, s.problem

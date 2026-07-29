@@ -12,7 +12,13 @@ const (
 	KindAnLF Kind = "ANLF"
 	KindMTLF Kind = "MTLF"
 
-	MonitorRegistrationIDHeader = "X-NWDAF-Monitor-Registration-Id"
+	MonitorRegistrationIDHeader     = "X-NWDAF-Monitor-Registration-Id"
+	TargetNFInstanceIDHeader        = "X-NWDAF-Target-Nf-Instance-Id"
+	TargetNFServiceInstanceIDHeader = "X-NWDAF-Target-Nf-Service-Instance-Id"
+	TargetAPIRootHeader             = "X-NWDAF-Target-Api-Root"
+	TargetSelectionSourceHeader     = "X-NWDAF-Target-Selection-Source"
+	SelectionSourceNRF              = "NRF"
+	SelectionSourceConfigured       = "CONFIGURED"
 )
 
 type DataSource string
@@ -61,16 +67,26 @@ type SmfResourceAssociationUpdate struct {
 }
 
 type MLModelProvisionSubscriptionSnapshot struct {
-	SubscriptionID string          `json:"subscriptionId"`
-	Representation json.RawMessage `json:"representation"`
-	Initiator      string          `json:"initiator"`
-	Destination    string          `json:"destination"`
+	SubscriptionID    string          `json:"subscriptionId"`
+	Representation    json.RawMessage `json:"representation"`
+	Initiator         string          `json:"initiator"`
+	Destination       string          `json:"destination"`
+	Direction         string          `json:"direction,omitempty"`
+	SelectedTarget    *SelectedTarget `json:"selectedTarget,omitempty"`
+	PeerLocation      string          `json:"peerLocation,omitempty"`
+	LifecycleState    string          `json:"lifecycleState,omitempty"`
+	ProcessGeneration string          `json:"processGeneration,omitempty"`
 }
 
 type MLModelMonitorRegistrationSnapshot struct {
-	RegistrationID string          `json:"registrationId"`
-	Representation json.RawMessage `json:"representation"`
-	Initiator      string          `json:"initiator"`
+	RegistrationID    string          `json:"registrationId"`
+	Representation    json.RawMessage `json:"representation"`
+	Initiator         string          `json:"initiator"`
+	Direction         string          `json:"direction,omitempty"`
+	SelectedTarget    *SelectedTarget `json:"selectedTarget,omitempty"`
+	PeerLocation      string          `json:"peerLocation,omitempty"`
+	LifecycleState    string          `json:"lifecycleState,omitempty"`
+	ProcessGeneration string          `json:"processGeneration,omitempty"`
 }
 
 type MLModelMonitorSubscriptionSnapshot struct {
@@ -78,6 +94,22 @@ type MLModelMonitorSubscriptionSnapshot struct {
 	Representation    json.RawMessage `json:"representation"`
 	Destination       string          `json:"destination"`
 	OwnerRegistration string          `json:"ownerRegistrationId,omitempty"`
+	Direction         string          `json:"direction,omitempty"`
+	SelectedTarget    *SelectedTarget `json:"selectedTarget,omitempty"`
+	PeerLocation      string          `json:"peerLocation,omitempty"`
+	LifecycleState    string          `json:"lifecycleState,omitempty"`
+	ProcessGeneration string          `json:"processGeneration,omitempty"`
+}
+
+// SelectedTarget is private routing metadata selected from NRF discovery or
+// explicit experiment configuration. It is never serialized into a 3GPP
+// request body.
+type SelectedTarget struct {
+	NFInstanceID        string `json:"nfInstanceId"`
+	NFServiceInstanceID string `json:"nfServiceInstanceId"`
+	ServiceName         string `json:"serviceName"`
+	APIRoot             string `json:"apiRoot"`
+	SelectionSource     string `json:"selectionSource"`
 }
 
 type SyncRequest struct {

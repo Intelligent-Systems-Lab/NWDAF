@@ -132,4 +132,63 @@ func TestExecuteStandardRequestFollowsGoOwnedStandardRedirect(t *testing.T) {
 	if err != nil || response == nil || response.StatusCode != http.StatusNoContent {
 		t.Fatalf("followed response = %+v, error = %v", response, err)
 	}
+	if response.RequestURI != redirect.URL ||
+		response.EffectiveURI != final.URL ||
+		response.PermanentRedirectURI != "" {
+		t.Fatalf("temporary redirect metadata = %+v", response)
+	}
+}
+
+func TestExecuteStandardRequestRecordsOnlyPermanentRedirectTarget(t *testing.T) {
+	t.Parallel()
+
+	final := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusNoContent)
+	}))
+	defer final.Close()
+	permanent := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Location", final.URL)
+		response.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer permanent.Close()
+	initial := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Location", permanent.URL)
+		response.WriteHeader(http.StatusPermanentRedirect)
+	}))
+	defer initial.Close()
+
+	response, err := ExecuteStandardRequest(
+		context.Background(),
+		initial.Client(),
+		time.Second,
+		http.MethodPut,
+		initial.URL,
+		[]byte(`{}`),
+		"replace peer resource",
+		StandardOperationContract{
+			SuccessValidators: map[int]func([]byte) error{http.StatusNoContent: nil},
+			FollowRedirects:   true,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.EffectiveURI != final.URL ||
+		response.PermanentRedirectURI != permanent.URL {
+		t.Fatalf("mixed redirect metadata = %+v", response)
+	}
+}
+
+func TestParseSelectedTargetHeadersRejectsAPIRootQuery(t *testing.T) {
+	t.Parallel()
+
+	header := make(http.Header)
+	header.Set(TargetNFInstanceIDHeader, "11111111-1111-4111-8111-111111111111")
+	header.Set(TargetNFServiceInstanceIDHeader, "service-1")
+	header.Set(TargetAPIRootHeader, "http://peer.example:8000?redirect=unexpected")
+	header.Set(TargetSelectionSourceHeader, SelectionSourceNRF)
+
+	if _, err := ParseSelectedTargetHeaders(header, "nnwdaf-mlmodelprovision"); err == nil {
+		t.Fatal("ParseSelectedTargetHeaders() accepted an API root with a query")
+	}
 }
