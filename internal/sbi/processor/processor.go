@@ -39,6 +39,11 @@ type mtlfMLModelBackend interface {
 	DeleteMLModelMonitorRegistration(context.Context, string) (*backend.StandardResponse, error)
 	DeliverMLModelMonitorNotification(context.Context, []byte) (*backend.StandardResponse, error)
 	DeliverAdrfRetrievalNotification(context.Context, []byte) (*backend.StandardResponse, error)
+	CreateMLModelTrainingSubscription(context.Context, []byte) (*backend.StandardResponse, error)
+	ReplaceMLModelTrainingSubscription(context.Context, string, []byte) (*backend.StandardResponse, error)
+	PatchMLModelTrainingSubscription(context.Context, string, []byte) (*backend.StandardResponse, error)
+	DeleteMLModelTrainingSubscription(context.Context, string) (*backend.StandardResponse, error)
+	DeliverMLModelTrainingNotification(context.Context, []byte) (*backend.StandardResponse, error)
 }
 
 type anlfMLModelBackend interface {
@@ -75,6 +80,14 @@ type mlModelPeerConsumer interface {
 	) (*backend.StandardResponse, error)
 	ReplacePeerMLModelMonitorSubscription(context.Context, string, []byte) (*backend.StandardResponse, error)
 	DeletePeerMLModelMonitorSubscription(context.Context, string) (*backend.StandardResponse, error)
+	CreatePeerMLModelTraining(
+		context.Context,
+		backend.SelectedTarget,
+		[]byte,
+	) (*backend.StandardResponse, error)
+	ReplacePeerMLModelTraining(context.Context, string, []byte) (*backend.StandardResponse, error)
+	PatchPeerMLModelTraining(context.Context, string, []byte) (*backend.StandardResponse, error)
+	DeletePeerMLModelTraining(context.Context, string) (*backend.StandardResponse, error)
 }
 
 type Processor struct {

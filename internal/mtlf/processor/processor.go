@@ -41,6 +41,30 @@ type mlModelGateway interface {
 		context.Context,
 		string,
 	) (*backend.StandardResponse, *models.ProblemDetails)
+	HandleCreateMLModelTrainingFromBackend(
+		context.Context,
+		[]byte,
+		*backend.SelectedTarget,
+	) (*backend.StandardResponse, *models.ProblemDetails)
+	HandleReplaceMLModelTrainingFromBackend(
+		context.Context,
+		string,
+		[]byte,
+	) (*backend.StandardResponse, *models.ProblemDetails)
+	HandlePatchMLModelTrainingFromBackend(
+		context.Context,
+		string,
+		[]byte,
+	) (*backend.StandardResponse, *models.ProblemDetails)
+	HandleDeleteMLModelTrainingFromBackend(
+		context.Context,
+		string,
+	) (*backend.StandardResponse, *models.ProblemDetails)
+	HandleMLModelTrainingNotification(
+		context.Context,
+		string,
+		[]byte,
+	) (*backend.StandardResponse, *models.ProblemDetails)
 }
 
 type nfDiscoveryProxy interface {
@@ -116,6 +140,60 @@ func (p *Processor) HandleReplaceMLModelMonitorSubscriptionFromBackend(
 		return nil, nil
 	}
 	return p.mlModel.HandleReplaceMLModelMonitorSubscriptionFromBackend(ctx, subscriptionID, body)
+}
+
+func (p *Processor) HandleCreateMLModelTrainingFromBackend(
+	ctx context.Context,
+	body []byte,
+	target *backend.SelectedTarget,
+) (*backend.StandardResponse, *models.ProblemDetails) {
+	if p.mlModel == nil {
+		return nil, nil
+	}
+	return p.mlModel.HandleCreateMLModelTrainingFromBackend(ctx, body, target)
+}
+
+func (p *Processor) HandleReplaceMLModelTrainingFromBackend(
+	ctx context.Context,
+	subscriptionID string,
+	body []byte,
+) (*backend.StandardResponse, *models.ProblemDetails) {
+	if p.mlModel == nil {
+		return nil, nil
+	}
+	return p.mlModel.HandleReplaceMLModelTrainingFromBackend(ctx, subscriptionID, body)
+}
+
+func (p *Processor) HandlePatchMLModelTrainingFromBackend(
+	ctx context.Context,
+	subscriptionID string,
+	body []byte,
+) (*backend.StandardResponse, *models.ProblemDetails) {
+	if p.mlModel == nil {
+		return nil, nil
+	}
+	return p.mlModel.HandlePatchMLModelTrainingFromBackend(ctx, subscriptionID, body)
+}
+
+func (p *Processor) HandleDeleteMLModelTrainingFromBackend(
+	ctx context.Context,
+	subscriptionID string,
+) (*backend.StandardResponse, *models.ProblemDetails) {
+	if p.mlModel == nil {
+		return nil, nil
+	}
+	return p.mlModel.HandleDeleteMLModelTrainingFromBackend(ctx, subscriptionID)
+}
+
+func (p *Processor) HandleMLModelTrainingNotification(
+	ctx context.Context,
+	subscriptionID string,
+	body []byte,
+) (*backend.StandardResponse, *models.ProblemDetails) {
+	if p.mlModel == nil {
+		return nil, nil
+	}
+	return p.mlModel.HandleMLModelTrainingNotification(ctx, subscriptionID, body)
 }
 
 func (p *Processor) HandleDeleteMLModelMonitorSubscriptionFromBackend(

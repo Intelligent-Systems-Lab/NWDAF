@@ -19,13 +19,22 @@ func readStandardJSONBody(
 	maxBytes int64,
 	tooLargeDetail string,
 ) ([]byte, *models.ProblemDetails) {
+	return readStandardBody(c, maxBytes, tooLargeDetail, standardJSONMediaType)
+}
+
+func readStandardBody(
+	c *gin.Context,
+	maxBytes int64,
+	tooLargeDetail string,
+	expectedMediaType string,
+) ([]byte, *models.ProblemDetails) {
 	mediaType, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
-	if err != nil || mediaType != standardJSONMediaType {
+	if err != nil || mediaType != expectedMediaType {
 		return nil, &models.ProblemDetails{
 			Status: http.StatusUnsupportedMediaType,
 			Title:  http.StatusText(http.StatusUnsupportedMediaType),
 			Cause:  "UNSUPPORTED_MEDIA_TYPE",
-			Detail: "Content-Type must be application/json",
+			Detail: "Content-Type must be " + expectedMediaType,
 		}
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)

@@ -63,6 +63,58 @@ func ParseNwdafMLModelTrainNotif(body []byte) (*NwdafMLModelTrainNotif, error) {
 	return &value, nil
 }
 
+func ApplySubscriptionPatch(
+	current *NwdafMLModelTrainSubsc,
+	patch *NwdafMLModelTrainSubscPatch,
+) (*NwdafMLModelTrainSubsc, error) {
+	if current == nil || patch == nil {
+		return nil, errors.New("current subscription and patch are required")
+	}
+	body, err := json.Marshal(current)
+	if err != nil {
+		return nil, err
+	}
+	var effective NwdafMLModelTrainSubsc
+	if unmarshalErr := json.Unmarshal(body, &effective); unmarshalErr != nil {
+		return nil, unmarshalErr
+	}
+	if patch.NotificationURI != nil {
+		effective.NotificationURI = *patch.NotificationURI
+	}
+	if patch.EventRequest != nil {
+		effective.EventRequest = patch.EventRequest
+	}
+	if patch.MLModelInfos != nil {
+		effective.MLModelInfos = patch.MLModelInfos
+	}
+	if patch.MLModelTrainingInfos != nil {
+		effective.MLModelTrainingInfos = patch.MLModelTrainingInfos
+	}
+	if patch.MLPreparationFlag != nil {
+		effective.MLPreparationFlag = patch.MLPreparationFlag
+	}
+	if patch.MLAccuracyCheckFlag != nil {
+		effective.MLAccuracyCheckFlag = patch.MLAccuracyCheckFlag
+	}
+	if patch.MLTrainingReportInfo != nil {
+		effective.MLTrainingReportInfo = patch.MLTrainingReportInfo
+	}
+	if patch.RoundIndicator != nil {
+		effective.RoundIndicator = patch.RoundIndicator
+	}
+	if patch.TargetReportingUE != nil {
+		effective.TargetReportingUE = patch.TargetReportingUE
+	}
+	if patch.SkipFLIndicator != nil {
+		effective.SkipFLIndicator = patch.SkipFLIndicator
+	}
+	effectiveBody, err := json.Marshal(effective)
+	if err != nil {
+		return nil, err
+	}
+	return ParseNwdafMLModelTrainSubsc(effectiveBody)
+}
+
 func ValidateFLSubscription(
 	value *NwdafMLModelTrainSubsc,
 	existing *TrainingResourceIdentity,
@@ -86,6 +138,12 @@ func ValidateFLSubscription(
 		}
 	}
 	if value.MLPreparationFlag != nil && *value.MLPreparationFlag {
+		if len(value.MLModelTrainingInfos) == 0 {
+			violations = append(violations, InvalidParameter{
+				Parameter: "mLModelTrainInfos",
+				Reason:    "is required for training preparation",
+			})
+		}
 		for index, info := range value.MLModelTrainingInfos {
 			if info.DataAvailabilityRequirement == nil {
 				violations = append(violations, InvalidParameter{
@@ -255,12 +313,17 @@ func validateNotificationShape(value *NwdafMLModelTrainNotif) error {
 	}
 	hasDelay := value.DelayEventNotification != nil
 	hasModels := len(value.MLModelInfos) > 0
+	hasStatusReport := value.StatusReport != nil
 	hasTermination := value.TerminationRequest != ""
-	if !hasDelay && !hasModels && !hasTermination {
-		return errors.New("at least one of delayEventNotif, mLModelInfos or termTrainReq is required")
+	if !hasDelay && !hasModels && !hasStatusReport && !hasTermination {
+		return errors.New(
+			"at least one of delayEventNotif, mLModelInfos, statusReport or termTrainReq is required",
+		)
 	}
-	if hasDelay && (hasModels || hasTermination) {
-		return errors.New("delayEventNotif cannot coexist with mLModelInfos or termTrainReq")
+	if hasDelay && (hasModels || hasStatusReport || hasTermination) {
+		return errors.New(
+			"delayEventNotif cannot coexist with mLModelInfos, statusReport or termTrainReq",
+		)
 	}
 	if value.MLModelInfos != nil && !hasModels {
 		return errors.New("mLModelInfos must contain at least one item when present")

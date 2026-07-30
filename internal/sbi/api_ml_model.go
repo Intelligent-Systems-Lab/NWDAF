@@ -201,13 +201,21 @@ func (s *Server) HandleDeleteMLModelMonitorSubscription(c *gin.Context) {
 }
 
 func (s *Server) readMLModelBody(c *gin.Context, validate func([]byte) error) ([]byte, bool) {
+	return s.readMLModelBodyWithMediaType(c, "application/json", validate)
+}
+
+func (s *Server) readMLModelBodyWithMediaType(
+	c *gin.Context,
+	expectedMediaType string,
+	validate func([]byte) error,
+) ([]byte, bool) {
 	mediaType, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
-	if err != nil || mediaType != "application/json" {
+	if err != nil || mediaType != expectedMediaType {
 		util.GinProblemJson(c, &models.ProblemDetails{
 			Status: http.StatusUnsupportedMediaType,
 			Title:  http.StatusText(http.StatusUnsupportedMediaType),
 			Cause:  "UNSUPPORTED_MEDIA_TYPE",
-			Detail: "Content-Type must be application/json",
+			Detail: "Content-Type must be " + expectedMediaType,
 		})
 		return nil, false
 	}

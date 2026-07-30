@@ -10,6 +10,7 @@ import (
 
 	"github.com/free5gc/nwdaf/internal/backend"
 	wire "github.com/free5gc/nwdaf/internal/compat/mlmodel"
+	trainingwire "github.com/free5gc/nwdaf/internal/compat/mlmodeltraining"
 )
 
 const mlModelPeerTimeout = 30 * time.Second
@@ -32,6 +33,61 @@ func (c *Consumer) CreatePeerMLModelProvision(
 		body,
 		"create peer ML Model Provision subscription",
 		map[int]func([]byte) error{http.StatusCreated: validateProvisionRepresentation},
+	)
+}
+
+func (c *Consumer) CreatePeerMLModelTraining(
+	ctx context.Context,
+	target backend.SelectedTarget,
+	body []byte,
+) (*backend.StandardResponse, error) {
+	if err := c.validateSelectedTarget(target); err != nil {
+		return nil, &backend.ContractError{
+			Operation: "create peer ML Model Training subscription", Detail: err.Error(),
+		}
+	}
+	return c.executePeerMLModelRequest(
+		ctx, http.MethodPost,
+		peerCollectionURI(target, "nnwdaf-mlmodeltraining", "subscriptions"),
+		body, "create peer ML Model Training subscription",
+		map[int]func([]byte) error{http.StatusCreated: validateTrainingRepresentation},
+	)
+}
+
+func (c *Consumer) ReplacePeerMLModelTraining(
+	ctx context.Context,
+	location string,
+	body []byte,
+) (*backend.StandardResponse, error) {
+	return c.executePeerMLModelRequest(
+		ctx, http.MethodPut, location, body, "replace peer ML Model Training subscription",
+		map[int]func([]byte) error{
+			http.StatusOK: validateTrainingRepresentation, http.StatusNoContent: nil,
+		},
+	)
+}
+
+func (c *Consumer) PatchPeerMLModelTraining(
+	ctx context.Context,
+	location string,
+	body []byte,
+) (*backend.StandardResponse, error) {
+	return c.executePeerMLModelRequestWithContentType(
+		ctx, http.MethodPatch, location, body, "patch peer ML Model Training subscription",
+		map[int]func([]byte) error{
+			http.StatusOK: validateTrainingRepresentation, http.StatusNoContent: nil,
+		},
+		"application/merge-patch+json",
+	)
+}
+
+func (c *Consumer) DeletePeerMLModelTraining(
+	ctx context.Context,
+	location string,
+) (*backend.StandardResponse, error) {
+	return c.executePeerMLModelRequest(
+		ctx, http.MethodDelete, location, nil, "delete peer ML Model Training subscription",
+		map[int]func([]byte) error{http.StatusNoContent: nil},
 	)
 }
 
@@ -173,6 +229,20 @@ func (c *Consumer) executePeerMLModelRequest(
 	operation string,
 	success map[int]func([]byte) error,
 ) (*backend.StandardResponse, error) {
+	return c.executePeerMLModelRequestWithContentType(
+		ctx, method, requestURI, body, operation, success, "",
+	)
+}
+
+func (c *Consumer) executePeerMLModelRequestWithContentType(
+	ctx context.Context,
+	method,
+	requestURI string,
+	body []byte,
+	operation string,
+	success map[int]func([]byte) error,
+	requestContentType string,
+) (*backend.StandardResponse, error) {
 	if strings.TrimSpace(requestURI) == "" {
 		return nil, &backend.ContractError{Operation: operation, Detail: "peer URI is required"}
 	}
@@ -204,9 +274,18 @@ func (c *Consumer) executePeerMLModelRequest(
 				http.StatusBadGateway,
 				http.StatusServiceUnavailable,
 			),
-			FollowRedirects: true,
+			FollowRedirects:    true,
+			RequestContentType: requestContentType,
 		},
 	)
+}
+
+func validateTrainingRepresentation(body []byte) error {
+	value, err := trainingwire.ParseNwdafMLModelTrainSubsc(body)
+	if err != nil {
+		return err
+	}
+	return trainingwire.ValidateFLSubscription(value, nil)
 }
 
 func peerCollectionURI(

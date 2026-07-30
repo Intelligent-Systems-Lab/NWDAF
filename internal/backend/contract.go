@@ -101,6 +101,16 @@ type MLModelMonitorSubscriptionSnapshot struct {
 	ProcessGeneration string          `json:"processGeneration,omitempty"`
 }
 
+type MLModelTrainingSubscriptionSnapshot struct {
+	SubscriptionID    string          `json:"subscriptionId"`
+	Representation    json.RawMessage `json:"representation"`
+	Direction         string          `json:"direction,omitempty"`
+	SelectedTarget    *SelectedTarget `json:"selectedTarget,omitempty"`
+	PeerLocation      string          `json:"peerLocation,omitempty"`
+	LifecycleState    string          `json:"lifecycleState,omitempty"`
+	ProcessGeneration string          `json:"processGeneration,omitempty"`
+}
+
 // SelectedTarget is private routing metadata selected from NRF discovery or
 // explicit experiment configuration. It is never serialized into a 3GPP
 // request body.
@@ -120,6 +130,7 @@ type SyncRequest struct {
 	MLModelProvisionSubscriptions []MLModelProvisionSubscriptionSnapshot `json:"mlModelProvisionSubscriptions"`
 	MLModelMonitorRegistrations   []MLModelMonitorRegistrationSnapshot   `json:"mlModelMonitorRegistrations"`
 	MLModelMonitorSubscriptions   []MLModelMonitorSubscriptionSnapshot   `json:"mlModelMonitorSubscriptions"`
+	MLModelTrainingSubscriptions  []MLModelTrainingSubscriptionSnapshot  `json:"mlModelTrainingSubscriptions,omitempty"`
 }
 
 type SyncResponse struct {

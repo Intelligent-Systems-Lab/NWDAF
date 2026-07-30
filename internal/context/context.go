@@ -26,6 +26,9 @@ const (
 	nwdafMLModelMonitorAPIVersion                            = "v1"
 	nwdafMLModelMonitorAPIFullVersion                        = "1.0.2"
 	nwdafMLModelMonitorServiceName        models.ServiceName = "nnwdaf-mlmodelmonitor"
+	nwdafMLModelTrainingAPIVersion                           = "v1"
+	nwdafMLModelTrainingAPIFullVersion                       = "1.0.5"
+	nwdafMLModelTrainingServiceName       models.ServiceName = "nnwdaf-mlmodeltraining"
 )
 
 func Init() {
@@ -42,11 +45,13 @@ func InitWithNFInstanceID(nfInstanceID string) {
 		nfServiceInstanceId:               uuid.New().String(),
 		mlModelProvisionServiceInstanceID: uuid.New().String(),
 		mlModelMonitorServiceInstanceID:   uuid.New().String(),
+		mlModelTrainingServiceInstanceID:  uuid.New().String(),
 		analyticsRoutes:                   make(map[string]AnalyticsSubscriptionRoute),
 		smfPeerRoutes:                     make(map[string]SmfPeerResourceRoute),
 		mlModelProvisionRoutes:            make(map[string]MLModelProvisionSubscriptionRoute),
 		mlModelRegistrationRoutes:         make(map[string]MLModelMonitorRegistrationRoute),
 		mlModelMonitorRoutes:              make(map[string]MLModelMonitorSubscriptionRoute),
+		mlModelTrainingRoutes:             make(map[string]MLModelTrainingSubscriptionRoute),
 	}
 	logger.CtxLog.Infof("NWDAF Context initialized with NfId: %s", nwdafContext.NfId)
 }
@@ -63,6 +68,7 @@ type NWDAFContext struct {
 	nfServiceInstanceId               string
 	mlModelProvisionServiceInstanceID string
 	mlModelMonitorServiceInstanceID   string
+	mlModelTrainingServiceInstanceID  string
 	nrfUri                            string
 	nrfCertPem                        string
 	nfProfile                         compatnrf.NFProfile
@@ -79,6 +85,7 @@ type NWDAFContext struct {
 	mlModelProvisionRoutes    map[string]MLModelProvisionSubscriptionRoute
 	mlModelRegistrationRoutes map[string]MLModelMonitorRegistrationRoute
 	mlModelMonitorRoutes      map[string]MLModelMonitorSubscriptionRoute
+	mlModelTrainingRoutes     map[string]MLModelTrainingSubscriptionRoute
 }
 
 type SmfPeerResourceRoute struct {
@@ -337,6 +344,9 @@ func (c *NWDAFContext) ConfigureNFManagement(config NFManagementConfig) error {
 	if c.mlModelMonitorServiceInstanceID == "" {
 		c.mlModelMonitorServiceInstanceID = uuid.New().String()
 	}
+	if c.mlModelTrainingServiceInstanceID == "" {
+		c.mlModelTrainingServiceInstanceID = uuid.New().String()
+	}
 	registerIPv4 := strings.TrimSpace(config.RegisterIPv4)
 	parsedRegisterIPv4 := net.ParseIP(registerIPv4)
 	if strings.Contains(registerIPv4, ":") || parsedRegisterIPv4 == nil ||
@@ -415,6 +425,11 @@ func (c *NWDAFContext) serviceMetadata(
 		return c.mlModelMonitorServiceInstanceID,
 			nwdafMLModelMonitorAPIVersion,
 			nwdafMLModelMonitorAPIFullVersion,
+			nil
+	case nwdafMLModelTrainingServiceName:
+		return c.mlModelTrainingServiceInstanceID,
+			nwdafMLModelTrainingAPIVersion,
+			nwdafMLModelTrainingAPIFullVersion,
 			nil
 	default:
 		return "", "", "", fmt.Errorf("unsupported NWDAF service %q", serviceName)

@@ -43,12 +43,16 @@ func (s *mlModelAvailabilityStub) Snapshot() backend.Snapshot {
 }
 
 type mtlfMLModelBackendStub struct {
-	provisionBody       []byte
-	registrationBody    []byte
-	response            *backend.StandardResponse
-	err                 error
-	deletedProvision    string
-	deletedRegistration string
+	provisionBody        []byte
+	registrationBody     []byte
+	response             *backend.StandardResponse
+	err                  error
+	deletedProvision     string
+	deletedRegistration  string
+	trainingBody         []byte
+	trainingNotification []byte
+	trainingResponse     *backend.StandardResponse
+	trainingError        error
 }
 
 func (s *mtlfMLModelBackendStub) CreateMLModelProvisionSubscription(
@@ -133,6 +137,49 @@ func (s *mtlfMLModelBackendStub) DeliverAdrfRetrievalNotification(
 	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
 }
 
+func (s *mtlfMLModelBackendStub) CreateMLModelTrainingSubscription(
+	_ context.Context, body []byte,
+) (*backend.StandardResponse, error) {
+	s.trainingBody = append([]byte(nil), body...)
+	return &backend.StandardResponse{
+		StatusCode: http.StatusCreated,
+		Location: "http://mtlf.internal/internal/v1/ml-model-training/subscriptions/" +
+			testProvisionID,
+		ContentType: "application/json",
+		Body:        append([]byte(nil), body...),
+	}, nil
+}
+
+func (s *mtlfMLModelBackendStub) ReplaceMLModelTrainingSubscription(
+	_ context.Context, _ string, body []byte,
+) (*backend.StandardResponse, error) {
+	s.trainingBody = append([]byte(nil), body...)
+	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+}
+
+func (s *mtlfMLModelBackendStub) PatchMLModelTrainingSubscription(
+	_ context.Context, _ string, body []byte,
+) (*backend.StandardResponse, error) {
+	s.trainingBody = append([]byte(nil), body...)
+	if s.trainingResponse != nil || s.trainingError != nil {
+		return s.trainingResponse, s.trainingError
+	}
+	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+}
+
+func (s *mtlfMLModelBackendStub) DeleteMLModelTrainingSubscription(
+	_ context.Context, _ string,
+) (*backend.StandardResponse, error) {
+	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+}
+
+func (s *mtlfMLModelBackendStub) DeliverMLModelTrainingNotification(
+	_ context.Context, body []byte,
+) (*backend.StandardResponse, error) {
+	s.trainingNotification = append([]byte(nil), body...)
+	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+}
+
 type anlfMLModelBackendStub struct {
 	body     []byte
 	response *backend.StandardResponse
@@ -163,6 +210,36 @@ type mlModelPeerConsumerStub struct {
 	deleteProvisionErrors    []error
 	deleteRegistrationErrors []error
 	deleteMonitorErrors      []error
+}
+
+func (s *mlModelPeerConsumerStub) CreatePeerMLModelTraining(
+	_ context.Context, _ backend.SelectedTarget, body []byte,
+) (*backend.StandardResponse, error) {
+	return &backend.StandardResponse{
+		StatusCode:   http.StatusCreated,
+		Location:     "/nnwdaf-mlmodeltraining/v1/subscriptions/" + testProvisionID,
+		EffectiveURI: "http://nwdaf-a.example/nnwdaf-mlmodeltraining/v1/subscriptions",
+		ContentType:  "application/json",
+		Body:         append([]byte(nil), body...),
+	}, nil
+}
+
+func (s *mlModelPeerConsumerStub) ReplacePeerMLModelTraining(
+	_ context.Context, _ string, _ []byte,
+) (*backend.StandardResponse, error) {
+	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+}
+
+func (s *mlModelPeerConsumerStub) PatchPeerMLModelTraining(
+	_ context.Context, _ string, _ []byte,
+) (*backend.StandardResponse, error) {
+	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+}
+
+func (s *mlModelPeerConsumerStub) DeletePeerMLModelTraining(
+	_ context.Context, _ string,
+) (*backend.StandardResponse, error) {
+	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
 }
 
 func (s *mlModelPeerConsumerStub) CreatePeerMLModelProvision(
@@ -918,6 +995,63 @@ func TestRemoteMonitorSubscriptionRejectsUnknownOwner(t *testing.T) {
 	}
 	if len(peer.monitorBody) != 0 {
 		t.Fatal("peer create ran before owner validation")
+	}
+}
+
+func TestSelfDiscoveredMonitorSubscriptionUsesLocalAnLFBackend(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, _, _ := newMLModelProcessorTestSubject()
+	_ = mtlfBackend
+	peer := &mlModelPeerConsumerStub{}
+	processor.SetMLModelPeerConsumer(peer)
+	if !ctx.AddMLModelMonitorRegistrationRoute(
+		nwdaf_context.MLModelMonitorRegistrationRoute{
+			RegistrationID: "registration-go",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				Direction:         nwdaf_context.MLModelRouteDirectionInbound,
+				BackendResourceID: "registration-mtlf",
+				LifecycleState:    nwdaf_context.MLModelRouteActive,
+			},
+		},
+	) {
+		t.Fatal("could not seed local monitor registration route")
+	}
+	target := backend.SelectedTarget{
+		NFInstanceID:        ctx.NfId,
+		NFServiceInstanceID: "model-monitor-self",
+		ServiceName:         "nnwdaf-mlmodelmonitor",
+		APIRoot:             "http://self.example",
+		SelectionSource:     backend.SelectionSourceNRF,
+	}
+	body := []byte(`{
+		"modelIds":[7],
+		"notificationUri":"http://mtlf.backend/monitor",
+		"notifCorrId":"scope-a-generation-1",
+		"modelMetric":"ACCURACY",
+		"mLEvent":"UE_COMMUNICATION"
+	}`)
+	response, problem := processor.HandleCreateMLModelMonitorSubscriptionFromBackend(
+		context.Background(),
+		body,
+		"registration-mtlf",
+		&target,
+	)
+	if problem != nil || response == nil || response.StatusCode != http.StatusCreated {
+		t.Fatalf("create response=%+v problem=%+v", response, problem)
+	}
+	if len(peer.monitorBody) != 0 {
+		t.Fatal("self-discovered target was sent through the peer HTTP consumer")
+	}
+	if len(anlfBackend.body) == 0 {
+		t.Fatal("self-discovered target did not reach the local AnLF backend")
+	}
+	localRouteID, err := backend.ResourceIDFromLocation(response.Location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, found := ctx.GetMLModelMonitorSubscriptionRoute(localRouteID)
+	if !found || route.OwnerRegistrationID != "registration-go" ||
+		route.PeerRoute.SelectedTarget != nil {
+		t.Fatalf("local monitor route=%+v found=%v", route, found)
 	}
 }
 

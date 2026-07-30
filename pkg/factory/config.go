@@ -33,8 +33,10 @@ const (
 	NwdafEventsSubResUriPrefix        = "/nnwdaf-eventssubscription/v1"
 	NwdafMLModelProvisionResURIPrefix = "/nnwdaf-mlmodelprovision/v1"
 	NwdafMLModelMonitorResURIPrefix   = "/nnwdaf-mlmodelmonitor/v1"
+	NwdafMLModelTrainingResURIPrefix  = "/nnwdaf-mlmodeltraining/v1"
 	NwdafSupportedEventUEComm         = "UE_COMMUNICATION"
 	NwdafMLModelMonitorServiceName    = "nnwdaf-mlmodelmonitor"
+	NwdafMLModelTrainingServiceName   = "nnwdaf-mlmodeltraining"
 )
 
 var NwdafConfig *Config
@@ -44,9 +46,10 @@ var supportedAnalyticsAllowlist = map[string]struct{}{
 }
 
 var supportedServiceAllowlist = map[models.ServiceName]struct{}{
-	models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION:       {},
-	models.ServiceName_NNWDAF_MLMODELPROVISION:         {},
-	models.ServiceName(NwdafMLModelMonitorServiceName): {},
+	models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION:        {},
+	models.ServiceName_NNWDAF_MLMODELPROVISION:          {},
+	models.ServiceName(NwdafMLModelMonitorServiceName):  {},
+	models.ServiceName(NwdafMLModelTrainingServiceName): {},
 }
 
 var (
@@ -333,6 +336,7 @@ func (c *Configuration) validateProfileDependencies() error {
 	_, advertisesEvents := services[models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION]
 	_, advertisesProvision := services[models.ServiceName_NNWDAF_MLMODELPROVISION]
 	_, advertisesMonitor := services[models.ServiceName(NwdafMLModelMonitorServiceName)]
+	_, advertisesTraining := services[models.ServiceName(NwdafMLModelTrainingServiceName)]
 
 	hasAnlf := c.AnlfBackend != nil && c.AnlfBackend.Enabled
 	hasMtlf := c.MtlfBackend != nil && c.MtlfBackend.Enabled
@@ -368,6 +372,31 @@ func (c *Configuration) validateProfileDependencies() error {
 		errs = append(errs, errors.New(
 			"serviceNameList nnwdaf-mlmodelmonitor requires an enabled anlfBackend or mtlfBackend",
 		))
+	}
+	if advertisesTraining && !hasMtlf {
+		errs = append(errs, errors.New(
+			"serviceNameList nnwdaf-mlmodeltraining requires an enabled mtlfBackend",
+		))
+	}
+	if advertisesTraining && !hasMLAnalytics {
+		errs = append(errs, errors.New(
+			"serviceNameList nnwdaf-mlmodeltraining requires non-empty nwdafInfo.mlAnalyticsList",
+		))
+	}
+	if advertisesTraining {
+		hasClientCapability := false
+		for _, entry := range c.NwdafInfo.MLAnalyticsList {
+			if entry.FLCapabilityType == compatnrf.FLCapabilityTypeClient ||
+				entry.FLCapabilityType == compatnrf.FLCapabilityTypeServerAndClient {
+				hasClientCapability = true
+				break
+			}
+		}
+		if !hasClientCapability {
+			errs = append(errs, errors.New(
+				"serviceNameList nnwdaf-mlmodeltraining requires FL_CLIENT capability",
+			))
+		}
 	}
 	if hasMLAnalytics {
 		for index, entry := range c.NwdafInfo.MLAnalyticsList {
@@ -1153,7 +1182,7 @@ func (c *Config) GetServiceNameList() []models.ServiceName {
 		return append([]models.ServiceName(nil), c.Configuration.ServiceNameList...)
 	}
 
-	services := make([]models.ServiceName, 0, 3)
+	services := make([]models.ServiceName, 0, 4)
 	hasAnlf := c.Configuration.AnlfBackend != nil && c.Configuration.AnlfBackend.Enabled
 	hasMtlf := c.Configuration.MtlfBackend != nil && c.Configuration.MtlfBackend.Enabled
 	if hasAnlf {

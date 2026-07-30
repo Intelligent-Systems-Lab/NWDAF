@@ -384,7 +384,8 @@ func (c *NWDAFContext) ReconcileMTLFMLModelRoutes(processGeneration string) {
 	c.mlModelRouteMu.Lock()
 	defer c.mlModelRouteMu.Unlock()
 	for routeID, route := range c.mlModelProvisionRoutes {
-		if route.PeerRoute.LifecycleState != MLModelRouteActive {
+		if route.PeerRoute.LifecycleState != MLModelRouteActive ||
+			route.PeerRoute.ProcessGeneration == processGeneration {
 			continue
 		}
 		if route.PeerRoute.SelectedTarget == nil {
@@ -394,7 +395,8 @@ func (c *NWDAFContext) ReconcileMTLFMLModelRoutes(processGeneration string) {
 		}
 	}
 	for routeID, route := range c.mlModelRegistrationRoutes {
-		if route.PeerRoute.LifecycleState != MLModelRouteActive {
+		if route.PeerRoute.LifecycleState != MLModelRouteActive ||
+			route.PeerRoute.ProcessGeneration == processGeneration {
 			continue
 		}
 		if route.PeerRoute.SelectedTarget == nil {
@@ -404,13 +406,27 @@ func (c *NWDAFContext) ReconcileMTLFMLModelRoutes(processGeneration string) {
 		}
 	}
 	for routeID, route := range c.mlModelMonitorRoutes {
-		if route.PeerRoute.LifecycleState != MLModelRouteActive {
+		if route.PeerRoute.LifecycleState != MLModelRouteActive ||
+			route.PeerRoute.ProcessGeneration == processGeneration {
 			continue
 		}
 		if route.PeerRoute.SelectedTarget != nil {
 			route.PeerRoute.ProcessGeneration = processGeneration
 			c.mlModelMonitorRoutes[routeID] = route
 		}
+	}
+	for routeID, route := range c.mlModelTrainingRoutes {
+		if route.PeerRoute.LifecycleState != MLModelRouteActive ||
+			route.PeerRoute.ProcessGeneration == processGeneration {
+			continue
+		}
+		if route.PeerRoute.SelectedTarget == nil {
+			route.PeerRoute.ProcessGeneration = processGeneration
+			route.PeerRoute.BackendResourceID = route.SubscriptionID
+		} else {
+			route.PeerRoute.ProcessGeneration = processGeneration
+		}
+		c.mlModelTrainingRoutes[routeID] = route
 	}
 }
 
@@ -424,7 +440,8 @@ func (c *NWDAFContext) ReconcileAnLFMLModelRoutes(processGeneration string) {
 	c.mlModelRouteMu.Lock()
 	defer c.mlModelRouteMu.Unlock()
 	for routeID, route := range c.mlModelMonitorRoutes {
-		if route.PeerRoute.LifecycleState != MLModelRouteActive {
+		if route.PeerRoute.LifecycleState != MLModelRouteActive ||
+			route.PeerRoute.ProcessGeneration == processGeneration {
 			continue
 		}
 		if route.PeerRoute.SelectedTarget == nil {
@@ -434,7 +451,8 @@ func (c *NWDAFContext) ReconcileAnLFMLModelRoutes(processGeneration string) {
 		}
 	}
 	for routeID, route := range c.mlModelProvisionRoutes {
-		if route.PeerRoute.LifecycleState != MLModelRouteActive {
+		if route.PeerRoute.LifecycleState != MLModelRouteActive ||
+			route.PeerRoute.ProcessGeneration == processGeneration {
 			continue
 		}
 		if route.PeerRoute.SelectedTarget != nil {
@@ -443,7 +461,8 @@ func (c *NWDAFContext) ReconcileAnLFMLModelRoutes(processGeneration string) {
 		}
 	}
 	for routeID, route := range c.mlModelRegistrationRoutes {
-		if route.PeerRoute.LifecycleState != MLModelRouteActive {
+		if route.PeerRoute.LifecycleState != MLModelRouteActive ||
+			route.PeerRoute.ProcessGeneration == processGeneration {
 			continue
 		}
 		if route.PeerRoute.SelectedTarget != nil {

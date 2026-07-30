@@ -20,6 +20,7 @@ configuration:
   serviceNameList:
     - nnwdaf-eventssubscription
     - nnwdaf-mlmodelmonitor
+    - nnwdaf-mlmodeltraining
 
   nwdafInfo:
     nwdafEvents:

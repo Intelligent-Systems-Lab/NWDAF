@@ -622,6 +622,22 @@ func (p *Processor) HandleCreateMLModelMonitorSubscriptionFromBackend(
 	target *backend.SelectedTarget,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
 	if target != nil {
+		nwdafContext := p.nwdaf.Context()
+		if nwdafContext != nil && target.NFInstanceID == nwdafContext.NfId {
+			normalizedOwnerID, err := normalizeMonitorOwnerRegistrationID(
+				nwdafContext,
+				ownerRegistrationID,
+			)
+			if err != nil {
+				return nil, malformedMLModelProblem(err)
+			}
+			return p.handleCreateMLModelMonitorSubscription(
+				requestContext,
+				body,
+				nwdaf_context.MLModelRoutePartyMTLFBackend,
+				normalizedOwnerID,
+			)
+		}
 		return p.handleCreateRemoteMLModelMonitorSubscription(
 			requestContext,
 			body,

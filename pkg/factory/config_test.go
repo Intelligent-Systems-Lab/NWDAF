@@ -301,6 +301,7 @@ func TestDistributedRoleConfigs(t *testing.T) {
 			services: []models.ServiceName{
 				models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION,
 				models.ServiceName(factory.NwdafMLModelMonitorServiceName),
+				models.ServiceName(factory.NwdafMLModelTrainingServiceName),
 			},
 			flCapability:   compatnrf.FLCapabilityTypeClient,
 			tac:            "000001",
@@ -312,6 +313,7 @@ func TestDistributedRoleConfigs(t *testing.T) {
 			services: []models.ServiceName{
 				models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION,
 				models.ServiceName(factory.NwdafMLModelMonitorServiceName),
+				models.ServiceName(factory.NwdafMLModelTrainingServiceName),
 			},
 			flCapability:   compatnrf.FLCapabilityTypeClient,
 			tac:            "000002",

@@ -38,6 +38,7 @@ func TestParseNFDiscoveryQueryFLClientAndADRF(t *testing.T) {
 
 	flQuery, problem := ParseNFDiscoveryQuery(url.Values{
 		"target-nf-type": {"NWDAF"},
+		"service-names":  {"nnwdaf-mlmodeltraining"},
 		"ml-analytics-info-list": {`[{
 			"mlAnalyticsIds":["UE_COMMUNICATION"],
 			"trackingAreaList":[{
@@ -49,6 +50,8 @@ func TestParseNFDiscoveryQueryFLClientAndADRF(t *testing.T) {
 		}]`},
 	})
 	if problem != nil || len(flQuery.MLAnalyticsInfoList) != 1 ||
+		len(flQuery.ServiceNames) != 1 ||
+		string(flQuery.ServiceNames[0]) != serviceMLModelTraining ||
 		flQuery.MLAnalyticsInfoList[0].FLCapabilityType != compatnrf.FLCapabilityTypeClient {
 		t.Fatalf("FL ParseNFDiscoveryQuery() query=%#v problem=%+v", flQuery, problem)
 	}

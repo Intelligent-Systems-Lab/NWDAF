@@ -17,7 +17,7 @@ const validPreparationSubscription = `{
 				}]
 			}
 		},
-		"modelInterInfo":"pymtlf-model-bundle-v1"
+		"modelInterInfo":"vendor-model-bundle-v1"
 	}],
 	"notifUri":"http://nwdaf-c.example/training/callback",
 	"notifCorreId":"prep-client-a",

@@ -36,9 +36,10 @@ type StandardResponse struct {
 // Release 18 operation. Redirect following is reserved for Go-owned outbound
 // standard callbacks; private backend calls must leave it disabled.
 type StandardOperationContract struct {
-	SuccessValidators map[int]func([]byte) error
-	ErrorStatuses     map[int]struct{}
-	FollowRedirects   bool
+	SuccessValidators  map[int]func([]byte) error
+	ErrorStatuses      map[int]struct{}
+	FollowRedirects    bool
+	RequestContentType string
 }
 
 func ErrorStatuses(statuses ...int) map[int]struct{} {
@@ -217,7 +218,11 @@ func ExecuteStandardRequest(
 		return nil, &ContractError{Operation: operation, Detail: "could not create backend request"}
 	}
 	if len(body) > 0 {
-		request.Header.Set("Content-Type", "application/json")
+		contentType := strings.TrimSpace(contract.RequestContentType)
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		request.Header.Set("Content-Type", contentType)
 	}
 	transport := *client
 	permanentRedirectURI := ""

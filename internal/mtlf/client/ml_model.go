@@ -7,12 +7,15 @@ import (
 
 	"github.com/free5gc/nwdaf/internal/backend"
 	wire "github.com/free5gc/nwdaf/internal/compat/mlmodel"
+	trainingwire "github.com/free5gc/nwdaf/internal/compat/mlmodeltraining"
 )
 
 const (
 	mlModelProvisionSubscriptionsPath = "/internal/v1/ml-model-provision/subscriptions"
 	mlModelMonitorRegistrationsPath   = "/internal/v1/ml-model-monitor/registrations"
 	mlModelMonitorNotificationsPath   = "/internal/v1/ml-model-monitor/notifications"
+	mlModelTrainingSubscriptionsPath  = "/internal/v1/ml-model-training/subscriptions"
+	mlModelTrainingNotificationsPath  = "/internal/v1/ml-model-training/notifications"
 )
 
 func (c *BackendClient) CreateMLModelProvisionSubscription(
@@ -30,6 +33,88 @@ func (c *BackendClient) CreateMLModelProvisionSubscription(
 				http.StatusCreated: validateProvisionSubscription,
 			},
 			ErrorStatuses: createErrorStatuses(),
+		},
+	)
+}
+
+func (c *BackendClient) CreateMLModelTrainingSubscription(
+	ctx context.Context,
+	body []byte,
+) (*backend.StandardResponse, error) {
+	return c.doMLModelRequest(
+		ctx, http.MethodPost, c.endpoint+mlModelTrainingSubscriptionsPath, body,
+		"create ML Model Training subscription",
+		backend.StandardOperationContract{
+			SuccessValidators: map[int]func([]byte) error{
+				http.StatusCreated: validateTrainingSubscription,
+			},
+			ErrorStatuses: createErrorStatuses(),
+		},
+	)
+}
+
+func (c *BackendClient) ReplaceMLModelTrainingSubscription(
+	ctx context.Context,
+	subscriptionID string,
+	body []byte,
+) (*backend.StandardResponse, error) {
+	return c.doMLModelRequest(
+		ctx, http.MethodPut,
+		c.endpoint+mlModelTrainingSubscriptionsPath+"/"+url.PathEscape(subscriptionID),
+		body, "replace ML Model Training subscription",
+		backend.StandardOperationContract{
+			SuccessValidators: map[int]func([]byte) error{
+				http.StatusOK: validateTrainingSubscription, http.StatusNoContent: nil,
+			},
+			ErrorStatuses: createErrorStatuses(),
+		},
+	)
+}
+
+func (c *BackendClient) PatchMLModelTrainingSubscription(
+	ctx context.Context,
+	subscriptionID string,
+	body []byte,
+) (*backend.StandardResponse, error) {
+	return c.doMLModelRequest(
+		ctx, http.MethodPatch,
+		c.endpoint+mlModelTrainingSubscriptionsPath+"/"+url.PathEscape(subscriptionID),
+		body, "patch ML Model Training subscription",
+		backend.StandardOperationContract{
+			SuccessValidators: map[int]func([]byte) error{
+				http.StatusOK: validateTrainingSubscription, http.StatusNoContent: nil,
+			},
+			ErrorStatuses:      createErrorStatuses(),
+			RequestContentType: "application/merge-patch+json",
+		},
+	)
+}
+
+func (c *BackendClient) DeleteMLModelTrainingSubscription(
+	ctx context.Context,
+	subscriptionID string,
+) (*backend.StandardResponse, error) {
+	return c.doMLModelRequest(
+		ctx, http.MethodDelete,
+		c.endpoint+mlModelTrainingSubscriptionsPath+"/"+url.PathEscape(subscriptionID),
+		nil, "delete ML Model Training subscription",
+		backend.StandardOperationContract{
+			SuccessValidators: map[int]func([]byte) error{http.StatusNoContent: nil},
+			ErrorStatuses:     deleteErrorStatuses(),
+		},
+	)
+}
+
+func (c *BackendClient) DeliverMLModelTrainingNotification(
+	ctx context.Context,
+	body []byte,
+) (*backend.StandardResponse, error) {
+	return c.doMLModelRequest(
+		ctx, http.MethodPost, c.endpoint+mlModelTrainingNotificationsPath, body,
+		"deliver ML Model Training notification",
+		backend.StandardOperationContract{
+			SuccessValidators: map[int]func([]byte) error{http.StatusNoContent: nil},
+			ErrorStatuses:     createErrorStatuses(),
 		},
 	)
 }
@@ -182,4 +267,12 @@ func validateProvisionSubscription(body []byte) error {
 func validateMonitorRegistration(body []byte) error {
 	_, err := wire.ParseMLModelMonitorRegistration(body)
 	return err
+}
+
+func validateTrainingSubscription(body []byte) error {
+	value, err := trainingwire.ParseNwdafMLModelTrainSubsc(body)
+	if err != nil {
+		return err
+	}
+	return trainingwire.ValidateFLSubscription(value, nil)
 }

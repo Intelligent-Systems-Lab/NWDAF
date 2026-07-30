@@ -312,7 +312,10 @@ func (a *NwdafApp) probeMtlfBackend(ctx context.Context) (backend.ProbeResult, e
 		return backend.ProbeResult{}, err
 	}
 	a.mtlfAvailability.MarkSyncing(health.ProcessInstanceID)
-	response, err := a.mtlfBackendClient.Sync(ctx, a.buildBackendSyncRequest(backend.KindMTLF))
+	response, err := a.mtlfBackendClient.Sync(
+		ctx,
+		a.buildBackendSyncRequest(backend.KindMTLF, health.ProcessInstanceID),
+	)
 	if err != nil {
 		logger.InitLog.Warnf("MTLF backend sync failed: %v", err)
 		return backend.ProbeResult{}, err
@@ -338,7 +341,10 @@ func (a *NwdafApp) probeAnlfBackend(ctx context.Context) (backend.ProbeResult, e
 		return backend.ProbeResult{}, err
 	}
 	a.anlfAvailability.MarkSyncing(health.ProcessInstanceID)
-	response, err := a.anlfBackendClient.Sync(ctx, a.buildBackendSyncRequest(backend.KindAnLF))
+	response, err := a.anlfBackendClient.Sync(
+		ctx,
+		a.buildBackendSyncRequest(backend.KindAnLF, health.ProcessInstanceID),
+	)
 	if err != nil {
 		logger.InitLog.Warnf("AnLF backend sync failed: %v", err)
 		return backend.ProbeResult{}, err
@@ -358,7 +364,10 @@ func (a *NwdafApp) probeAnlfBackend(ctx context.Context) (backend.ProbeResult, e
 	return backend.ProbeResult{ProcessInstanceID: health.ProcessInstanceID}, nil
 }
 
-func (a *NwdafApp) buildBackendSyncRequest(kind backend.Kind) backend.SyncRequest {
+func (a *NwdafApp) buildBackendSyncRequest(
+	kind backend.Kind,
+	processGeneration string,
+) backend.SyncRequest {
 	identity := backend.NwdafIdentity{}
 	if a.nwdafCtx != nil {
 		identity.NFInstanceID = a.nwdafCtx.NfId
@@ -380,6 +389,7 @@ func (a *NwdafApp) buildBackendSyncRequest(kind backend.Kind) backend.SyncReques
 	}
 	if kind == backend.KindMTLF {
 		request.TrainingDataSource = a.currentTrainingDataSource()
+		request.MLModelTrainingSubscriptions = []backend.MLModelTrainingSubscriptionSnapshot{}
 	}
 	if a.nwdafCtx == nil {
 		return request
@@ -399,10 +409,18 @@ func (a *NwdafApp) buildBackendSyncRequest(kind backend.Kind) backend.SyncReques
 		if kind == backend.KindAnLF {
 			representation = route.AcceptedRepresentation
 		}
+		subscriptionID := route.SubscriptionID
+		if kind == backend.KindMTLF && route.PeerRoute.SelectedTarget == nil {
+			subscriptionID = backendSnapshotResourceID(
+				route.SubscriptionID,
+				route.PeerRoute,
+				processGeneration,
+			)
+		}
 		request.MLModelProvisionSubscriptions = append(
 			request.MLModelProvisionSubscriptions,
 			backend.MLModelProvisionSubscriptionSnapshot{
-				SubscriptionID:    route.SubscriptionID,
+				SubscriptionID:    subscriptionID,
 				Representation:    append([]byte(nil), representation...),
 				Initiator:         string(route.Initiator),
 				Destination:       string(route.Destination),
@@ -447,10 +465,18 @@ func (a *NwdafApp) buildBackendSyncRequest(kind backend.Kind) backend.SyncReques
 		if kind == backend.KindMTLF && route.PeerRoute.SelectedTarget != nil {
 			continue
 		}
+		registrationID := route.RegistrationID
+		if kind == backend.KindMTLF && route.PeerRoute.SelectedTarget == nil {
+			registrationID = backendSnapshotResourceID(
+				route.RegistrationID,
+				route.PeerRoute,
+				processGeneration,
+			)
+		}
 		request.MLModelMonitorRegistrations = append(
 			request.MLModelMonitorRegistrations,
 			backend.MLModelMonitorRegistrationSnapshot{
-				RegistrationID:    route.RegistrationID,
+				RegistrationID:    registrationID,
 				Representation:    append([]byte(nil), route.AcceptedRepresentation...),
 				Initiator:         string(route.Initiator),
 				Direction:         string(route.PeerRoute.Direction),
@@ -476,13 +502,33 @@ func (a *NwdafApp) buildBackendSyncRequest(kind backend.Kind) backend.SyncReques
 		if kind == backend.KindMTLF {
 			representation = route.AcceptedRepresentation
 		}
+		subscriptionID := route.SubscriptionID
+		if kind == backend.KindAnLF && route.PeerRoute.SelectedTarget == nil {
+			subscriptionID = backendSnapshotResourceID(
+				route.SubscriptionID,
+				route.PeerRoute,
+				processGeneration,
+			)
+		}
+		ownerRegistrationID := route.OwnerRegistrationID
+		if kind == backend.KindMTLF {
+			if owner, found := a.nwdafCtx.GetMLModelMonitorRegistrationRoute(
+				route.OwnerRegistrationID,
+			); found && owner.PeerRoute.SelectedTarget == nil {
+				ownerRegistrationID = backendSnapshotResourceID(
+					owner.RegistrationID,
+					owner.PeerRoute,
+					processGeneration,
+				)
+			}
+		}
 		request.MLModelMonitorSubscriptions = append(
 			request.MLModelMonitorSubscriptions,
 			backend.MLModelMonitorSubscriptionSnapshot{
-				SubscriptionID:    route.SubscriptionID,
+				SubscriptionID:    subscriptionID,
 				Representation:    append([]byte(nil), representation...),
 				Destination:       string(route.Destination),
-				OwnerRegistration: route.OwnerRegistrationID,
+				OwnerRegistration: ownerRegistrationID,
 				Direction:         string(route.PeerRoute.Direction),
 				SelectedTarget:    route.PeerRoute.SelectedTarget,
 				PeerLocation:      route.PeerRoute.PeerLocation,
@@ -491,7 +537,51 @@ func (a *NwdafApp) buildBackendSyncRequest(kind backend.Kind) backend.SyncReques
 			},
 		)
 	}
+	if kind == backend.KindMTLF {
+		for _, route := range a.nwdafCtx.GetAllMLModelTrainingSubscriptionRoutes() {
+			if route.PeerRoute.LifecycleState != nwdaf_context.MLModelRouteActive {
+				continue
+			}
+			representation := route.AcceptedRepresentation
+			if route.PeerRoute.SelectedTarget == nil {
+				representation = route.BackendRepresentation
+			}
+			subscriptionID := route.SubscriptionID
+			if route.PeerRoute.SelectedTarget == nil {
+				subscriptionID = backendSnapshotResourceID(
+					route.SubscriptionID,
+					route.PeerRoute,
+					processGeneration,
+				)
+			}
+			request.MLModelTrainingSubscriptions = append(
+				request.MLModelTrainingSubscriptions,
+				backend.MLModelTrainingSubscriptionSnapshot{
+					SubscriptionID:    subscriptionID,
+					Representation:    append([]byte(nil), representation...),
+					Direction:         string(route.PeerRoute.Direction),
+					SelectedTarget:    route.PeerRoute.SelectedTarget,
+					PeerLocation:      route.PeerRoute.PeerLocation,
+					LifecycleState:    string(route.PeerRoute.LifecycleState),
+					ProcessGeneration: route.PeerRoute.ProcessGeneration,
+				},
+			)
+		}
+	}
 	return request
+}
+
+func backendSnapshotResourceID(
+	routeID string,
+	peerRoute nwdaf_context.MLModelPeerRoute,
+	processGeneration string,
+) string {
+	if processGeneration != "" &&
+		peerRoute.ProcessGeneration == processGeneration &&
+		peerRoute.BackendResourceID != "" {
+		return peerRoute.BackendResourceID
+	}
+	return routeID
 }
 
 func (a *NwdafApp) currentTrainingDataSource() backend.DataSource {

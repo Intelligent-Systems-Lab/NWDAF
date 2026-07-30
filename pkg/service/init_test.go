@@ -58,7 +58,7 @@ func TestBuildBackendSyncRequestIncludesSmfResourceAssociations(t *testing.T) {
 		}},
 	}
 
-	snapshot := app.buildBackendSyncRequest(backend.KindAnLF)
+	snapshot := app.buildBackendSyncRequest(backend.KindAnLF, "")
 	if len(snapshot.SmfResources) != 1 {
 		t.Fatalf("SMF resources = %d", len(snapshot.SmfResources))
 	}
@@ -80,7 +80,7 @@ func TestBuildBackendSyncRequestEncodesEmptySmfResourceAssociationsAsArray(t *te
 	}
 	app := &NwdafApp{nwdafCtx: nwdafContext}
 
-	snapshot := app.buildBackendSyncRequest(backend.KindAnLF)
+	snapshot := app.buildBackendSyncRequest(backend.KindAnLF, "")
 	if len(snapshot.SmfResources) != 1 {
 		t.Fatalf("SMF resources = %d", len(snapshot.SmfResources))
 	}
@@ -208,7 +208,14 @@ func TestBuildBackendSyncRequestProjectsMLModelResourcesToTheirOwners(t *testing
 	}
 	app := &NwdafApp{nwdafCtx: nwdafContext}
 
-	anlfSnapshot := app.buildBackendSyncRequest(backend.KindAnLF)
+	anlfSnapshot := app.buildBackendSyncRequest(backend.KindAnLF, "")
+	anlfEncoded, err := json.Marshal(anlfSnapshot)
+	if err != nil {
+		t.Fatalf("marshal AnLF sync snapshot: %v", err)
+	}
+	if bytes.Contains(anlfEncoded, []byte(`"mlModelTrainingSubscriptions"`)) {
+		t.Fatalf("AnLF sync contains MTLF-only training routes: %s", anlfEncoded)
+	}
 	anlfProvisionIDs := make(map[string]json.RawMessage)
 	for _, item := range anlfSnapshot.MLModelProvisionSubscriptions {
 		anlfProvisionIDs[item.SubscriptionID] = item.Representation
@@ -243,7 +250,7 @@ func TestBuildBackendSyncRequestProjectsMLModelResourcesToTheirOwners(t *testing
 		}
 	}
 
-	mtlfSnapshot := app.buildBackendSyncRequest(backend.KindMTLF)
+	mtlfSnapshot := app.buildBackendSyncRequest(backend.KindMTLF, "")
 	if len(mtlfSnapshot.MLModelProvisionSubscriptions) != 2 {
 		t.Fatalf("MTLF provision snapshots = %+v", mtlfSnapshot.MLModelProvisionSubscriptions)
 	}
@@ -271,6 +278,62 @@ func TestBuildBackendSyncRequestProjectsMLModelResourcesToTheirOwners(t *testing
 		mtlfMonitorIDs["monitor-mtlf"] == nil ||
 		mtlfMonitorIDs["monitor-remote"] == nil {
 		t.Fatalf("MTLF monitor snapshots = %+v", mtlfSnapshot.MLModelMonitorSubscriptions)
+	}
+}
+
+func TestBackendSyncSnapshotPreservesCurrentGenerationResourceIdentity(t *testing.T) {
+	nwdaf_context.Init()
+	nwdafContext := nwdaf_context.GetSelf()
+	const currentGeneration = "mtlf-generation-current"
+	if !nwdafContext.AddMLModelMonitorRegistrationRoute(
+		nwdaf_context.MLModelMonitorRegistrationRoute{
+			RegistrationID:         "registration-go",
+			AcceptedRepresentation: json.RawMessage(`{"modelId":7}`),
+			Initiator:              nwdaf_context.MLModelRoutePartyAnLFBackend,
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				BackendResourceID: "registration-python",
+				LifecycleState:    nwdaf_context.MLModelRouteActive,
+				ProcessGeneration: currentGeneration,
+			},
+		},
+	) {
+		t.Fatal("could not add monitor registration route")
+	}
+	if !nwdafContext.AddMLModelMonitorSubscriptionRoute(
+		nwdaf_context.MLModelMonitorSubscriptionRoute{
+			SubscriptionID:         "subscription-go",
+			AcceptedRepresentation: json.RawMessage(`{"modelIds":[7]}`),
+			Destination:            nwdaf_context.MLModelRoutePartyMTLFBackend,
+			OwnerRegistrationID:    "registration-go",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				LifecycleState:    nwdaf_context.MLModelRouteActive,
+				ProcessGeneration: currentGeneration,
+			},
+		},
+	) {
+		t.Fatal("could not add monitor subscription route")
+	}
+	app := &NwdafApp{nwdafCtx: nwdafContext}
+
+	current := app.buildBackendSyncRequest(backend.KindMTLF, currentGeneration)
+	if len(current.MLModelMonitorRegistrations) != 1 ||
+		current.MLModelMonitorRegistrations[0].RegistrationID != "registration-python" {
+		t.Fatalf("current-generation registrations = %+v", current.MLModelMonitorRegistrations)
+	}
+	if len(current.MLModelMonitorSubscriptions) != 1 ||
+		current.MLModelMonitorSubscriptions[0].SubscriptionID != "subscription-go" ||
+		current.MLModelMonitorSubscriptions[0].OwnerRegistration != "registration-python" {
+		t.Fatalf("current-generation subscriptions = %+v", current.MLModelMonitorSubscriptions)
+	}
+
+	restarted := app.buildBackendSyncRequest(backend.KindMTLF, "mtlf-generation-restarted")
+	if len(restarted.MLModelMonitorRegistrations) != 1 ||
+		restarted.MLModelMonitorRegistrations[0].RegistrationID != "registration-go" {
+		t.Fatalf("restart registrations = %+v", restarted.MLModelMonitorRegistrations)
+	}
+	if len(restarted.MLModelMonitorSubscriptions) != 1 ||
+		restarted.MLModelMonitorSubscriptions[0].OwnerRegistration != "registration-go" {
+		t.Fatalf("restart subscriptions = %+v", restarted.MLModelMonitorSubscriptions)
 	}
 }
 

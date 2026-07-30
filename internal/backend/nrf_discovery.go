@@ -18,6 +18,7 @@ import (
 
 const (
 	serviceMLModelMonitor    = "nnwdaf-mlmodelmonitor"
+	serviceMLModelTraining   = "nnwdaf-mlmodeltraining"
 	serviceADRFData          = "nadrf-datamanagement"
 	serviceADRFModel         = "nadrf-mlmodelmanagement"
 	queryMLAnalyticsInfoList = "ml-analytics-info-list"
@@ -262,6 +263,7 @@ func validateCombination(query NFDiscoveryQuery) error {
 			string(models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION),
 			string(models.ServiceName_NNWDAF_MLMODELPROVISION),
 			serviceMLModelMonitor,
+			serviceMLModelTraining,
 		) {
 			return fmt.Errorf("service-names contains a service unsupported for target NWDAF")
 		}

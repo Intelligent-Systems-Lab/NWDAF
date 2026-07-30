@@ -168,3 +168,27 @@ func TestBackendSyncDoesNotClaimOtherBackendRoutes(t *testing.T) {
 		t.Fatalf("monitor generation = %q", monitor.PeerRoute.ProcessGeneration)
 	}
 }
+
+func TestBackendSyncPreservesResourceIDWithinSameProcessGeneration(t *testing.T) {
+	t.Parallel()
+
+	ctx := &NWDAFContext{}
+	if !ctx.AddMLModelTrainingSubscriptionRoute(MLModelTrainingSubscriptionRoute{
+		SubscriptionID: "go-training-route",
+		PeerRoute: MLModelPeerRoute{
+			BackendResourceID: "python-training-resource",
+			ProcessGeneration: "mtlf-generation-1",
+			LifecycleState:    MLModelRouteActive,
+		},
+		NotificationCorrelationID: "training-correlation",
+	}) {
+		t.Fatal("could not add training route")
+	}
+
+	ctx.ReconcileMTLFMLModelRoutes("mtlf-generation-1")
+
+	route, _ := ctx.GetMLModelTrainingSubscriptionRoute("go-training-route")
+	if route.PeerRoute.BackendResourceID != "python-training-resource" {
+		t.Fatalf("same-generation backend resource ID = %q", route.PeerRoute.BackendResourceID)
+	}
+}

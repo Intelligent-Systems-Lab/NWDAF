@@ -116,6 +116,13 @@ func NewServer(nwdaf nwdafApp, tlsKeyLogPath string) (*Server, error) {
 				monitorAuthorization.Check(c, s.Context())
 			})
 			applyRoutes(monitorGroup, s.getMLModelMonitorRoutes())
+		case models.ServiceName(factory.NwdafMLModelTrainingServiceName):
+			trainingGroup := s.router.Group(factory.NwdafMLModelTrainingResURIPrefix)
+			trainingAuthorization := newRouterAuthorizationCheck(serviceName)
+			trainingGroup.Use(func(c *gin.Context) {
+				trainingAuthorization.Check(c, s.Context())
+			})
+			applyRoutes(trainingGroup, s.getMLModelTrainingRoutes())
 		}
 	}
 
