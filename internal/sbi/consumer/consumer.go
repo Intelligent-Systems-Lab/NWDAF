@@ -115,6 +115,31 @@ func (c *Consumer) StoreAdrfDataRecord(
 	return client.ExecuteStandardStorageRequest(ctx, body)
 }
 
+func (c *Consumer) StoreAdrfMLModelRecord(
+	ctx context.Context,
+	targetAPIBaseURI string,
+	body []byte,
+) (*StandardAdrfResponse, error) {
+	if targetAPIBaseURI == "" {
+		return nil, errors.New("ADRF target API root is required")
+	}
+	return c.adrfClientForTarget(targetAPIBaseURI).
+		ExecuteStandardMLModelStoreRequest(ctx, body)
+}
+
+func (c *Consumer) RetrieveAdrfMLModelRecord(
+	ctx context.Context,
+	targetAPIBaseURI string,
+	storeTransID string,
+	modelUniqueIDs []int64,
+) (*StandardAdrfResponse, error) {
+	if targetAPIBaseURI == "" {
+		return nil, errors.New("ADRF target API root is required")
+	}
+	return c.adrfClientForTarget(targetAPIBaseURI).
+		ExecuteStandardMLModelRetrievalRequest(ctx, storeTransID, modelUniqueIDs)
+}
+
 func (c *Consumer) CreateAdrfRetrievalSubscription(
 	ctx context.Context,
 	targetAPIBaseURI string,

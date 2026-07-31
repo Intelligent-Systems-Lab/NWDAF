@@ -36,6 +36,23 @@ func (s *adrfRetrievalStub) DeleteAdrfRetrievalSubscription(
 	return s.deleteResponse, s.deleteErr
 }
 
+func (s *adrfRetrievalStub) StoreAdrfMLModelRecord(
+	context.Context,
+	string,
+	[]byte,
+) (*consumer.StandardAdrfResponse, error) {
+	return nil, nil
+}
+
+func (s *adrfRetrievalStub) RetrieveAdrfMLModelRecord(
+	context.Context,
+	string,
+	string,
+	[]int64,
+) (*consumer.StandardAdrfResponse, error) {
+	return nil, nil
+}
+
 func TestAdrfRetrievalLifecycleUsesCapturedLocation(t *testing.T) {
 	stub := &adrfRetrievalStub{
 		createResponse: &consumer.StandardAdrfResponse{

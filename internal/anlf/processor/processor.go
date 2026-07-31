@@ -29,6 +29,7 @@ type smfEventExposureProxy interface {
 
 type adrfStorageProxy interface {
 	StoreAdrfDataRecord(context.Context, string, []byte) (*consumer.StandardAdrfResponse, error)
+	RetrieveAdrfMLModelRecord(context.Context, string, string, []int64) (*consumer.StandardAdrfResponse, error)
 }
 
 type Processor struct {

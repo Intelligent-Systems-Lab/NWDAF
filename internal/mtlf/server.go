@@ -63,6 +63,7 @@ func NewServer(cfg *factory.Config, processor any) (*Server, error) {
 	}
 	s.router.Use(gin.Recovery())
 	routes := s.adrfRetrievalRoutes()
+	routes = append(routes, s.adrfMLModelRoutes()...)
 	routes = append(routes, s.nfDiscoveryRoutes()...)
 	routes = append(routes, s.mtlfMLModelRoutes()...)
 	applyRoutes(s.router.Group(""), routes)

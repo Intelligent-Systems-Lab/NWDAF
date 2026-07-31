@@ -100,6 +100,7 @@ func NewServer(cfg *factory.Config, processor any) (*Server, error) {
 	routes = append(routes, s.nfDiscoveryRoutes()...)
 	routes = append(routes, s.smfEventExposureRoutes()...)
 	routes = append(routes, s.adrfStorageRoutes()...)
+	routes = append(routes, s.adrfMLModelRoutes()...)
 	routes = append(routes, s.smfResourceAssociationRoutes()...)
 	routes = append(routes, s.anlfMLModelRoutes()...)
 	applyRoutes(s.router.Group(""), routes)

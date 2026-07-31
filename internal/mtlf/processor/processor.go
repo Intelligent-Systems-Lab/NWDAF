@@ -74,6 +74,8 @@ type nfDiscoveryProxy interface {
 type adrfRetrievalProxy interface {
 	CreateAdrfRetrievalSubscription(context.Context, string, []byte) (*consumer.StandardAdrfResponse, error)
 	DeleteAdrfRetrievalSubscription(context.Context, string, string) (*consumer.StandardAdrfResponse, error)
+	StoreAdrfMLModelRecord(context.Context, string, []byte) (*consumer.StandardAdrfResponse, error)
+	RetrieveAdrfMLModelRecord(context.Context, string, string, []int64) (*consumer.StandardAdrfResponse, error)
 }
 
 type adrfRetrievalRoute struct {
@@ -214,6 +216,34 @@ func (p *Processor) HandleNFDiscovery(
 		return nil, ErrNFDiscoveryUnavailable
 	}
 	return p.nfDiscovery.DiscoverNFInstances(ctx, query)
+}
+
+func (p *Processor) StoreAdrfMLModelRecord(
+	ctx context.Context,
+	targetAPIBaseURI string,
+	body []byte,
+) (*consumer.StandardAdrfResponse, error) {
+	if p.adrf == nil {
+		return nil, ErrAdrfRetrievalUnavailable
+	}
+	return p.adrf.StoreAdrfMLModelRecord(ctx, targetAPIBaseURI, body)
+}
+
+func (p *Processor) RetrieveAdrfMLModelRecord(
+	ctx context.Context,
+	targetAPIBaseURI string,
+	storeTransID string,
+	modelUniqueIDs []int64,
+) (*consumer.StandardAdrfResponse, error) {
+	if p.adrf == nil {
+		return nil, ErrAdrfRetrievalUnavailable
+	}
+	return p.adrf.RetrieveAdrfMLModelRecord(
+		ctx,
+		targetAPIBaseURI,
+		storeTransID,
+		modelUniqueIDs,
+	)
 }
 
 func (p *Processor) CreateAdrfRetrievalSubscription(

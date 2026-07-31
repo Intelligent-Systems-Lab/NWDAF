@@ -48,6 +48,7 @@ func (e *StandardAdrfError) StandardProblemDetails() *models.ProblemDetails {
 const (
 	AdrfDataStoreRecordsPath           = "/nadrf-datamanagement/v1/data-store-records"
 	AdrfDataRetrievalSubscriptionsPath = "/nadrf-datamanagement/v1/data-retrieval-subscriptions"
+	AdrfMLModelStoreRecordsPath        = "/nadrf-mlmodelmanagement/v1/mlmodel-store-records"
 	adrfStorageTimeout                 = 120 * time.Second
 	adrfRetrievalTimeout               = 120 * time.Second
 )
@@ -58,9 +59,11 @@ type (
 	AdrfDataSubscription           = adrfcompat.DataSubscription
 	AdrfDataNotification           = adrfcompat.DataNotification
 	NadrfDataStoreRecord           = adrfcompat.DataStoreRecord
+	NadrfMLModelStoreRecord        = adrfcompat.MLModelStoreRecord
 )
 
-// AdrfClient is the HTTP client for the ADRF Nadrf_DataManagement service (TS 29.575).
+// AdrfClient is the HTTP client for the ADRF Data Management and ML Model
+// Management services defined by TS 29.575.
 type AdrfClient struct {
 	endpoint   string
 	httpClient *http.Client
@@ -72,6 +75,9 @@ func NewAdrfClient(endpoint string) *AdrfClient {
 		endpoint: endpoint,
 		httpClient: &http.Client{
 			Timeout: adrfStorageTimeout,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 			Transport: &http.Transport{
 				MaxIdleConns:        50,
 				MaxIdleConnsPerHost: 10,
@@ -79,6 +85,174 @@ func NewAdrfClient(endpoint string) *AdrfClient {
 			},
 		},
 	}
+}
+
+func (c *AdrfClient) ExecuteStandardMLModelStoreRequest(
+	ctx context.Context,
+	body []byte,
+) (*StandardAdrfResponse, error) {
+	response, err := c.executeStandardMLModelRequest(
+		ctx,
+		http.MethodPost,
+		strings.TrimRight(c.endpoint, "/")+AdrfMLModelStoreRecordsPath,
+		body,
+	)
+	if err != nil {
+		return response, err
+	}
+	if response.StatusCode != http.StatusCreated {
+		return response, unexpectedAdrfStatus(response)
+	}
+	if response.Location == "" || !isJSONMediaType(response.ContentType) ||
+		len(response.Body) == 0 {
+		return nil, fmt.Errorf("malformed ADRF ML model store response")
+	}
+	var record NadrfMLModelStoreRecord
+	if err := json.Unmarshal(response.Body, &record); err != nil ||
+		!validMLModelStoreRecord(record, true) {
+		return nil, fmt.Errorf("malformed ADRF ML model store representation")
+	}
+	return response, nil
+}
+
+func (c *AdrfClient) ExecuteStandardMLModelRetrievalRequest(
+	ctx context.Context,
+	storeTransID string,
+	modelUniqueIDs []int64,
+) (*StandardAdrfResponse, error) {
+	if (strings.TrimSpace(storeTransID) == "") == (len(modelUniqueIDs) == 0) {
+		return nil, fmt.Errorf(
+			"exactly one of store-trans-id or model-unique-ids is required",
+		)
+	}
+	values := url.Values{}
+	if storeTransID != "" {
+		values.Set("store-trans-id", storeTransID)
+	} else {
+		for _, modelID := range modelUniqueIDs {
+			if modelID < 0 {
+				return nil, fmt.Errorf("model-unique-ids must be non-negative")
+			}
+			values.Add("model-unique-ids", fmt.Sprintf("%d", modelID))
+		}
+	}
+	requestURL := strings.TrimRight(c.endpoint, "/") + AdrfMLModelStoreRecordsPath +
+		"?" + values.Encode()
+	response, err := c.executeStandardMLModelRequest(
+		ctx,
+		http.MethodGet,
+		requestURL,
+		nil,
+	)
+	if err != nil {
+		return response, err
+	}
+	switch response.StatusCode {
+	case http.StatusOK:
+		if !isJSONMediaType(response.ContentType) || len(response.Body) == 0 {
+			return nil, fmt.Errorf("malformed ADRF ML model retrieval response")
+		}
+		var record NadrfMLModelStoreRecord
+		if err := json.Unmarshal(response.Body, &record); err != nil ||
+			!validMLModelStoreRecord(record, false) {
+			return nil, fmt.Errorf("malformed ADRF ML model retrieval representation")
+		}
+	case http.StatusNoContent:
+		if len(response.Body) != 0 {
+			return nil, fmt.Errorf("malformed ADRF ML model no-content response")
+		}
+	case http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		if response.Location == "" {
+			return nil, fmt.Errorf("malformed ADRF ML model redirect response")
+		}
+	default:
+		return response, unexpectedAdrfStatus(response)
+	}
+	return response, nil
+}
+
+func (c *AdrfClient) executeStandardMLModelRequest(
+	ctx context.Context,
+	method string,
+	requestURL string,
+	body []byte,
+) (*StandardAdrfResponse, error) {
+	requestCtx, cancel, err := timeoutContextFromParent(
+		ctx,
+		adrfStorageTimeout,
+		"ADRF ML model request",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	request, err := http.NewRequestWithContext(
+		requestCtx,
+		method,
+		requestURL,
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build ADRF ML model request: %w", err)
+	}
+	if len(body) > 0 {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("send ADRF ML model request: %w", err)
+	}
+	responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, maxAdrfStandardBodyBytes+1))
+	closeErr := response.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("read ADRF ML model response: %w", readErr)
+	}
+	if len(responseBody) > maxAdrfStandardBodyBytes {
+		return nil, fmt.Errorf("ADRF ML model response exceeds transport limit")
+	}
+	if closeErr != nil {
+		consumerLog.Debugf("failed to close ADRF ML model response: %v", closeErr)
+	}
+	return &StandardAdrfResponse{
+		StatusCode:  response.StatusCode,
+		Location:    response.Header.Get("Location"),
+		ContentType: response.Header.Get("Content-Type"),
+		Body:        responseBody,
+	}, nil
+}
+
+func unexpectedAdrfStatus(response *StandardAdrfResponse) error {
+	problem := models.ProblemDetails{
+		Status: int32(response.StatusCode),
+		Title:  http.StatusText(response.StatusCode),
+	}
+	if err := json.Unmarshal(response.Body, &problem); err != nil {
+		problem.Detail = strings.TrimSpace(string(response.Body))
+	}
+	return &StandardAdrfError{
+		StatusCode:     response.StatusCode,
+		ProblemDetails: problem,
+	}
+}
+
+func validMLModelStoreRecord(record NadrfMLModelStoreRecord, requireResult bool) bool {
+	if (record.NFInstanceID == "") == (record.NFSetID == "") ||
+		len(record.MLModelInfo) != 1 {
+		return false
+	}
+	info := record.MLModelInfo[0]
+	if info.ModelUniqueID == nil || *info.ModelUniqueID < 0 ||
+		info.MLStorageSize == nil || *info.MLStorageSize < 0 ||
+		(info.MLFileAddr.MLModelURL == "") == (info.MLFileAddr.MLFileFQDN == "") {
+		return false
+	}
+	if requireResult {
+		return record.ModelStoreResult != nil &&
+			record.ModelStoreResult.ModelUniqueID != nil &&
+			*record.ModelStoreResult.ModelUniqueID == *info.ModelUniqueID &&
+			record.ModelStoreResult.StoreResult == "ML_MODEL_FILE_STORED_IN_ADRF"
+	}
+	return true
 }
 
 func (c *AdrfClient) ExecuteStandardStorageRequest(
