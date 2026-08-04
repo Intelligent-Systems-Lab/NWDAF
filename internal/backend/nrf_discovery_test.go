@@ -99,3 +99,25 @@ func TestParseNFDiscoveryQueryRejectsForgedRequesterAndUnsupportedCombinations(t
 		}
 	}
 }
+
+func TestParseNFDiscoveryQueryAcceptsBothStandardUdmDiscoverySteps(t *testing.T) {
+	t.Parallel()
+	groupQuery, problem := ParseNFDiscoveryQuery(url.Values{
+		"target-nf-type":          {"UDM"},
+		"requester-nf-type":       {"NWDAF"},
+		"service-names":           {"nudm-sdm"},
+		"internal-group-identity": {"00000001-466-92-01"},
+	})
+	if problem != nil || groupQuery.InternalGroupIdentity == "" {
+		t.Fatalf("group discovery query=%#v problem=%+v", groupQuery, problem)
+	}
+	uecmQuery, problem := ParseNFDiscoveryQuery(url.Values{
+		"target-nf-type":        {"UDM"},
+		"requester-nf-type":     {"NWDAF"},
+		"service-names":         {"nudm-uecm"},
+		"target-nf-instance-id": {"11111111-1111-4111-8111-111111111111"},
+	})
+	if problem != nil || uecmQuery.TargetNFInstanceID == "" {
+		t.Fatalf("UECM discovery query=%#v problem=%+v", uecmQuery, problem)
+	}
+}

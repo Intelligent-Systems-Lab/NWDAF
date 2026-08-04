@@ -99,6 +99,7 @@ func NewServer(cfg *factory.Config, processor any) (*Server, error) {
 	routes := s.eventsSubscriptionNotificationRoutes()
 	routes = append(routes, s.nfDiscoveryRoutes()...)
 	routes = append(routes, s.smfEventExposureRoutes()...)
+	routes = append(routes, s.udmCollectionRoutes()...)
 	routes = append(routes, s.adrfStorageRoutes()...)
 	routes = append(routes, s.adrfMLModelRoutes()...)
 	routes = append(routes, s.smfResourceAssociationRoutes()...)

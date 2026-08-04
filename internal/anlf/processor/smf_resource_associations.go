@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"encoding/json"
 	"errors"
 
 	"github.com/free5gc/nwdaf/internal/backend"
@@ -57,6 +58,33 @@ func (p *Processor) ReplaceSmfResourceAssociations(
 		return ErrUnknownSmfResource
 	}
 	if changed && p.mtlfSyncRefresher != nil {
+		p.mtlfSyncRefresher.Refresh()
+	}
+	return nil
+}
+
+func (p *Processor) ReplaceTrainingDataDescriptors(
+	update backend.TrainingDataDescriptorUpdate,
+) error {
+	if p == nil || p.nwdafContext == nil || p.availability == nil {
+		return ErrBackendUnavailable
+	}
+	snapshot := p.availability.Snapshot()
+	if snapshot.State != backend.StateUsable {
+		return ErrBackendUnavailable
+	}
+	if update.ProcessInstanceID == "" || update.ProcessInstanceID != snapshot.ProcessInstanceID {
+		return ErrStaleBackendProcess
+	}
+	descriptors := make([]json.RawMessage, 0, len(update.TrainingDataDescriptors))
+	for _, descriptor := range update.TrainingDataDescriptors {
+		encoded, err := json.Marshal(descriptor)
+		if err != nil {
+			return err
+		}
+		descriptors = append(descriptors, encoded)
+	}
+	if p.nwdafContext.ReplaceTrainingDataDescriptors(descriptors) && p.mtlfSyncRefresher != nil {
 		p.mtlfSyncRefresher.Refresh()
 	}
 	return nil

@@ -282,12 +282,22 @@ func validateCombination(query NFDiscoveryQuery) error {
 			return fmt.Errorf("the selected filters are not valid for target SMF")
 		}
 	case models.NrfNfManagementNfType_UDM:
-		if len(query.ServiceNames) == 0 ||
-			!serviceAllowed(string(models.ServiceName_NUDM_SDM)) {
-			return fmt.Errorf("target UDM requires service-names=nudm-sdm")
+		if len(query.ServiceNames) != 1 ||
+			!serviceAllowed(
+				string(models.ServiceName_NUDM_SDM),
+				string(models.ServiceName_NUDM_UECM),
+			) {
+			return fmt.Errorf("target UDM requires exactly one of nudm-sdm or nudm-uecm")
 		}
-		if query.InternalGroupIdentity == "" {
-			return fmt.Errorf("target UDM requires internal-group-identity")
+		sdmDiscovery := string(query.ServiceNames[0]) == string(models.ServiceName_NUDM_SDM)
+		if sdmDiscovery && query.InternalGroupIdentity == "" {
+			return fmt.Errorf("nudm-sdm discovery requires internal-group-identity")
+		}
+		if !sdmDiscovery && query.TargetNFInstanceID == "" {
+			return fmt.Errorf("nudm-uecm discovery requires target-nf-instance-id")
+		}
+		if !sdmDiscovery && query.InternalGroupIdentity != "" {
+			return fmt.Errorf("internal-group-identity is not valid for nudm-uecm discovery")
 		}
 		if len(query.NwdafEventList) > 0 || query.MLAnalyticsInfoList != nil ||
 			query.MLModelStorageInd != nil || query.DataStorageInd != nil {

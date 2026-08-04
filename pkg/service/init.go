@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -132,6 +133,7 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		anlfProcessor.SetNFDiscoveryProxy(nwdaf.consumer)
 	}
 	anlfProcessor.SetSmfEventExposureProxy(nwdaf.consumer)
+	anlfProcessor.SetUdmCollectionProxy(nwdaf.consumer)
 	anlfProcessor.SetAdrfStorageProxy(nwdaf.consumer)
 
 	// Initialize processor
@@ -383,6 +385,7 @@ func (a *NwdafApp) buildBackendSyncRequest(
 		ContainingNwdaf:               identity,
 		EventsSubscriptions:           []backend.EventsSubscriptionSnapshot{},
 		SmfResources:                  []backend.SmfResourceSnapshot{},
+		TrainingDataDescriptors:       []backend.TrainingDataDescriptor{},
 		MLModelProvisionSubscriptions: []backend.MLModelProvisionSubscriptionSnapshot{},
 		MLModelMonitorRegistrations:   []backend.MLModelMonitorRegistrationSnapshot{},
 		MLModelMonitorSubscriptions:   []backend.MLModelMonitorSubscriptionSnapshot{},
@@ -452,6 +455,12 @@ func (a *NwdafApp) buildBackendSyncRequest(
 				PendingCleanup:       route.PendingCleanup,
 				Subscription:         append([]byte(nil), route.AcceptedSubscriptionJSON...),
 			})
+		}
+		for _, raw := range a.nwdafCtx.GetTrainingDataDescriptors() {
+			var descriptor backend.TrainingDataDescriptor
+			if err := json.Unmarshal(raw, &descriptor); err == nil {
+				request.TrainingDataDescriptors = append(request.TrainingDataDescriptors, descriptor)
+			}
 		}
 	}
 	for _, route := range a.nwdafCtx.GetAllMLModelMonitorRegistrationRoutes() {

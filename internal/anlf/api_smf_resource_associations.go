@@ -21,15 +21,24 @@ const maxSmfResourceAssociationBodyBytes = 1024 * 1024
 
 type smfResourceAssociationProcessor interface {
 	ReplaceSmfResourceAssociations(backend.SmfResourceAssociationUpdate) error
+	ReplaceTrainingDataDescriptors(backend.TrainingDataDescriptorUpdate) error
 }
 
 func (s *Server) smfResourceAssociationRoutes() []Route {
-	return []Route{{
-		Name:    "ReplaceSmfResourceAssociations",
-		Method:  http.MethodPut,
-		Pattern: "/internal/v1/sync/anlf/smf-resource-associations",
-		APIFunc: s.ReplaceSmfResourceAssociations,
-	}}
+	return []Route{
+		{
+			Name:    "ReplaceSmfResourceAssociations",
+			Method:  http.MethodPut,
+			Pattern: "/internal/v1/sync/anlf/smf-resource-associations",
+			APIFunc: s.ReplaceSmfResourceAssociations,
+		},
+		{
+			Name:    "ReplaceTrainingDataDescriptors",
+			Method:  http.MethodPut,
+			Pattern: "/internal/v1/sync/anlf/training-data-descriptors",
+			APIFunc: s.ReplaceTrainingDataDescriptors,
+		},
+	}
 }
 
 func (s *Server) ReplaceSmfResourceAssociations(c *gin.Context) {
@@ -74,6 +83,46 @@ func (s *Server) ReplaceSmfResourceAssociations(c *gin.Context) {
 			http.StatusInternalServerError,
 			"SYSTEM_FAILURE",
 			"could not replace the SMF resource association mirror",
+		))
+	}
+}
+
+func (s *Server) ReplaceTrainingDataDescriptors(c *gin.Context) {
+	update, problem := readTrainingDataDescriptorUpdate(c)
+	if problem != nil {
+		util.GinProblemJson(c, problem)
+		return
+	}
+	processor, ok := s.processor.(smfResourceAssociationProcessor)
+	if !ok {
+		util.GinProblemJson(c, smfAssociationProblem(
+			http.StatusServiceUnavailable,
+			"BACKEND_UNAVAILABLE",
+			"AnLF backend descriptor mirror is unavailable",
+		))
+		return
+	}
+	err := processor.ReplaceTrainingDataDescriptors(update)
+	switch {
+	case err == nil:
+		c.Status(http.StatusNoContent)
+	case errors.Is(err, anlfprocessor.ErrBackendUnavailable):
+		util.GinProblemJson(c, smfAssociationProblem(
+			http.StatusServiceUnavailable,
+			"BACKEND_UNAVAILABLE",
+			"AnLF backend is not currently usable",
+		))
+	case errors.Is(err, anlfprocessor.ErrStaleBackendProcess):
+		util.GinProblemJson(c, smfAssociationProblem(
+			http.StatusConflict,
+			"STALE_BACKEND_PROCESS",
+			"descriptor update belongs to a stale AnLF backend process",
+		))
+	default:
+		util.GinProblemJson(c, smfAssociationProblem(
+			http.StatusInternalServerError,
+			"SYSTEM_FAILURE",
+			"could not replace the training-data descriptor mirror",
 		))
 	}
 }
@@ -146,6 +195,65 @@ func readSmfResourceAssociationUpdate(
 			association.NwdafSubscriptionIDs[idIndex] = subscriptionID
 		}
 		sort.Strings(association.NwdafSubscriptionIDs)
+	}
+	return update, nil
+}
+
+func readTrainingDataDescriptorUpdate(
+	c *gin.Context,
+) (backend.TrainingDataDescriptorUpdate, *models.ProblemDetails) {
+	var update backend.TrainingDataDescriptorUpdate
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSmfResourceAssociationBodyBytes)
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&update); err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			return update, smfAssociationProblem(
+				http.StatusRequestEntityTooLarge,
+				"REQUEST_TOO_LARGE",
+				"descriptor snapshot exceeds the configured transport limit",
+			)
+		}
+		return update, malformedSmfAssociationProblem(err.Error())
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return update, malformedSmfAssociationProblem("request contains trailing JSON data")
+	}
+	if _, err := uuid.Parse(update.ProcessInstanceID); err != nil {
+		return update, malformedSmfAssociationProblem("processInstanceId must be a UUID")
+	}
+	if update.TrainingDataDescriptors == nil {
+		return update, malformedSmfAssociationProblem("trainingDataDescriptors is required")
+	}
+	seenDescriptors := make(map[string]struct{}, len(update.TrainingDataDescriptors))
+	for _, descriptor := range update.TrainingDataDescriptors {
+		if _, err := uuid.Parse(descriptor.CorrelationID); err != nil {
+			return update, malformedSmfAssociationProblem("descriptor correlationId must be a UUID")
+		}
+		if descriptor.State != "ACTIVE" && descriptor.State != "RETAINED" {
+			return update, malformedSmfAssociationProblem("descriptor state must be ACTIVE or RETAINED")
+		}
+		if descriptor.StoredDataSpec.DataSpec.SmfDataSub == nil ||
+			descriptor.StoredDataSpec.TimePeriod.StartTime == nil ||
+			descriptor.StoredDataSpec.TimePeriod.StopTime == nil ||
+			descriptor.StoredDataSpec.TimePeriod.StartTime.After(*descriptor.StoredDataSpec.TimePeriod.StopTime) {
+			return update, malformedSmfAssociationProblem("descriptor storedDataSpec is incomplete")
+		}
+		if descriptor.MLEventSubscription.MLEvent == "" || descriptor.SourceNFInstanceID == "" ||
+			descriptor.ADRFInstanceID == "" || descriptor.RetainUntil.IsZero() {
+			return update, malformedSmfAssociationProblem("descriptor identity and ML event fields are required")
+		}
+		if _, err := uuid.Parse(descriptor.SourceNFInstanceID); err != nil {
+			return update, malformedSmfAssociationProblem("descriptor sourceNfInstanceId must be a UUID")
+		}
+		if _, err := uuid.Parse(descriptor.ADRFInstanceID); err != nil {
+			return update, malformedSmfAssociationProblem("descriptor adrfInstanceId must be a UUID")
+		}
+		if _, duplicate := seenDescriptors[descriptor.CorrelationID]; duplicate {
+			return update, malformedSmfAssociationProblem("trainingDataDescriptors contains a duplicate correlationId")
+		}
+		seenDescriptors[descriptor.CorrelationID] = struct{}{}
 	}
 	return update, nil
 }

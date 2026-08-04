@@ -2,7 +2,9 @@ package backend
 
 import (
 	"encoding/json"
+	"time"
 
+	adrfcompat "github.com/free5gc/nwdaf/internal/compat/adrf"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -66,6 +68,26 @@ type SmfResourceAssociationUpdate struct {
 	SmfResources      []SmfResourceAssociation `json:"smfResources"`
 }
 
+type TrainingDataDescriptorUpdate struct {
+	ProcessInstanceID       string                   `json:"processInstanceId"`
+	TrainingDataDescriptors []TrainingDataDescriptor `json:"trainingDataDescriptors"`
+}
+
+type StoredDataSpec struct {
+	DataSpec   adrfcompat.DataSubscription `json:"dataSpec"`
+	TimePeriod models.TimeWindow           `json:"timePeriod"`
+}
+
+type TrainingDataDescriptor struct {
+	CorrelationID       string                     `json:"correlationId"`
+	State               string                     `json:"state"`
+	StoredDataSpec      StoredDataSpec             `json:"storedDataSpec"`
+	MLEventSubscription models.MlEventSubscription `json:"mlEventSubscription"`
+	SourceNFInstanceID  string                     `json:"sourceNfInstanceId"`
+	ADRFInstanceID      string                     `json:"adrfInstanceId"`
+	RetainUntil         time.Time                  `json:"retainUntil"`
+}
+
 type MLModelProvisionSubscriptionSnapshot struct {
 	SubscriptionID    string          `json:"subscriptionId"`
 	Representation    json.RawMessage `json:"representation"`
@@ -126,6 +148,7 @@ type SyncRequest struct {
 	ContainingNwdaf               NwdafIdentity                          `json:"containingNwdaf"`
 	EventsSubscriptions           []EventsSubscriptionSnapshot           `json:"eventsSubscriptions"`
 	SmfResources                  []SmfResourceSnapshot                  `json:"smfResources"`
+	TrainingDataDescriptors       []TrainingDataDescriptor               `json:"trainingDataDescriptors"`
 	TrainingDataSource            DataSource                             `json:"trainingDataSource,omitempty"`
 	MLModelProvisionSubscriptions []MLModelProvisionSubscriptionSnapshot `json:"mlModelProvisionSubscriptions"`
 	MLModelMonitorRegistrations   []MLModelMonitorRegistrationSnapshot   `json:"mlModelMonitorRegistrations"`

@@ -32,11 +32,17 @@ type adrfStorageProxy interface {
 	RetrieveAdrfMLModelRecord(context.Context, string, string, []int64) (*consumer.StandardAdrfResponse, error)
 }
 
+type udmCollectionProxy interface {
+	GetUdmGroupIdentifiers(context.Context, string, string, bool) (*consumer.StandardUdmResponse, error)
+	GetUdmSmfRegistration(context.Context, string, string, *models.Snssai, string) (*consumer.StandardUdmResponse, error)
+}
+
 type Processor struct {
 	notificationDispatcher eventsSubscriptionNotificationDispatcher
 	nfDiscovery            nfDiscoveryProxy
 	smfEventExposure       smfEventExposureProxy
 	adrfStorage            adrfStorageProxy
+	udmCollection          udmCollectionProxy
 	nwdafContext           *nwdaf_context.NWDAFContext
 	availability           availabilitySnapshot
 	mtlfSyncRefresher      syncRefresher
@@ -52,6 +58,10 @@ func (p *Processor) SetSmfEventExposureProxy(proxy smfEventExposureProxy) {
 
 func (p *Processor) SetAdrfStorageProxy(proxy adrfStorageProxy) {
 	p.adrfStorage = proxy
+}
+
+func (p *Processor) SetUdmCollectionProxy(proxy udmCollectionProxy) {
+	p.udmCollection = proxy
 }
 
 func NewProcessor(dispatchers ...eventsSubscriptionNotificationDispatcher) *Processor {

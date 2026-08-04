@@ -81,6 +81,7 @@ type NWDAFContext struct {
 	analyticsRoutes           map[string]AnalyticsSubscriptionRoute
 	smfPeerMu                 sync.RWMutex
 	smfPeerRoutes             map[string]SmfPeerResourceRoute
+	trainingDataDescriptors   []json.RawMessage
 	mlModelRouteMu            sync.RWMutex
 	mlModelProvisionRoutes    map[string]MLModelProvisionSubscriptionRoute
 	mlModelRegistrationRoutes map[string]MLModelMonitorRegistrationRoute
@@ -201,6 +202,46 @@ func (c *NWDAFContext) ReplaceSmfPeerResourceAssociations(
 		c.smfPeerRoutes[key] = route
 	}
 	return true, changed
+}
+
+func (c *NWDAFContext) ReplaceTrainingDataDescriptors(descriptors []json.RawMessage) bool {
+	if c == nil {
+		return false
+	}
+	c.smfPeerMu.Lock()
+	defer c.smfPeerMu.Unlock()
+	changed := !rawMessagesEqual(c.trainingDataDescriptors, descriptors)
+	c.trainingDataDescriptors = cloneRawMessages(descriptors)
+	return changed
+}
+
+func (c *NWDAFContext) GetTrainingDataDescriptors() []json.RawMessage {
+	if c == nil {
+		return nil
+	}
+	c.smfPeerMu.RLock()
+	defer c.smfPeerMu.RUnlock()
+	return cloneRawMessages(c.trainingDataDescriptors)
+}
+
+func cloneRawMessages(values []json.RawMessage) []json.RawMessage {
+	result := make([]json.RawMessage, len(values))
+	for index := range values {
+		result[index] = append(json.RawMessage(nil), values[index]...)
+	}
+	return result
+}
+
+func rawMessagesEqual(left, right []json.RawMessage) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if string(left[index]) != string(right[index]) {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *NWDAFContext) DeleteSmfPeerResourceRoute(targetAPIBaseURI string, id string) bool {
