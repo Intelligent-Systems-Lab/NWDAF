@@ -108,7 +108,7 @@ func (c *AdrfClient) ExecuteStandardMLModelStoreRequest(
 		return nil, fmt.Errorf("malformed ADRF ML model store response")
 	}
 	var record NadrfMLModelStoreRecord
-	if err := json.Unmarshal(response.Body, &record); err != nil ||
+	if unmarshalErr := json.Unmarshal(response.Body, &record); unmarshalErr != nil ||
 		!validMLModelStoreRecord(record, true) {
 		return nil, fmt.Errorf("malformed ADRF ML model store representation")
 	}
@@ -153,7 +153,7 @@ func (c *AdrfClient) ExecuteStandardMLModelRetrievalRequest(
 			return nil, fmt.Errorf("malformed ADRF ML model retrieval response")
 		}
 		var record NadrfMLModelStoreRecord
-		if err := json.Unmarshal(response.Body, &record); err != nil ||
+		if unmarshalErr := json.Unmarshal(response.Body, &record); unmarshalErr != nil ||
 			!validMLModelStoreRecord(record, false) {
 			return nil, fmt.Errorf("malformed ADRF ML model retrieval representation")
 		}

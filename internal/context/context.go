@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"slices"
 	"strings"
 	"sync"
 
@@ -47,11 +46,13 @@ func InitWithNFInstanceID(nfInstanceID string) {
 		mlModelMonitorServiceInstanceID:   uuid.New().String(),
 		mlModelTrainingServiceInstanceID:  uuid.New().String(),
 		analyticsRoutes:                   make(map[string]AnalyticsSubscriptionRoute),
+		analyticsTombstones:               make(map[string]struct{}),
 		smfPeerRoutes:                     make(map[string]SmfPeerResourceRoute),
 		mlModelProvisionRoutes:            make(map[string]MLModelProvisionSubscriptionRoute),
 		mlModelRegistrationRoutes:         make(map[string]MLModelMonitorRegistrationRoute),
 		mlModelMonitorRoutes:              make(map[string]MLModelMonitorSubscriptionRoute),
 		mlModelTrainingRoutes:             make(map[string]MLModelTrainingSubscriptionRoute),
+		mlModelDeletionRecords:            make(map[MLModelResourceKind]map[string]MLModelDeletionRecord),
 	}
 	logger.CtxLog.Infof("NWDAF Context initialized with NfId: %s", nwdafContext.NfId)
 }
@@ -79,14 +80,15 @@ type NWDAFContext struct {
 
 	mu                        sync.RWMutex
 	analyticsRoutes           map[string]AnalyticsSubscriptionRoute
+	analyticsTombstones       map[string]struct{}
 	smfPeerMu                 sync.RWMutex
 	smfPeerRoutes             map[string]SmfPeerResourceRoute
-	trainingDataDescriptors   []json.RawMessage
 	mlModelRouteMu            sync.RWMutex
 	mlModelProvisionRoutes    map[string]MLModelProvisionSubscriptionRoute
 	mlModelRegistrationRoutes map[string]MLModelMonitorRegistrationRoute
 	mlModelMonitorRoutes      map[string]MLModelMonitorSubscriptionRoute
 	mlModelTrainingRoutes     map[string]MLModelTrainingSubscriptionRoute
+	mlModelDeletionRecords    map[MLModelResourceKind]map[string]MLModelDeletionRecord
 }
 
 type SmfPeerResourceRoute struct {
@@ -98,12 +100,6 @@ type SmfPeerResourceRoute struct {
 	AcceptedSubscriptionJSON json.RawMessage
 	PendingCleanup           bool
 	NwdafSubscriptionIDs     []string
-}
-
-type SmfPeerResourceAssociation struct {
-	TargetAPIBaseURI     string
-	PeerSubscriptionID   string
-	NwdafSubscriptionIDs []string
 }
 
 func (c *NWDAFContext) AddSmfPeerResourceRoute(route *SmfPeerResourceRoute) bool {
@@ -161,89 +157,6 @@ func (c *NWDAFContext) UpdateSmfPeerResourceRoute(route *SmfPeerResourceRoute) b
 	return true
 }
 
-func (c *NWDAFContext) ReplaceSmfPeerResourceAssociations(
-	associations []SmfPeerResourceAssociation,
-) (bool, bool) {
-	if c == nil {
-		return false, false
-	}
-	c.smfPeerMu.Lock()
-	defer c.smfPeerMu.Unlock()
-
-	updates := make(map[string][]string, len(associations))
-	for _, association := range associations {
-		key := smfPeerResourceRouteKey(
-			association.TargetAPIBaseURI,
-			association.PeerSubscriptionID,
-		)
-		if key == "" {
-			return false, false
-		}
-		if _, duplicate := updates[key]; duplicate {
-			return false, false
-		}
-		if _, exists := c.smfPeerRoutes[key]; !exists {
-			return false, false
-		}
-		updates[key] = append([]string(nil), association.NwdafSubscriptionIDs...)
-	}
-
-	changed := false
-	for key := range c.smfPeerRoutes {
-		route := c.smfPeerRoutes[key]
-		nextIDs := updates[key]
-		nextPendingCleanup := len(nextIDs) == 0
-		if !slices.Equal(route.NwdafSubscriptionIDs, nextIDs) ||
-			route.PendingCleanup != nextPendingCleanup {
-			changed = true
-		}
-		route.NwdafSubscriptionIDs = append([]string(nil), nextIDs...)
-		route.PendingCleanup = nextPendingCleanup
-		c.smfPeerRoutes[key] = route
-	}
-	return true, changed
-}
-
-func (c *NWDAFContext) ReplaceTrainingDataDescriptors(descriptors []json.RawMessage) bool {
-	if c == nil {
-		return false
-	}
-	c.smfPeerMu.Lock()
-	defer c.smfPeerMu.Unlock()
-	changed := !rawMessagesEqual(c.trainingDataDescriptors, descriptors)
-	c.trainingDataDescriptors = cloneRawMessages(descriptors)
-	return changed
-}
-
-func (c *NWDAFContext) GetTrainingDataDescriptors() []json.RawMessage {
-	if c == nil {
-		return nil
-	}
-	c.smfPeerMu.RLock()
-	defer c.smfPeerMu.RUnlock()
-	return cloneRawMessages(c.trainingDataDescriptors)
-}
-
-func cloneRawMessages(values []json.RawMessage) []json.RawMessage {
-	result := make([]json.RawMessage, len(values))
-	for index := range values {
-		result[index] = append(json.RawMessage(nil), values[index]...)
-	}
-	return result
-}
-
-func rawMessagesEqual(left, right []json.RawMessage) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if string(left[index]) != string(right[index]) {
-			return false
-		}
-	}
-	return true
-}
-
 func (c *NWDAFContext) DeleteSmfPeerResourceRoute(targetAPIBaseURI string, id string) bool {
 	if c == nil {
 		return false
@@ -286,6 +199,7 @@ type AnalyticsSubscriptionRoute struct {
 	SubscriptionID          string
 	ExternalNotificationURI string
 	AcceptedSubscription    models.NnwdafEventsSubscription
+	ProcessGeneration       string
 }
 
 func (c *NWDAFContext) AddAnalyticsSubscriptionRoute(route AnalyticsSubscriptionRoute) bool {
@@ -335,6 +249,29 @@ func (c *NWDAFContext) DeleteAnalyticsSubscriptionRoute(id string) bool {
 	}
 	delete(c.analyticsRoutes, id)
 	return true
+}
+
+func (c *NWDAFContext) TombstoneAnalyticsSubscription(id string) {
+	if c == nil || id == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.analyticsRoutes, id)
+	if c.analyticsTombstones == nil {
+		c.analyticsTombstones = make(map[string]struct{})
+	}
+	c.analyticsTombstones[id] = struct{}{}
+}
+
+func (c *NWDAFContext) IsAnalyticsSubscriptionTombstoned(id string) bool {
+	if c == nil || id == "" {
+		return false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	_, found := c.analyticsTombstones[id]
+	return found
 }
 
 func (c *NWDAFContext) GetAllAnalyticsSubscriptionRoutes() []AnalyticsSubscriptionRoute {

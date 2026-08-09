@@ -55,8 +55,23 @@ type anlfMLModelBackend interface {
 
 type backendAvailability interface {
 	Usable() bool
+	Acquire() (*backend.GenerationLease, bool)
 	MarkUnavailable(string)
 	Refresh()
+	Snapshot() backend.Snapshot
+}
+
+func acquireBackend(
+	client any,
+	availability backendAvailability,
+) (*backend.GenerationLease, bool) {
+	if client == nil {
+		return nil, false
+	}
+	if availability == nil {
+		return nil, true
+	}
+	return availability.Acquire()
 }
 
 type mlModelPeerConsumer interface {
@@ -156,8 +171,12 @@ func (p *Processor) HandleAdrfRetrievalNotify(
 	ctx context.Context,
 	body []byte,
 ) (*backend.StandardResponse, error) {
-	if p.mtlfMLModelBackend == nil || p.mtlfAvailability == nil || !p.mtlfAvailability.Usable() {
+	lease, admitted := acquireBackend(p.mtlfMLModelBackend, p.mtlfAvailability)
+	if !admitted {
 		return nil, errors.New("MTLF backend is unavailable")
+	}
+	if lease != nil {
+		defer lease.Release()
 	}
 	return p.mtlfMLModelBackend.DeliverAdrfRetrievalNotification(ctx, body)
 }

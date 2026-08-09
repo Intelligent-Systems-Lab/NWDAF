@@ -85,6 +85,7 @@ type Server struct {
 	processor             any
 	mlModel               mlModelGateway
 	publicCallbackBaseURI string
+	internalAPIBaseURI    string
 }
 
 func NewServer(cfg *factory.Config, processor any) (*Server, error) {
@@ -94,15 +95,17 @@ func NewServer(cfg *factory.Config, processor any) (*Server, error) {
 		router:                logger_util.NewGinWithLogrus(logger.GinLog),
 		processor:             processor,
 		publicCallbackBaseURI: strings.TrimRight(cfg.GetSbiUri(), "/"),
+		internalAPIBaseURI:    strings.TrimRight(cfg.GetAnlfServerURI(), "/"),
 	}
 	s.router.Use(gin.Recovery())
 	routes := s.eventsSubscriptionNotificationRoutes()
+	routes = append(routes, s.nwdafContextRoutes()...)
 	routes = append(routes, s.nfDiscoveryRoutes()...)
 	routes = append(routes, s.smfEventExposureRoutes()...)
 	routes = append(routes, s.udmCollectionRoutes()...)
 	routes = append(routes, s.adrfStorageRoutes()...)
 	routes = append(routes, s.adrfMLModelRoutes()...)
-	routes = append(routes, s.smfResourceAssociationRoutes()...)
+	routes = append(routes, s.trainingDataDescriptorRoutes()...)
 	routes = append(routes, s.anlfMLModelRoutes()...)
 	applyRoutes(s.router.Group(""), routes)
 

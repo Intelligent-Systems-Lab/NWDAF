@@ -3,182 +3,153 @@ package backend
 import (
 	"context"
 	"errors"
-	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
-func TestAvailabilityMonitorProbesImmediatelyAndUsesBoundedBackoff(t *testing.T) {
-	t.Parallel()
+const processAID = "process-a"
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	var mu sync.Mutex
-	attempts := 0
-	delays := make(chan time.Duration, 4)
-	monitor := newAvailabilityMonitor(
-		func(context.Context) (ProbeResult, error) {
-			mu.Lock()
-			defer mu.Unlock()
-			attempts++
-			if attempts < 4 {
-				return ProbeResult{}, errors.New("unavailable")
-			}
-			return ProbeResult{ProcessInstanceID: "process-a", Selection: "mongodb"}, nil
-		},
-		availabilityMonitorOptions{
-			failureDelays:  []time.Duration{time.Second, 2 * time.Second, 5 * time.Second},
-			successDelay:   30 * time.Second,
-			jitterFraction: -1,
-			wait: func(ctx context.Context, delay time.Duration) bool {
-				delays <- delay
-				return ctx.Err() == nil
-			},
-		},
-	)
-	done := make(chan struct{})
-	go func() {
-		monitor.Run(ctx)
-		close(done)
-	}()
-
-	for _, want := range []time.Duration{time.Second, 2 * time.Second, 5 * time.Second, 30 * time.Second} {
-		if got := <-delays; got != want {
-			t.Fatalf("delay = %s, want %s", got, want)
-		}
-		if want == 30*time.Second {
-			cancel()
-		}
-	}
-	<-done
-	snapshot := monitor.Snapshot()
-	if snapshot.State != StateUsable || snapshot.ProcessInstanceID != "process-a" ||
-		snapshot.Selection != "mongodb" {
-		t.Fatalf("snapshot = %+v", snapshot)
-	}
-}
-
-func TestAvailabilityMonitorSuccessResetsFailureBackoff(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	results := []error{errors.New("first"), nil, errors.New("again")}
-	delays := make(chan time.Duration, 3)
-	monitor := newAvailabilityMonitor(
-		func(context.Context) (ProbeResult, error) {
-			err := results[0]
-			results = results[1:]
-			return ProbeResult{}, err
-		},
-		availabilityMonitorOptions{
-			failureDelays:  []time.Duration{time.Second, 2 * time.Second},
-			successDelay:   30 * time.Second,
-			jitterFraction: -1,
-			wait: func(ctx context.Context, delay time.Duration) bool {
-				delays <- delay
-				if len(results) == 0 {
-					cancel()
-				}
-				return ctx.Err() == nil
-			},
-		},
-	)
-	monitor.Run(ctx)
-
-	for index, want := range []time.Duration{time.Second, 30 * time.Second, time.Second} {
-		if got := <-delays; got != want {
-			t.Fatalf("delay[%d] = %s, want %s", index, got, want)
-		}
-	}
-}
-
-func TestAvailabilityMonitorJitterBoundaries(t *testing.T) {
-	t.Parallel()
-
-	monitor := newAvailabilityMonitor(
-		func(context.Context) (ProbeResult, error) { return ProbeResult{}, nil },
-		availabilityMonitorOptions{
-			jitterFraction: 0.2,
-			random:         func() float64 { return 0 },
-		},
-	)
-	if got := monitor.jitter(10 * time.Second); got != 8*time.Second {
-		t.Fatalf("minimum jitter = %s", got)
-	}
-	monitor.options.random = func() float64 { return 1 }
-	if got := monitor.jitter(10 * time.Second); got != 12*time.Second {
-		t.Fatalf("maximum jitter = %s", got)
-	}
-}
-
-func TestAvailabilityMonitorCancellationInterruptsWait(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	started := make(chan struct{})
-	monitor := NewAvailabilityMonitor(func(context.Context) (ProbeResult, error) {
-		close(started)
-		return ProbeResult{}, errors.New("down")
+func testMonitor(probe Probe, reset ResetHandler) *AvailabilityMonitor {
+	return newAvailabilityMonitor(probe, reset, availabilityMonitorOptions{
+		failureDelays:  []time.Duration{time.Millisecond, time.Millisecond},
+		successDelay:   time.Millisecond,
+		jitterFraction: -1,
 	})
-	done := make(chan struct{})
-	go func() {
-		monitor.Run(ctx)
-		close(done)
-	}()
-	<-started
-	cancel()
+}
+
+func TestAvailabilityMonitorBecomesUsableAndIssuesGenerationLease(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	monitor := testMonitor(func(context.Context) (ProbeResult, error) {
+		return ProbeResult{ProcessInstanceID: processAID, Ready: true}, nil
+	}, nil)
+	go monitor.Run(ctx)
+	waitForState(t, monitor, StateUsable)
+	lease, ok := monitor.Acquire()
+	if !ok || lease.Generation() != processAID {
+		t.Fatalf("lease = %#v ok=%v", lease, ok)
+	}
+	lease.Release()
+}
+
+func TestNotReadyWithSameProcessDoesNotReset(t *testing.T) {
+	var calls atomic.Int32
+	var resets atomic.Int32
+	monitor := testMonitor(func(context.Context) (ProbeResult, error) {
+		if calls.Add(1) == 1 {
+			return ProbeResult{ProcessInstanceID: processAID, Ready: true}, nil
+		}
+		return ProbeResult{ProcessInstanceID: processAID}, errors.New("503")
+	}, func(context.Context, string) { resets.Add(1) })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go monitor.Run(ctx)
+	waitForState(t, monitor, StateNotReady)
+	if resets.Load() != 0 {
+		t.Fatalf("reset count = %d", resets.Load())
+	}
+}
+
+func TestChangedProcessDrainsLeaseBeforeReset(t *testing.T) {
+	var calls atomic.Int32
+	resetStarted := make(chan string, 1)
+	secondProbe := make(chan struct{})
+	monitor := testMonitor(func(context.Context) (ProbeResult, error) {
+		if calls.Add(1) == 1 {
+			return ProbeResult{ProcessInstanceID: processAID, Ready: true}, nil
+		}
+		<-secondProbe
+		return ProbeResult{ProcessInstanceID: "process-b", Ready: true}, nil
+	}, func(_ context.Context, old string) { resetStarted <- old })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go monitor.Run(ctx)
+	waitForState(t, monitor, StateUsable)
+	lease, ok := monitor.Acquire()
+	if !ok {
+		t.Fatal("could not acquire generation lease")
+	}
+	close(secondProbe)
+	monitor.Refresh()
+	waitForState(t, monitor, StateResetting)
 	select {
-	case <-done:
+	case <-resetStarted:
+		t.Fatal("reset ran before the admitted request drained")
+	case <-time.After(5 * time.Millisecond):
+	}
+	lease.Release()
+	select {
+	case old := <-resetStarted:
+		if old != processAID {
+			t.Fatalf("old generation = %q", old)
+		}
 	case <-time.After(time.Second):
-		t.Fatal("monitor did not stop after cancellation")
+		t.Fatal("reset did not run after lease release")
 	}
 }
 
-func TestAvailabilityMonitorCanExposeSyncProgress(t *testing.T) {
-	t.Parallel()
-
-	monitor := NewAvailabilityMonitor(func(context.Context) (ProbeResult, error) { return ProbeResult{}, nil })
-	monitor.MarkSyncing("process-a")
-	if snapshot := monitor.Snapshot(); snapshot.State != StateSyncing {
-		t.Fatalf("snapshot state = %q, want %q", snapshot.State, StateSyncing)
+func TestTwoTransportFailuresResetCurrentGeneration(t *testing.T) {
+	var calls atomic.Int32
+	reset := make(chan string, 1)
+	monitor := testMonitor(func(context.Context) (ProbeResult, error) {
+		if calls.Add(1) == 1 {
+			return ProbeResult{ProcessInstanceID: processAID, Ready: true}, nil
+		}
+		return ProbeResult{}, errors.New("transport")
+	}, func(_ context.Context, old string) { reset <- old })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go monitor.Run(ctx)
+	select {
+	case old := <-reset:
+		if old != processAID {
+			t.Fatalf("old generation = %q", old)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("two transport failures did not reset the generation")
 	}
 }
 
-func TestAvailabilityMonitorDoesNotFlapDuringUsableRefresh(t *testing.T) {
-	t.Parallel()
-
-	monitor := NewAvailabilityMonitor(func(context.Context) (ProbeResult, error) {
-		return ProbeResult{ProcessInstanceID: "process-a"}, nil
-	})
-	monitor.setUsable("process-a", "")
-	monitor.MarkSyncing("process-a")
-	if snapshot := monitor.Snapshot(); snapshot.State != StateUsable {
-		t.Fatalf("snapshot state = %q, want %q", snapshot.State, StateUsable)
+func TestNotReadyResponseDoesNotCountAsTransportFailure(t *testing.T) {
+	var calls atomic.Int32
+	var resets atomic.Int32
+	secondTransportObserved := make(chan struct{})
+	monitor := testMonitor(func(context.Context) (ProbeResult, error) {
+		switch calls.Add(1) {
+		case 1:
+			return ProbeResult{ProcessInstanceID: processAID, Ready: true}, nil
+		case 2:
+			return ProbeResult{ProcessInstanceID: processAID}, errors.New("503")
+		case 3:
+			close(secondTransportObserved)
+			return ProbeResult{}, errors.New("transport")
+		default:
+			return ProbeResult{ProcessInstanceID: processAID, Ready: true}, nil
+		}
+	}, func(context.Context, string) { resets.Add(1) })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go monitor.Run(ctx)
+	select {
+	case <-secondTransportObserved:
+	case <-time.After(time.Second):
+		t.Fatal("transport probe was not observed")
 	}
-	monitor.MarkSyncing("process-b")
-	if snapshot := monitor.Snapshot(); snapshot.State != StateSyncing {
-		t.Fatalf("snapshot state after restart = %q, want %q", snapshot.State, StateSyncing)
+	waitForState(t, monitor, StateUsable)
+	if resets.Load() != 0 {
+		t.Fatalf("reset count = %d", resets.Load())
 	}
 }
 
-func TestAvailabilityMonitorSnapshotsAreSafeDuringConcurrentUpdates(t *testing.T) {
-	t.Parallel()
-
-	monitor := NewAvailabilityMonitor(func(context.Context) (ProbeResult, error) { return ProbeResult{}, nil })
-	var wg sync.WaitGroup
-	for worker := 0; worker < 8; worker++ {
-		wg.Add(1)
-		go func(worker int) {
-			defer wg.Done()
-			for iteration := 0; iteration < 100; iteration++ {
-				if worker%2 == 0 {
-					monitor.MarkUnavailable("transport")
-				} else {
-					_ = monitor.Snapshot()
-				}
-			}
-		}(worker)
+func waitForState(t *testing.T, monitor *AvailabilityMonitor, want State) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if monitor.Snapshot().State == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
 	}
-	wg.Wait()
+	t.Fatalf("state = %s, want %s", monitor.Snapshot().State, want)
 }

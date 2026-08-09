@@ -31,10 +31,17 @@ type mlModelAvailabilityStub struct {
 }
 
 func (s *mlModelAvailabilityStub) Usable() bool { return s.usable }
+
+func (s *mlModelAvailabilityStub) Acquire() (*backend.GenerationLease, bool) {
+	return &backend.GenerationLease{}, s.usable
+}
+
 func (s *mlModelAvailabilityStub) MarkUnavailable(string) {
 	s.marked++
 }
+
 func (s *mlModelAvailabilityStub) Refresh() { s.refreshed++ }
+
 func (s *mlModelAvailabilityStub) Snapshot() backend.Snapshot {
 	return backend.Snapshot{
 		State:             backend.StateUsable,
@@ -962,6 +969,104 @@ func TestRemoteMLModelProvisionUsesLocalIdentityAndRelaysCallback(t *testing.T) 
 	}
 }
 
+func TestSelfDiscoveredModelProvisionUsesLocalMTLFBackend(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+	_ = anlfBackend
+	peer := &mlModelPeerConsumerStub{}
+	processor.SetMLModelPeerConsumer(peer)
+	target := backend.SelectedTarget{
+		NFInstanceID:        ctx.NfId,
+		NFServiceInstanceID: "model-provision-self",
+		ServiceName:         "nnwdaf-mlmodelprovision",
+		APIRoot:             "http://self.example",
+		SelectionSource:     backend.SelectionSourceConfigured,
+	}
+	body := []byte(`{
+		"mLEventSubscs":[{"mLEvent":"UE_COMMUNICATION","mLEventFilter":{}}],
+		"notifUri":"http://anlf.backend/provision",
+		"notifCorreId":"corr-self",
+		"suppFeats":"8"
+	}`)
+
+	response, problem := processor.HandleCreateMLModelProvisionFromBackend(
+		context.Background(),
+		body,
+		&target,
+	)
+
+	if problem != nil || response == nil || response.StatusCode != http.StatusCreated {
+		t.Fatalf("create response=%+v problem=%+v", response, problem)
+	}
+	if len(peer.provisionBody) != 0 {
+		t.Fatal("self-discovered target was sent through the peer HTTP consumer")
+	}
+	if len(mtlfBackend.provisionBody) == 0 {
+		t.Fatal("self-discovered target did not reach the local MTLF backend")
+	}
+	localRouteID, err := backend.ResourceIDFromLocation(response.Location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, found := ctx.GetMLModelProvisionSubscriptionRoute(localRouteID)
+	if !found || route.Initiator != nwdaf_context.MLModelRoutePartyAnLFBackend ||
+		route.Destination != nwdaf_context.MLModelRoutePartyAnLFBackend ||
+		route.PeerRoute.SelectedTarget != nil ||
+		route.PeerRoute.ProcessGeneration != mtlfAvailability.generation ||
+		route.PeerRoute.RelatedBackend != backend.KindAnLF ||
+		route.PeerRoute.RelatedGeneration != anlfAvailability.generation {
+		t.Fatalf("local provision route=%+v found=%v", route, found)
+	}
+}
+
+func TestSelfDiscoveredMonitorRegistrationUsesLocalMTLFBackend(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+	_ = anlfBackend
+	peer := &mlModelPeerConsumerStub{}
+	processor.SetMLModelPeerConsumer(peer)
+	target := backend.SelectedTarget{
+		NFInstanceID:        ctx.NfId,
+		NFServiceInstanceID: "model-monitor-self",
+		ServiceName:         "nnwdaf-mlmodelmonitor",
+		APIRoot:             "http://self.example",
+		SelectionSource:     backend.SelectionSourceConfigured,
+	}
+	body := []byte(`{
+		"consumerId":"` + ctx.NfId + `",
+		"modelId":1,
+		"modelAccuInd":true,
+		"mLEvent":"UE_COMMUNICATION",
+		"mLEventFilter":{}
+	}`)
+
+	response, problem := processor.HandleCreateMLModelMonitorRegistrationFromBackend(
+		context.Background(),
+		body,
+		&target,
+	)
+
+	if problem != nil || response == nil || response.StatusCode != http.StatusCreated {
+		t.Fatalf("create response=%+v problem=%+v", response, problem)
+	}
+	if len(peer.registrationBody) != 0 {
+		t.Fatal("self-discovered target was sent through the peer HTTP consumer")
+	}
+	if len(mtlfBackend.registrationBody) == 0 {
+		t.Fatal("self-discovered target did not reach the local MTLF backend")
+	}
+	localRouteID, err := backend.ResourceIDFromLocation(response.Location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route, found := ctx.GetMLModelMonitorRegistrationRoute(localRouteID)
+	if !found || route.Initiator != nwdaf_context.MLModelRoutePartyAnLFBackend ||
+		route.PeerRoute.SelectedTarget != nil ||
+		route.PeerRoute.ProcessGeneration != mtlfAvailability.generation ||
+		route.PeerRoute.RelatedBackend != backend.KindAnLF ||
+		route.PeerRoute.RelatedGeneration != anlfAvailability.generation {
+		t.Fatalf("local monitor registration route=%+v found=%v", route, found)
+	}
+}
+
 func TestRemoteMonitorSubscriptionRejectsUnknownOwner(t *testing.T) {
 	processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
 	_ = ctx
@@ -999,7 +1104,7 @@ func TestRemoteMonitorSubscriptionRejectsUnknownOwner(t *testing.T) {
 }
 
 func TestSelfDiscoveredMonitorSubscriptionUsesLocalAnLFBackend(t *testing.T) {
-	processor, ctx, mtlfBackend, anlfBackend, _, _ := newMLModelProcessorTestSubject()
+	processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
 	_ = mtlfBackend
 	peer := &mlModelPeerConsumerStub{}
 	processor.SetMLModelPeerConsumer(peer)
@@ -1050,7 +1155,10 @@ func TestSelfDiscoveredMonitorSubscriptionUsesLocalAnLFBackend(t *testing.T) {
 	}
 	route, found := ctx.GetMLModelMonitorSubscriptionRoute(localRouteID)
 	if !found || route.OwnerRegistrationID != "registration-go" ||
-		route.PeerRoute.SelectedTarget != nil {
+		route.PeerRoute.SelectedTarget != nil ||
+		route.PeerRoute.ProcessGeneration != anlfAvailability.generation ||
+		route.PeerRoute.RelatedBackend != backend.KindMTLF ||
+		route.PeerRoute.RelatedGeneration != mtlfAvailability.generation {
 		t.Fatalf("local monitor route=%+v found=%v", route, found)
 	}
 }

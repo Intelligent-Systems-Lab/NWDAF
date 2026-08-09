@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/free5gc/nwdaf/internal/backend"
 )
 
 const testAnlfProcessInstanceID = "5f5db241-1e7e-42c8-9bb0-35653f8ef6d4"
@@ -22,36 +20,6 @@ func TestLiveAnlfBackendReadiness(t *testing.T) {
 	}
 	if _, err := NewClient(endpoint, 5*time.Second).CheckReadiness(context.Background()); err != nil {
 		t.Fatalf("CheckReadiness() error = %v", err)
-	}
-}
-
-func TestClientSyncRequiresAcceptedSnapshotFromSameProcess(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost || request.URL.Path != "/internal/v1/sync" {
-			t.Errorf("request = %s %s", request.Method, request.URL.Path)
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		if _, err := writer.Write([]byte(
-			`{"processInstanceId":"` + testAnlfProcessInstanceID +
-				`","snapshotAccepted":true,"trainingDataSource":"mongodb"}`,
-		)); err != nil {
-			t.Errorf("Write() error = %v", err)
-		}
-	}))
-	t.Cleanup(server.Close)
-
-	response, err := NewClient(server.URL, time.Second).Sync(
-		context.Background(),
-		backend.SyncRequest{},
-	)
-	if err != nil {
-		t.Fatalf("Sync() error = %v", err)
-	}
-	if response.ProcessInstanceID != testAnlfProcessInstanceID ||
-		response.TrainingDataSource != backend.DataSourceMongoDB {
-		t.Fatalf("Sync() response = %+v", response)
 	}
 }
 
@@ -89,7 +57,11 @@ func TestClientCheckReadinessRejectsFailureAndMalformedResponses(t *testing.T) {
 		status int
 		body   string
 	}{
-		{name: "not ready", status: http.StatusServiceUnavailable, body: `{"status":"not_ready"}`},
+		{
+			name:   "not ready",
+			status: http.StatusServiceUnavailable,
+			body:   `{"status":"not_ready","processInstanceId":"` + testAnlfProcessInstanceID + `"}`,
+		},
 		{name: "malformed success", status: http.StatusOK, body: `{invalid`},
 		{name: "oversized", status: http.StatusServiceUnavailable, body: strings.Repeat("x", maxBackendHealthBodyBytes+1)},
 	}

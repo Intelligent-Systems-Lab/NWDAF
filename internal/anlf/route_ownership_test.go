@@ -17,7 +17,7 @@ func TestAnLFRouteOwnershipExcludesMTLFOriginatedOperations(t *testing.T) {
 	routes = append(routes, server.nfDiscoveryRoutes()...)
 	routes = append(routes, server.smfEventExposureRoutes()...)
 	routes = append(routes, server.adrfStorageRoutes()...)
-	routes = append(routes, server.smfResourceAssociationRoutes()...)
+	routes = append(routes, server.trainingDataDescriptorRoutes()...)
 	routes = append(routes, server.anlfMLModelRoutes()...)
 	applyRoutes(router.Group(""), routes)
 

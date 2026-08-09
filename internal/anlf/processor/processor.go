@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/free5gc/nwdaf/internal/backend"
-	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 	"github.com/free5gc/openapi/models"
 )
@@ -37,15 +36,21 @@ type udmCollectionProxy interface {
 	GetUdmSmfRegistration(context.Context, string, string, *models.Snssai, string) (*consumer.StandardUdmResponse, error)
 }
 
+type trainingDataDescriptorRelay interface {
+	PutTrainingDataDescriptor(context.Context, string, []byte) (*backend.StandardResponse, error)
+	DeleteTrainingDataDescriptor(context.Context, string) (*backend.StandardResponse, error)
+}
+
 type Processor struct {
 	notificationDispatcher eventsSubscriptionNotificationDispatcher
 	nfDiscovery            nfDiscoveryProxy
 	smfEventExposure       smfEventExposureProxy
 	adrfStorage            adrfStorageProxy
 	udmCollection          udmCollectionProxy
-	nwdafContext           *nwdaf_context.NWDAFContext
-	availability           availabilitySnapshot
-	mtlfSyncRefresher      syncRefresher
+	trainingDataRelay      trainingDataDescriptorRelay
+	mtlfAvailability       interface {
+		Acquire() (*backend.GenerationLease, bool)
+	}
 }
 
 func (p *Processor) SetNFDiscoveryProxy(proxy nfDiscoveryProxy) {
@@ -62,6 +67,16 @@ func (p *Processor) SetAdrfStorageProxy(proxy adrfStorageProxy) {
 
 func (p *Processor) SetUdmCollectionProxy(proxy udmCollectionProxy) {
 	p.udmCollection = proxy
+}
+
+func (p *Processor) SetTrainingDataDescriptorRelay(
+	relay trainingDataDescriptorRelay,
+	availability interface {
+		Acquire() (*backend.GenerationLease, bool)
+	},
+) {
+	p.trainingDataRelay = relay
+	p.mtlfAvailability = availability
 }
 
 func NewProcessor(dispatchers ...eventsSubscriptionNotificationDispatcher) *Processor {

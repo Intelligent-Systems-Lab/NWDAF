@@ -53,8 +53,12 @@ func (p *Processor) handleCreateLocalMLModelTraining(
 	if validationErr := wire.ValidateFLSubscription(value, nil); validationErr != nil {
 		return nil, mlModelTrainingValidationProblem(validationErr)
 	}
-	if !backendUsable(p.mtlfMLModelBackend, p.mtlfAvailability) {
+	generationLease1, admitted1 := acquireBackend(p.mtlfMLModelBackend, p.mtlfAvailability)
+	if !admitted1 {
 		return nil, mlModelUnavailableProblem()
+	}
+	if generationLease1 != nil {
+		defer generationLease1.Release()
 	}
 	backendBody, err := replaceTrainingNotificationURI(
 		body, p.mtlfCallbackURI(mlModelTrainingCallbackPath),
@@ -251,8 +255,12 @@ func (p *Processor) HandleReplaceMLModelTraining(
 			ctx, route.PeerRoute.PeerLocation, routedBody,
 		)
 	} else {
-		if !backendUsable(p.mtlfMLModelBackend, p.mtlfAvailability) {
+		generationLease2, admitted2 := acquireBackend(p.mtlfMLModelBackend, p.mtlfAvailability)
+		if !admitted2 {
 			return nil, mlModelUnavailableProblem()
+		}
+		if generationLease2 != nil {
+			defer generationLease2.Release()
 		}
 		response, err = p.mtlfMLModelBackend.ReplaceMLModelTrainingSubscription(
 			ctx, route.PeerRoute.BackendResourceID, routedBody,
@@ -347,8 +355,12 @@ func (p *Processor) HandlePatchMLModelTraining(
 			ctx, route.PeerRoute.PeerLocation, routedPatch,
 		)
 	} else {
-		if !backendUsable(p.mtlfMLModelBackend, p.mtlfAvailability) {
+		generationLease3, admitted3 := acquireBackend(p.mtlfMLModelBackend, p.mtlfAvailability)
+		if !admitted3 {
 			return nil, mlModelUnavailableProblem()
+		}
+		if generationLease3 != nil {
+			defer generationLease3.Release()
 		}
 		response, err = p.mtlfMLModelBackend.PatchMLModelTrainingSubscription(
 			ctx, route.PeerRoute.BackendResourceID, routedPatch,
@@ -420,6 +432,12 @@ func (p *Processor) HandleDeleteMLModelTraining(
 	if nwdafContext == nil {
 		return nil, mlModelInternalProblem("NWDAF context is unavailable")
 	}
+	if nwdafContext.ConsumeMLModelDeletionRecord(
+		nwdaf_context.MLModelResourceTrainingSubscription,
+		subscriptionID,
+	) {
+		return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+	}
 	route, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(subscriptionID)
 	if !found {
 		return nil, mlModelResourceNotFoundProblem("ML Model Training subscription", subscriptionID)
@@ -434,8 +452,12 @@ func (p *Processor) HandleDeleteMLModelTraining(
 			ctx, route.PeerRoute.PeerLocation,
 		)
 	} else {
-		if !backendUsable(p.mtlfMLModelBackend, p.mtlfAvailability) {
+		generationLease4, admitted4 := acquireBackend(p.mtlfMLModelBackend, p.mtlfAvailability)
+		if !admitted4 {
 			return nil, mlModelUnavailableProblem()
+		}
+		if generationLease4 != nil {
+			defer generationLease4.Release()
 		}
 		response, err = p.mtlfMLModelBackend.DeleteMLModelTrainingSubscription(
 			ctx, route.PeerRoute.BackendResourceID,
@@ -492,8 +514,12 @@ func (p *Processor) HandleMLModelTrainingNotification(
 		return nil, mlModelTrainingValidationProblem(validationErr)
 	}
 	if route.Destination == nwdaf_context.MLModelRoutePartyMTLFBackend {
-		if !backendUsable(p.mtlfMLModelBackend, p.mtlfAvailability) {
+		generationLease5, admitted5 := acquireBackend(p.mtlfMLModelBackend, p.mtlfAvailability)
+		if !admitted5 {
 			return nil, mlModelUnavailableProblem()
+		}
+		if generationLease5 != nil {
+			defer generationLease5.Release()
 		}
 		response, deliveryErr := p.mtlfMLModelBackend.DeliverMLModelTrainingNotification(ctx, body)
 		if deliveryErr != nil {

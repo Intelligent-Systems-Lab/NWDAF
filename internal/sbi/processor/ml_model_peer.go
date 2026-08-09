@@ -344,11 +344,10 @@ func copySelectedTarget(target backend.SelectedTarget) *backend.SelectedTarget {
 }
 
 func (p *Processor) backendGeneration(availability backendAvailability) string {
-	provider, ok := availability.(interface{ Snapshot() backend.Snapshot })
-	if !ok {
+	if availability == nil {
 		return ""
 	}
-	return provider.Snapshot().ProcessInstanceID
+	return availability.Snapshot().ProcessInstanceID
 }
 
 func (p *Processor) mlModelPeerProblem(err error) *models.ProblemDetails {
@@ -592,6 +591,21 @@ func (p *Processor) ReconcilePendingMLModelPeerCleanup(
 		}
 		scheduleNextPeerCleanup(&route.PeerRoute, now)
 		nwdafContext.UpdateMLModelMonitorSubscriptionRoute(route)
+	}
+	for _, route := range nwdafContext.GetAllMLModelTrainingSubscriptionRoutes() {
+		if !peerCleanupDue(route.PeerRoute, now) {
+			continue
+		}
+		_, err := p.mlModelPeerConsumer.DeletePeerMLModelTraining(
+			requestContext,
+			route.PeerRoute.PeerLocation,
+		)
+		if err == nil || peerMissing(err) {
+			nwdafContext.DeleteMLModelTrainingSubscriptionRoute(route.SubscriptionID)
+			continue
+		}
+		scheduleNextPeerCleanup(&route.PeerRoute, now)
+		nwdafContext.UpdateMLModelTrainingSubscriptionRoute(route)
 	}
 }
 

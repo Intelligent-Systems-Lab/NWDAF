@@ -32,6 +32,68 @@ const (
 	MLModelRoutePendingCleanup MLModelRouteLifecycle = "PENDING_CLEANUP"
 )
 
+type MLModelResourceKind string
+
+const (
+	MLModelResourceProvisionSubscription MLModelResourceKind = "ML_MODEL_PROVISION_SUBSCRIPTION"
+	MLModelResourceMonitorRegistration   MLModelResourceKind = "ML_MODEL_MONITOR_REGISTRATION"
+	MLModelResourceMonitorSubscription   MLModelResourceKind = "ML_MODEL_MONITOR_SUBSCRIPTION"
+	MLModelResourceTrainingSubscription  MLModelResourceKind = "ML_MODEL_TRAINING_SUBSCRIPTION"
+)
+
+// MLModelDeletionRecord is the process-local acknowledgement ledger retained
+// after a backend generation is discarded. It intentionally carries no
+// subscription representation or backend runtime state.
+type MLModelDeletionRecord struct {
+	ResourceID        string
+	ProcessGeneration string
+	CleanupAttempted  bool
+}
+
+func (c *NWDAFContext) TombstoneMLModelResource(record MLModelDeletionRecord, kind MLModelResourceKind) {
+	if c == nil || kind == "" || record.ResourceID == "" {
+		return
+	}
+	c.mlModelRouteMu.Lock()
+	defer c.mlModelRouteMu.Unlock()
+	if c.mlModelDeletionRecords == nil {
+		c.mlModelDeletionRecords = make(map[MLModelResourceKind]map[string]MLModelDeletionRecord)
+	}
+	if c.mlModelDeletionRecords[kind] == nil {
+		c.mlModelDeletionRecords[kind] = make(map[string]MLModelDeletionRecord)
+	}
+	c.mlModelDeletionRecords[kind][record.ResourceID] = record
+}
+
+// ConsumeMLModelDeletionRecord removes one late-delete acknowledgement. A
+// second DELETE therefore returns the normal not-found response.
+func (c *NWDAFContext) ConsumeMLModelDeletionRecord(kind MLModelResourceKind, resourceID string) bool {
+	if c == nil || kind == "" || resourceID == "" {
+		return false
+	}
+	c.mlModelRouteMu.Lock()
+	defer c.mlModelRouteMu.Unlock()
+	records := c.mlModelDeletionRecords[kind]
+	if _, found := records[resourceID]; !found {
+		return false
+	}
+	delete(records, resourceID)
+	return true
+}
+
+func (c *NWDAFContext) GetMLModelDeletionRecord(
+	kind MLModelResourceKind,
+	resourceID string,
+) (MLModelDeletionRecord, bool) {
+	if c == nil || kind == "" || resourceID == "" {
+		return MLModelDeletionRecord{}, false
+	}
+	c.mlModelRouteMu.RLock()
+	defer c.mlModelRouteMu.RUnlock()
+	record, found := c.mlModelDeletionRecords[kind][resourceID]
+	return record, found
+}
+
 type MLModelPeerRoute struct {
 	Direction         MLModelRouteDirection
 	SelectedTarget    *backend.SelectedTarget
@@ -40,6 +102,8 @@ type MLModelPeerRoute struct {
 	BackendResourceID string
 	LifecycleState    MLModelRouteLifecycle
 	ProcessGeneration string
+	RelatedBackend    backend.Kind
+	RelatedGeneration string
 	CleanupAttempts   int
 	NextCleanupAt     time.Time
 }
@@ -372,102 +436,4 @@ func clonePeerRoute(route MLModelPeerRoute) MLModelPeerRoute {
 		route.SelectedTarget = &target
 	}
 	return route
-}
-
-// ReconcileMTLFMLModelRoutes records that the current MTLF process accepted
-// the Go-owned snapshot. Locally owned MTLF resources are recreated under the
-// Go route ID; outbound peer mappings keep their peer Location unchanged.
-func (c *NWDAFContext) ReconcileMTLFMLModelRoutes(processGeneration string) {
-	if c == nil || processGeneration == "" {
-		return
-	}
-	c.mlModelRouteMu.Lock()
-	defer c.mlModelRouteMu.Unlock()
-	for routeID, route := range c.mlModelProvisionRoutes {
-		if route.PeerRoute.LifecycleState != MLModelRouteActive ||
-			route.PeerRoute.ProcessGeneration == processGeneration {
-			continue
-		}
-		if route.PeerRoute.SelectedTarget == nil {
-			route.PeerRoute.ProcessGeneration = processGeneration
-			route.PeerRoute.BackendResourceID = route.SubscriptionID
-			c.mlModelProvisionRoutes[routeID] = route
-		}
-	}
-	for routeID, route := range c.mlModelRegistrationRoutes {
-		if route.PeerRoute.LifecycleState != MLModelRouteActive ||
-			route.PeerRoute.ProcessGeneration == processGeneration {
-			continue
-		}
-		if route.PeerRoute.SelectedTarget == nil {
-			route.PeerRoute.ProcessGeneration = processGeneration
-			route.PeerRoute.BackendResourceID = route.RegistrationID
-			c.mlModelRegistrationRoutes[routeID] = route
-		}
-	}
-	for routeID, route := range c.mlModelMonitorRoutes {
-		if route.PeerRoute.LifecycleState != MLModelRouteActive ||
-			route.PeerRoute.ProcessGeneration == processGeneration {
-			continue
-		}
-		if route.PeerRoute.SelectedTarget != nil {
-			route.PeerRoute.ProcessGeneration = processGeneration
-			c.mlModelMonitorRoutes[routeID] = route
-		}
-	}
-	for routeID, route := range c.mlModelTrainingRoutes {
-		if route.PeerRoute.LifecycleState != MLModelRouteActive ||
-			route.PeerRoute.ProcessGeneration == processGeneration {
-			continue
-		}
-		if route.PeerRoute.SelectedTarget == nil {
-			route.PeerRoute.ProcessGeneration = processGeneration
-			route.PeerRoute.BackendResourceID = route.SubscriptionID
-		} else {
-			route.PeerRoute.ProcessGeneration = processGeneration
-		}
-		c.mlModelTrainingRoutes[routeID] = route
-	}
-}
-
-// ReconcileAnLFMLModelRoutes records that the current AnLF process accepted
-// the Go-owned snapshot. Locally owned monitor resources are recreated under
-// the Go route ID; outbound peer mappings retain their peer Location.
-func (c *NWDAFContext) ReconcileAnLFMLModelRoutes(processGeneration string) {
-	if c == nil || processGeneration == "" {
-		return
-	}
-	c.mlModelRouteMu.Lock()
-	defer c.mlModelRouteMu.Unlock()
-	for routeID, route := range c.mlModelMonitorRoutes {
-		if route.PeerRoute.LifecycleState != MLModelRouteActive ||
-			route.PeerRoute.ProcessGeneration == processGeneration {
-			continue
-		}
-		if route.PeerRoute.SelectedTarget == nil {
-			route.PeerRoute.ProcessGeneration = processGeneration
-			route.PeerRoute.BackendResourceID = route.SubscriptionID
-			c.mlModelMonitorRoutes[routeID] = route
-		}
-	}
-	for routeID, route := range c.mlModelProvisionRoutes {
-		if route.PeerRoute.LifecycleState != MLModelRouteActive ||
-			route.PeerRoute.ProcessGeneration == processGeneration {
-			continue
-		}
-		if route.PeerRoute.SelectedTarget != nil {
-			route.PeerRoute.ProcessGeneration = processGeneration
-			c.mlModelProvisionRoutes[routeID] = route
-		}
-	}
-	for routeID, route := range c.mlModelRegistrationRoutes {
-		if route.PeerRoute.LifecycleState != MLModelRouteActive ||
-			route.PeerRoute.ProcessGeneration == processGeneration {
-			continue
-		}
-		if route.PeerRoute.SelectedTarget != nil {
-			route.PeerRoute.ProcessGeneration = processGeneration
-			c.mlModelRegistrationRoutes[routeID] = route
-		}
-	}
 }

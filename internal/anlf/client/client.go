@@ -2,7 +2,6 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -95,15 +94,8 @@ func (c *Client) CheckReadiness(parent context.Context) (backend.HealthResponse,
 	if closeErr != nil {
 		return backend.HealthResponse{}, fmt.Errorf("close AnLF backend readiness response: %w", closeErr)
 	}
-	if response.StatusCode != http.StatusOK {
-		return backend.HealthResponse{}, &BackendRequestError{
-			Operation:  "check AnLF backend readiness",
-			StatusCode: response.StatusCode,
-			Detail:     strings.TrimSpace(string(body)),
-		}
-	}
 	var payload backend.HealthResponse
-	if json.Unmarshal(body, &payload) != nil || payload.Status != "ready" ||
+	if json.Unmarshal(body, &payload) != nil ||
 		uuid.Validate(payload.ProcessInstanceID) != nil {
 		return backend.HealthResponse{}, &BackendRequestError{
 			Operation:  "check AnLF backend readiness",
@@ -111,60 +103,21 @@ func (c *Client) CheckReadiness(parent context.Context) (backend.HealthResponse,
 			Detail:     "malformed readiness response",
 		}
 	}
-	return payload, nil
-}
-
-func (c *Client) Sync(parent context.Context, snapshot backend.SyncRequest) (*backend.SyncResponse, error) {
-	body, err := json.Marshal(snapshot)
-	if err != nil {
-		return nil, fmt.Errorf("sync AnLF backend: marshal request: %w", err)
-	}
-	ctx, cancel, err := timeoutContextFromParent(parent, c.timeout, "sync AnLF backend")
-	if err != nil {
-		return nil, err
-	}
-	defer cancel()
-	request, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		c.endpoint+"/internal/v1/sync",
-		bytes.NewReader(body),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create AnLF backend sync request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	response, err := c.httpClient.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("sync AnLF backend: %w", err)
-	}
-	responseBody, readErr := readHealthBody(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil {
-		return nil, &BackendRequestError{
-			Operation: "sync AnLF backend", StatusCode: response.StatusCode, Detail: readErr.Error(),
-		}
-	}
-	if closeErr != nil {
-		return nil, fmt.Errorf("close AnLF backend sync response: %w", closeErr)
-	}
 	if response.StatusCode != http.StatusOK {
-		return nil, &BackendRequestError{
-			Operation:  "sync AnLF backend",
+		return payload, &BackendRequestError{
+			Operation:  "check AnLF backend readiness",
 			StatusCode: response.StatusCode,
-			Detail:     strings.TrimSpace(string(responseBody)),
+			Detail:     strings.TrimSpace(string(body)),
 		}
 	}
-	var payload backend.SyncResponse
-	if json.Unmarshal(responseBody, &payload) != nil ||
-		uuid.Validate(payload.ProcessInstanceID) != nil || !payload.SnapshotAccepted {
-		return nil, &BackendRequestError{
-			Operation:  "sync AnLF backend",
+	if payload.Status != "ready" {
+		return backend.HealthResponse{}, &BackendRequestError{
+			Operation:  "check AnLF backend readiness",
 			StatusCode: response.StatusCode,
-			Detail:     "malformed or rejected sync response",
+			Detail:     "malformed readiness response",
 		}
 	}
-	return &payload, nil
+	return payload, nil
 }
 
 func readHealthBody(reader io.Reader) ([]byte, error) {

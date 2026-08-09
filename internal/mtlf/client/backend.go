@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -142,10 +141,21 @@ func (c *BackendClient) CheckReadiness(parent context.Context) (backend.HealthRe
 			Message:    closeErr.Error(),
 		}
 	}
-	if response.StatusCode == http.StatusOK {
-		var payload backend.HealthResponse
-		if json.Unmarshal(body, &payload) != nil || payload.Status != "ready" ||
-			uuid.Validate(payload.ProcessInstanceID) != nil {
+	var health backend.HealthResponse
+	if json.Unmarshal(body, &health) == nil &&
+		uuid.Validate(health.ProcessInstanceID) == nil {
+		if response.StatusCode == http.StatusOK && health.Status == "ready" {
+			return health, nil
+		}
+		if response.StatusCode == http.StatusServiceUnavailable {
+			return health, &BackendRequestError{
+				Operation:  "check MTLF backend readiness",
+				StatusCode: response.StatusCode,
+				Code:       "NOT_READY",
+				Message:    health.Status,
+			}
+		}
+		if response.StatusCode == http.StatusOK {
 			return backend.HealthResponse{}, &BackendRequestError{
 				Operation:  "check MTLF backend readiness",
 				StatusCode: response.StatusCode,
@@ -153,7 +163,6 @@ func (c *BackendClient) CheckReadiness(parent context.Context) (backend.HealthRe
 				Message:    "malformed readiness response",
 			}
 		}
-		return payload, nil
 	}
 
 	var payload struct {
@@ -164,67 +173,12 @@ func (c *BackendClient) CheckReadiness(parent context.Context) (backend.HealthRe
 		payload.Code = "HTTP_ERROR"
 		payload.Message = strings.TrimSpace(string(body))
 	}
-	return backend.HealthResponse{}, &BackendRequestError{
+	return health, &BackendRequestError{
 		Operation:  "check MTLF backend readiness",
 		StatusCode: response.StatusCode,
 		Code:       payload.Code,
 		Message:    payload.Message,
 	}
-}
-
-func (c *BackendClient) Sync(
-	parent context.Context,
-	snapshot backend.SyncRequest,
-) (*backend.SyncResponse, error) {
-	if parent == nil {
-		return nil, &BackendRequestError{Operation: "sync MTLF backend", Message: "parent context is required"}
-	}
-	body, err := json.Marshal(snapshot)
-	if err != nil {
-		return nil, fmt.Errorf("marshal MTLF backend sync request: %w", err)
-	}
-	ctx, cancel := context.WithTimeout(parent, c.timeout)
-	defer cancel()
-	request, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		c.endpoint+"/internal/v1/sync",
-		bytes.NewReader(body),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create MTLF backend sync request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/json")
-	response, err := c.httpClient.Do(request)
-	if err != nil {
-		return nil, &BackendRequestError{Operation: "sync MTLF backend", Message: err.Error(), cause: err}
-	}
-	responseBody, readErr := readBackendResponseBody(response.Body)
-	closeErr := response.Body.Close()
-	if readErr != nil {
-		return nil, &BackendRequestError{
-			Operation: "sync MTLF backend", StatusCode: response.StatusCode,
-			Code: "RESPONSE_TOO_LARGE", Message: readErr.Error(),
-		}
-	}
-	if closeErr != nil {
-		return nil, fmt.Errorf("close MTLF backend sync response: %w", closeErr)
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, &BackendRequestError{
-			Operation: "sync MTLF backend", StatusCode: response.StatusCode,
-			Code: "HTTP_ERROR", Message: strings.TrimSpace(string(responseBody)),
-		}
-	}
-	var payload backend.SyncResponse
-	if json.Unmarshal(responseBody, &payload) != nil ||
-		uuid.Validate(payload.ProcessInstanceID) != nil || !payload.SnapshotAccepted {
-		return nil, &BackendRequestError{
-			Operation: "sync MTLF backend", StatusCode: response.StatusCode,
-			Code: "INVALID_RESPONSE", Message: "malformed or rejected sync response",
-		}
-	}
-	return &payload, nil
 }
 
 func (c *BackendClient) DeliverAdrfRetrievalNotification(
@@ -256,6 +210,71 @@ func (c *BackendClient) DeliverAdrfRetrievalNotification(
 				http.StatusTooManyRequests,
 				http.StatusInternalServerError,
 				http.StatusBadGateway,
+				http.StatusServiceUnavailable,
+			),
+		},
+	)
+}
+
+func (c *BackendClient) PutTrainingDataDescriptor(
+	parent context.Context,
+	descriptorID string,
+	body []byte,
+) (*backend.StandardResponse, error) {
+	return backend.ExecuteStandardRequest(
+		parent,
+		c.httpClient,
+		c.timeout,
+		http.MethodPut,
+		c.endpoint+"/internal/v1/anlf/training-data-descriptors/"+descriptorID,
+		body,
+		"put training-data descriptor",
+		backend.StandardOperationContract{
+			SuccessValidators: map[int]func([]byte) error{
+				http.StatusNoContent: func(body []byte) error {
+					if len(body) != 0 {
+						return errors.New("204 response must not contain a body")
+					}
+					return nil
+				},
+			},
+			ErrorStatuses: backend.ErrorStatuses(
+				http.StatusBadRequest,
+				http.StatusNotFound,
+				http.StatusRequestEntityTooLarge,
+				http.StatusUnsupportedMediaType,
+				http.StatusInternalServerError,
+				http.StatusServiceUnavailable,
+			),
+		},
+	)
+}
+
+func (c *BackendClient) DeleteTrainingDataDescriptor(
+	parent context.Context,
+	descriptorID string,
+) (*backend.StandardResponse, error) {
+	return backend.ExecuteStandardRequest(
+		parent,
+		c.httpClient,
+		c.timeout,
+		http.MethodDelete,
+		c.endpoint+"/internal/v1/anlf/training-data-descriptors/"+descriptorID,
+		nil,
+		"delete training-data descriptor",
+		backend.StandardOperationContract{
+			SuccessValidators: map[int]func([]byte) error{
+				http.StatusNoContent: func(body []byte) error {
+					if len(body) != 0 {
+						return errors.New("204 response must not contain a body")
+					}
+					return nil
+				},
+			},
+			ErrorStatuses: backend.ErrorStatuses(
+				http.StatusBadRequest,
+				http.StatusNotFound,
+				http.StatusInternalServerError,
 				http.StatusServiceUnavailable,
 			),
 		},

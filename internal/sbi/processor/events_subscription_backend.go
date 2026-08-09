@@ -38,6 +38,7 @@ func (p *Processor) createBackendSubscription(
 		SubscriptionID:          subscriptionID,
 		ExternalNotificationURI: req.NotificationURI,
 		AcceptedSubscription:    accepted,
+		ProcessGeneration:       p.backendGeneration(p.eventsAvailability),
 	}
 	ctx := nwdaf_context.GetSelf()
 	if ctx == nil || !ctx.AddAnalyticsSubscriptionRoute(route) {
@@ -101,6 +102,7 @@ func (p *Processor) replaceBackendSubscription(
 		SubscriptionID:          subscriptionID,
 		ExternalNotificationURI: req.NotificationURI,
 		AcceptedSubscription:    accepted,
+		ProcessGeneration:       p.backendGeneration(p.eventsAvailability),
 	}) {
 		return nil, &models.ProblemDetails{
 			Status: http.StatusInternalServerError,

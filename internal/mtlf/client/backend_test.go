@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	backendcontract "github.com/free5gc/nwdaf/internal/backend"
 )
 
 const testMtlfProcessInstanceID = "c11ed8a5-f093-459f-82dd-4a0fb36fb55d"
@@ -37,35 +35,6 @@ func TestNewBackendClient(t *testing.T) {
 				t.Fatalf("NewBackendClient() error = %v, wantErr %v", err, test.wantErr)
 			}
 		})
-	}
-}
-
-func TestBackendClientSync(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodPost || request.URL.Path != "/internal/v1/sync" {
-			t.Errorf("request = %s %s", request.Method, request.URL.Path)
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		if _, writeErr := writer.Write([]byte(
-			`{"processInstanceId":"` + testMtlfProcessInstanceID +
-				`","snapshotAccepted":true,"mongodbAvailable":false,"sourceSelection":{}}`,
-		)); writeErr != nil {
-			t.Errorf("Write() error = %v", writeErr)
-		}
-	}))
-	t.Cleanup(server.Close)
-	client, err := NewBackendClient(server.URL, time.Second, server.Client())
-	if err != nil {
-		t.Fatalf("NewBackendClient() error = %v", err)
-	}
-	response, err := client.Sync(context.Background(), backendcontract.SyncRequest{})
-	if err != nil {
-		t.Fatalf("Sync() error = %v", err)
-	}
-	if response.ProcessInstanceID != testMtlfProcessInstanceID {
-		t.Fatalf("processInstanceId = %q", response.ProcessInstanceID)
 	}
 }
 
@@ -106,7 +75,7 @@ func TestBackendClientCheckReadinessReturnsTypedStatusError(t *testing.T) {
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusServiceUnavailable)
 		if _, writeErr := writer.Write(
-			[]byte(`{"code":"NOT_READY","message":"reconciliation pending"}`),
+			[]byte(`{"status":"not_ready","processInstanceId":"` + testMtlfProcessInstanceID + `"}`),
 		); writeErr != nil {
 			t.Errorf("Write() error = %v", writeErr)
 		}
@@ -117,13 +86,16 @@ func TestBackendClientCheckReadinessReturnsTypedStatusError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewBackendClient() error = %v", err)
 	}
-	_, err = backend.CheckReadiness(context.Background())
+	health, err := backend.CheckReadiness(context.Background())
 	var requestErr *BackendRequestError
 	if !errors.As(err, &requestErr) {
 		t.Fatalf("CheckReadiness() error = %T %v", err, err)
 	}
 	if requestErr.StatusCode != http.StatusServiceUnavailable || requestErr.Code != "NOT_READY" {
 		t.Fatalf("BackendRequestError = %#v", requestErr)
+	}
+	if health.ProcessInstanceID != testMtlfProcessInstanceID {
+		t.Fatalf("processInstanceId = %q", health.ProcessInstanceID)
 	}
 }
 
@@ -202,5 +174,36 @@ func TestBackendClientCheckReadinessRequiresContext(t *testing.T) {
 	//nolint:staticcheck // This test verifies the client's defensive nil-context handling.
 	if _, err = backend.CheckReadiness(nil); err == nil {
 		t.Fatal("CheckReadiness() error = nil")
+	}
+}
+
+func TestBackendClientRelaysTrainingDataDescriptorOnDomainPath(t *testing.T) {
+	t.Parallel()
+	const descriptorID = "22222222-2222-4222-8222-222222222222"
+	requests := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests <- request.Method + " " + request.URL.Path
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	backendClient, err := NewBackendClient(server.URL, time.Second, server.Client())
+	if err != nil {
+		t.Fatalf("NewBackendClient() error = %v", err)
+	}
+	if _, err = backendClient.PutTrainingDataDescriptor(
+		t.Context(), descriptorID, []byte(`{"correlationId":"`+descriptorID+`"}`),
+	); err != nil {
+		t.Fatalf("PutTrainingDataDescriptor() error = %v", err)
+	}
+	if _, err = backendClient.DeleteTrainingDataDescriptor(t.Context(), descriptorID); err != nil {
+		t.Fatalf("DeleteTrainingDataDescriptor() error = %v", err)
+	}
+
+	wantPath := "/internal/v1/anlf/training-data-descriptors/" + descriptorID
+	for _, want := range []string{"PUT " + wantPath, "DELETE " + wantPath} {
+		if got := <-requests; got != want {
+			t.Fatalf("request = %q, want %q", got, want)
+		}
 	}
 }

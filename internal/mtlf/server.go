@@ -51,6 +51,7 @@ type Server struct {
 	router                *gin.Engine
 	processor             any
 	publicCallbackBaseURI string
+	internalAPIBaseURI    string
 }
 
 func NewServer(cfg *factory.Config, processor any) (*Server, error) {
@@ -60,9 +61,11 @@ func NewServer(cfg *factory.Config, processor any) (*Server, error) {
 		router:                logger_util.NewGinWithLogrus(logger.GinLog),
 		processor:             processor,
 		publicCallbackBaseURI: strings.TrimRight(cfg.GetSbiUri(), "/"),
+		internalAPIBaseURI:    strings.TrimRight(cfg.GetMtlfServerURI(), "/"),
 	}
 	s.router.Use(gin.Recovery())
-	routes := s.adrfRetrievalRoutes()
+	routes := s.nwdafContextRoutes()
+	routes = append(routes, s.adrfRetrievalRoutes()...)
 	routes = append(routes, s.adrfMLModelRoutes()...)
 	routes = append(routes, s.nfDiscoveryRoutes()...)
 	routes = append(routes, s.mtlfMLModelRoutes()...)

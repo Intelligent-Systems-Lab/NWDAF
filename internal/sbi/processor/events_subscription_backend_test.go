@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/free5gc/nwdaf/internal/backend"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/nwdaf/pkg/factory"
 	"github.com/free5gc/openapi/models"
@@ -69,10 +70,18 @@ func (*eventsSubscriptionBackendStub) Usable() bool {
 	return true
 }
 
+func (*eventsSubscriptionBackendStub) Acquire() (*backend.GenerationLease, bool) {
+	return &backend.GenerationLease{}, true
+}
+
 func (*eventsSubscriptionBackendStub) MarkUnavailable(string) {}
 
 func (s *eventsSubscriptionBackendStub) Refresh() {
 	s.refresh++
+}
+
+func (*eventsSubscriptionBackendStub) Snapshot() backend.Snapshot {
+	return backend.Snapshot{State: backend.StateUsable, ProcessInstanceID: "anlf-generation"}
 }
 
 func TestBackendEventsSubscriptionRoutingPreservesExternalURI(t *testing.T) {
@@ -146,7 +155,37 @@ func TestBackendEventsSubscriptionRoutingPreservesExternalURI(t *testing.T) {
 		t.Fatal("route remains after successful delete")
 	}
 	if backend.refresh != 3 {
-		t.Fatalf("sync refresh count = %d, want 3", backend.refresh)
+		t.Fatalf("availability refresh count = %d, want 3", backend.refresh)
+	}
+}
+
+func TestEventsSubscriptionLateDeleteAfterGenerationResetIsIdempotent(t *testing.T) {
+	ctx := setupTestContext()
+	backendStub := &eventsSubscriptionBackendStub{}
+	processor := &Processor{
+		nwdaf:              &subscriptionTestApp{ctx: context.Background()},
+		eventsBackend:      backendStub,
+		eventsAvailability: backendStub,
+	}
+	const subscriptionID = "33333333-3333-4333-8333-333333333333"
+	if !ctx.AddAnalyticsSubscriptionRoute(nwdaf_context.AnalyticsSubscriptionRoute{
+		SubscriptionID:    subscriptionID,
+		ProcessGeneration: "old-generation",
+		AcceptedSubscription: models.NnwdafEventsSubscription{
+			EventSubscriptions: []models.NwdafEventsSubscriptionEventSubscription{{
+				Event: models.NwdafEvent_UE_COMMUNICATION,
+			}},
+		},
+	}) {
+		t.Fatal("could not add analytics route")
+	}
+	processor.ResetAnalyticsGeneration("old-generation", nil)
+
+	if problem := processor.HandleDeleteSubscription(subscriptionID); problem != nil {
+		t.Fatalf("late delete problem = %+v", problem)
+	}
+	if backendStub.deleted != "" {
+		t.Fatalf("late delete reached new backend generation: %s", backendStub.deleted)
 	}
 }
 

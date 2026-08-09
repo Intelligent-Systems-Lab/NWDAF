@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"encoding/json"
 	"time"
 
 	adrfcompat "github.com/free5gc/nwdaf/internal/compat/adrf"
@@ -23,54 +22,15 @@ const (
 	SelectionSourceConfigured       = "CONFIGURED"
 )
 
-type DataSource string
-
-const (
-	DataSourceADRF        DataSource = "adrf"
-	DataSourceMongoDB     DataSource = "mongodb"
-	DataSourceUnavailable DataSource = "unavailable"
-)
-
 type HealthResponse struct {
 	Status            string `json:"status"`
 	ProcessInstanceID string `json:"processInstanceId"`
 }
 
-type NwdafIdentity struct {
-	NFInstanceID            string `json:"nfInstanceId"`
-	APIBaseURI              string `json:"apiBaseUri"`
-	InternalCallbackBaseURI string `json:"internalCallbackBaseUri"`
-}
-
-type EventsSubscriptionSnapshot struct {
-	SubscriptionID          string                          `json:"subscriptionId"`
-	Subscription            models.NnwdafEventsSubscription `json:"subscription"`
-	ExternalNotificationURI string                          `json:"externalNotificationUri"`
-}
-
-type SmfResourceSnapshot struct {
-	CorrelationID        string          `json:"correlationId"`
-	ResourceLocation     string          `json:"resourceLocation"`
-	TargetAPIBaseURI     string          `json:"targetApiRoot"`
-	NwdafSubscriptionIDs []string        `json:"nwdafSubscriptionIds"`
-	PendingCleanup       bool            `json:"pendingCleanup"`
-	Subscription         json.RawMessage `json:"subscription,omitempty"`
-}
-
-type SmfResourceAssociation struct {
-	TargetAPIBaseURI     string   `json:"targetApiRoot"`
-	PeerSubscriptionID   string   `json:"peerSubscriptionId"`
-	NwdafSubscriptionIDs []string `json:"nwdafSubscriptionIds"`
-}
-
-type SmfResourceAssociationUpdate struct {
-	ProcessInstanceID string                   `json:"processInstanceId"`
-	SmfResources      []SmfResourceAssociation `json:"smfResources"`
-}
-
-type TrainingDataDescriptorUpdate struct {
-	ProcessInstanceID       string                   `json:"processInstanceId"`
-	TrainingDataDescriptors []TrainingDataDescriptor `json:"trainingDataDescriptors"`
+type NwdafContextResponse struct {
+	NFInstanceID    string `json:"nfInstanceId"`
+	APIRoot         string `json:"apiRoot"`
+	InternalAPIRoot string `json:"internalApiRoot"`
 }
 
 type StoredDataSpec struct {
@@ -88,51 +48,6 @@ type TrainingDataDescriptor struct {
 	RetainUntil         time.Time                  `json:"retainUntil"`
 }
 
-type MLModelProvisionSubscriptionSnapshot struct {
-	SubscriptionID    string          `json:"subscriptionId"`
-	Representation    json.RawMessage `json:"representation"`
-	Initiator         string          `json:"initiator"`
-	Destination       string          `json:"destination"`
-	Direction         string          `json:"direction,omitempty"`
-	SelectedTarget    *SelectedTarget `json:"selectedTarget,omitempty"`
-	PeerLocation      string          `json:"peerLocation,omitempty"`
-	LifecycleState    string          `json:"lifecycleState,omitempty"`
-	ProcessGeneration string          `json:"processGeneration,omitempty"`
-}
-
-type MLModelMonitorRegistrationSnapshot struct {
-	RegistrationID    string          `json:"registrationId"`
-	Representation    json.RawMessage `json:"representation"`
-	Initiator         string          `json:"initiator"`
-	Direction         string          `json:"direction,omitempty"`
-	SelectedTarget    *SelectedTarget `json:"selectedTarget,omitempty"`
-	PeerLocation      string          `json:"peerLocation,omitempty"`
-	LifecycleState    string          `json:"lifecycleState,omitempty"`
-	ProcessGeneration string          `json:"processGeneration,omitempty"`
-}
-
-type MLModelMonitorSubscriptionSnapshot struct {
-	SubscriptionID    string          `json:"subscriptionId"`
-	Representation    json.RawMessage `json:"representation"`
-	Destination       string          `json:"destination"`
-	OwnerRegistration string          `json:"ownerRegistrationId,omitempty"`
-	Direction         string          `json:"direction,omitempty"`
-	SelectedTarget    *SelectedTarget `json:"selectedTarget,omitempty"`
-	PeerLocation      string          `json:"peerLocation,omitempty"`
-	LifecycleState    string          `json:"lifecycleState,omitempty"`
-	ProcessGeneration string          `json:"processGeneration,omitempty"`
-}
-
-type MLModelTrainingSubscriptionSnapshot struct {
-	SubscriptionID    string          `json:"subscriptionId"`
-	Representation    json.RawMessage `json:"representation"`
-	Direction         string          `json:"direction,omitempty"`
-	SelectedTarget    *SelectedTarget `json:"selectedTarget,omitempty"`
-	PeerLocation      string          `json:"peerLocation,omitempty"`
-	LifecycleState    string          `json:"lifecycleState,omitempty"`
-	ProcessGeneration string          `json:"processGeneration,omitempty"`
-}
-
 // SelectedTarget is private routing metadata selected from NRF discovery or
 // explicit experiment configuration. It is never serialized into a 3GPP
 // request body.
@@ -142,22 +57,4 @@ type SelectedTarget struct {
 	ServiceName         string `json:"serviceName"`
 	APIRoot             string `json:"apiRoot"`
 	SelectionSource     string `json:"selectionSource"`
-}
-
-type SyncRequest struct {
-	ContainingNwdaf               NwdafIdentity                          `json:"containingNwdaf"`
-	EventsSubscriptions           []EventsSubscriptionSnapshot           `json:"eventsSubscriptions"`
-	SmfResources                  []SmfResourceSnapshot                  `json:"smfResources"`
-	TrainingDataDescriptors       []TrainingDataDescriptor               `json:"trainingDataDescriptors"`
-	TrainingDataSource            DataSource                             `json:"trainingDataSource,omitempty"`
-	MLModelProvisionSubscriptions []MLModelProvisionSubscriptionSnapshot `json:"mlModelProvisionSubscriptions"`
-	MLModelMonitorRegistrations   []MLModelMonitorRegistrationSnapshot   `json:"mlModelMonitorRegistrations"`
-	MLModelMonitorSubscriptions   []MLModelMonitorSubscriptionSnapshot   `json:"mlModelMonitorSubscriptions"`
-	MLModelTrainingSubscriptions  []MLModelTrainingSubscriptionSnapshot  `json:"mlModelTrainingSubscriptions,omitempty"`
-}
-
-type SyncResponse struct {
-	ProcessInstanceID  string     `json:"processInstanceId"`
-	SnapshotAccepted   bool       `json:"snapshotAccepted"`
-	TrainingDataSource DataSource `json:"trainingDataSource,omitempty"`
 }
