@@ -101,6 +101,9 @@ type MLModelPeerRoute struct {
 	BackendLocation   string
 	BackendResourceID string
 	LifecycleState    MLModelRouteLifecycle
+	// OperationRevision fences an in-flight route mutation from a later
+	// replacement, backend reset, or cleanup claim in the same Go process.
+	OperationRevision uint64
 	ProcessGeneration string
 	RelatedBackend    backend.Kind
 	RelatedGeneration string

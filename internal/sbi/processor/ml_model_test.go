@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/free5gc/nwdaf/internal/backend"
 	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
@@ -50,16 +51,20 @@ func (s *mlModelAvailabilityStub) Snapshot() backend.Snapshot {
 }
 
 type mtlfMLModelBackendStub struct {
-	provisionBody        []byte
-	registrationBody     []byte
-	response             *backend.StandardResponse
-	err                  error
-	deletedProvision     string
-	deletedRegistration  string
-	trainingBody         []byte
-	trainingNotification []byte
-	trainingResponse     *backend.StandardResponse
-	trainingError        error
+	provisionBody           []byte
+	registrationBody        []byte
+	response                *backend.StandardResponse
+	err                     error
+	deletedProvision        string
+	deletedRegistration     string
+	trainingBody            []byte
+	trainingNotification    []byte
+	trainingResponse        *backend.StandardResponse
+	trainingError           error
+	trainingReplaceResponse *backend.StandardResponse
+	trainingReplaceError    error
+	trainingDeleteResponse  *backend.StandardResponse
+	trainingDeleteError     error
 }
 
 func (s *mtlfMLModelBackendStub) CreateMLModelProvisionSubscription(
@@ -161,6 +166,9 @@ func (s *mtlfMLModelBackendStub) ReplaceMLModelTrainingSubscription(
 	_ context.Context, _ string, body []byte,
 ) (*backend.StandardResponse, error) {
 	s.trainingBody = append([]byte(nil), body...)
+	if s.trainingReplaceResponse != nil || s.trainingReplaceError != nil {
+		return s.trainingReplaceResponse, s.trainingReplaceError
+	}
 	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
 }
 
@@ -177,6 +185,9 @@ func (s *mtlfMLModelBackendStub) PatchMLModelTrainingSubscription(
 func (s *mtlfMLModelBackendStub) DeleteMLModelTrainingSubscription(
 	_ context.Context, _ string,
 ) (*backend.StandardResponse, error) {
+	if s.trainingDeleteResponse != nil || s.trainingDeleteError != nil {
+		return s.trainingDeleteResponse, s.trainingDeleteError
+	}
 	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
 }
 
@@ -217,6 +228,43 @@ type mlModelPeerConsumerStub struct {
 	deleteProvisionErrors    []error
 	deleteRegistrationErrors []error
 	deleteMonitorErrors      []error
+	trainingReplaceResponse  *backend.StandardResponse
+	trainingReplaceError     error
+}
+
+type crossNodeMLModelPeerConsumer struct {
+	*mlModelPeerConsumerStub
+	deleteProvision func(context.Context, string) (*backend.StandardResponse, error)
+	deleteMonitor   func(context.Context, string) (*backend.StandardResponse, error)
+}
+
+func (s *crossNodeMLModelPeerConsumer) DeletePeerMLModelProvision(
+	ctx context.Context,
+	location string,
+) (*backend.StandardResponse, error) {
+	if s.deleteProvision != nil {
+		return s.deleteProvision(ctx, location)
+	}
+	return s.mlModelPeerConsumerStub.DeletePeerMLModelProvision(ctx, location)
+}
+
+func (s *crossNodeMLModelPeerConsumer) DeletePeerMLModelMonitorSubscription(
+	ctx context.Context,
+	location string,
+) (*backend.StandardResponse, error) {
+	if s.deleteMonitor != nil {
+		return s.deleteMonitor(ctx, location)
+	}
+	return s.mlModelPeerConsumerStub.DeletePeerMLModelMonitorSubscription(ctx, location)
+}
+
+type isolatedMLModelTestApp struct {
+	*subscriptionTestApp
+	nwdafContext *nwdaf_context.NWDAFContext
+}
+
+func (a *isolatedMLModelTestApp) Context() *nwdaf_context.NWDAFContext {
+	return a.nwdafContext
 }
 
 func (s *mlModelPeerConsumerStub) CreatePeerMLModelTraining(
@@ -234,6 +282,9 @@ func (s *mlModelPeerConsumerStub) CreatePeerMLModelTraining(
 func (s *mlModelPeerConsumerStub) ReplacePeerMLModelTraining(
 	_ context.Context, _ string, _ []byte,
 ) (*backend.StandardResponse, error) {
+	if s.trainingReplaceResponse != nil || s.trainingReplaceError != nil {
+		return s.trainingReplaceResponse, s.trainingReplaceError
+	}
 	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
 }
 
@@ -1207,6 +1258,7 @@ func TestFailedPeerCreateRetainsPendingCleanupUntilDeleteSucceeds(t *testing.T) 
 	routes := ctx.GetAllMLModelProvisionSubscriptionRoutes()
 	if len(routes) != 1 ||
 		routes[0].PeerRoute.LifecycleState != nwdaf_context.MLModelRoutePendingCleanup ||
+		routes[0].PeerRoute.OperationRevision != 2 ||
 		routes[0].PeerRoute.PeerLocation == "" ||
 		len(routes[0].AcceptedRepresentation) != 0 {
 		t.Fatalf("pending cleanup route=%+v", routes)
@@ -1277,6 +1329,48 @@ func TestPublicMonitorCallbackRejectsInboundAndPendingRoutes(t *testing.T) {
 		if response != nil || problem == nil || problem.Status != test.status {
 			t.Fatalf("%s response=%+v problem=%+v", test.id, response, problem)
 		}
+	}
+}
+
+func TestMonitorCallbackUsesCommittedRepresentationDuringReplace(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+	_ = anlfBackend
+	_ = mtlfAvailability
+	_ = anlfAvailability
+	representation := []byte(`{
+		"modelIds":[7],
+		"notificationUri":"http://consumer.example/monitor",
+		"notifCorrId":"corr-a",
+		"mLEvent":"UE_COMMUNICATION"
+	}`)
+	if !ctx.AddMLModelMonitorSubscriptionRoute(
+		nwdaf_context.MLModelMonitorSubscriptionRoute{
+			SubscriptionID: "monitor",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				LifecycleState:    nwdaf_context.MLModelRouteReplacing,
+				OperationRevision: 7,
+			},
+			AcceptedRepresentation:    representation,
+			Destination:               nwdaf_context.MLModelRoutePartyMTLFBackend,
+			NotificationCorrelationID: "corr-a",
+		},
+	) {
+		t.Fatal("could not seed replacing monitor route")
+	}
+	report := []byte(`{
+		"notifCorrId":"corr-a",
+		"modelAccuInfos":[{"modelId":7,"deviation":0.2}]
+	}`)
+	response, problem := processor.HandleMLModelMonitorNotification(
+		t.Context(),
+		"",
+		report,
+	)
+	if problem != nil || response == nil || response.StatusCode != http.StatusNoContent {
+		t.Fatalf("callback response=%+v problem=%+v", response, problem)
+	}
+	if !bytes.Equal(mtlfBackend.registrationBody, report) {
+		t.Fatalf("delivered report=%s", mtlfBackend.registrationBody)
 	}
 }
 
@@ -1433,5 +1527,698 @@ func TestRemoteMonitorSubscriptionKeepsOwnerAndIsolatesReportRoute(t *testing.T)
 			callbackProblem,
 			mtlfBackend.registrationBody,
 		)
+	}
+}
+
+func TestOppositeCrossNodeMLModelDeletesDoNotHoldRouteLockAcrossPeerCall(t *testing.T) {
+	nwdaf_context.Init()
+	ctxA := nwdaf_context.GetSelf()
+	nwdaf_context.Init()
+	ctxC := nwdaf_context.GetSelf()
+
+	newProcessor := func(ctx *nwdaf_context.NWDAFContext) *Processor {
+		app := &isolatedMLModelTestApp{
+			subscriptionTestApp: &subscriptionTestApp{ctx: context.Background()},
+			nwdafContext:        ctx,
+		}
+		processor := &Processor{nwdaf: app}
+		processor.SetMLModelBackends(
+			&mtlfMLModelBackendStub{},
+			&anlfMLModelBackendStub{},
+			&mlModelAvailabilityStub{usable: true, generation: "mtlf-generation"},
+			&mlModelAvailabilityStub{usable: true, generation: "anlf-generation"},
+		)
+		return processor
+	}
+
+	processorA := newProcessor(ctxA)
+	processorC := newProcessor(ctxC)
+	target := &backend.SelectedTarget{NFInstanceID: "peer"}
+	if !ctxA.AddMLModelProvisionSubscriptionRoute(
+		nwdaf_context.MLModelProvisionSubscriptionRoute{
+			SubscriptionID: "a-outbound-provision",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				Direction:      nwdaf_context.MLModelRouteDirectionOutbound,
+				SelectedTarget: target,
+				PeerLocation:   "c-inbound-provision",
+				LifecycleState: nwdaf_context.MLModelRouteActive,
+			},
+		},
+	) {
+		t.Fatal("could not seed A outbound provision route")
+	}
+	if !ctxA.AddMLModelMonitorSubscriptionRoute(
+		nwdaf_context.MLModelMonitorSubscriptionRoute{
+			SubscriptionID: "a-inbound-monitor",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				Direction:         nwdaf_context.MLModelRouteDirectionInbound,
+				BackendResourceID: "a-monitor-backend",
+				LifecycleState:    nwdaf_context.MLModelRouteActive,
+			},
+		},
+	) {
+		t.Fatal("could not seed A inbound monitor route")
+	}
+	if !ctxC.AddMLModelMonitorSubscriptionRoute(
+		nwdaf_context.MLModelMonitorSubscriptionRoute{
+			SubscriptionID: "c-outbound-monitor",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				Direction:      nwdaf_context.MLModelRouteDirectionOutbound,
+				SelectedTarget: target,
+				PeerLocation:   "a-inbound-monitor",
+				LifecycleState: nwdaf_context.MLModelRouteActive,
+			},
+		},
+	) {
+		t.Fatal("could not seed C outbound monitor route")
+	}
+	if !ctxC.AddMLModelProvisionSubscriptionRoute(
+		nwdaf_context.MLModelProvisionSubscriptionRoute{
+			SubscriptionID: "c-inbound-provision",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				Direction:         nwdaf_context.MLModelRouteDirectionInbound,
+				BackendResourceID: "c-provision-backend",
+				LifecycleState:    nwdaf_context.MLModelRouteActive,
+			},
+		},
+	) {
+		t.Fatal("could not seed C inbound provision route")
+	}
+
+	arrived := make(chan struct{}, 2)
+	release := make(chan struct{})
+	processorA.SetMLModelPeerConsumer(&crossNodeMLModelPeerConsumer{
+		mlModelPeerConsumerStub: &mlModelPeerConsumerStub{},
+		deleteProvision: func(
+			ctx context.Context,
+			_ string,
+		) (*backend.StandardResponse, error) {
+			arrived <- struct{}{}
+			<-release
+			response, problem := processorC.HandleDeleteMLModelProvision(
+				ctx,
+				"c-inbound-provision",
+			)
+			if problem != nil {
+				return nil, errors.New(problem.Detail)
+			}
+			return response, nil
+		},
+	})
+	processorC.SetMLModelPeerConsumer(&crossNodeMLModelPeerConsumer{
+		mlModelPeerConsumerStub: &mlModelPeerConsumerStub{},
+		deleteMonitor: func(
+			ctx context.Context,
+			_ string,
+		) (*backend.StandardResponse, error) {
+			arrived <- struct{}{}
+			<-release
+			response, problem := processorA.HandleDeleteMLModelMonitorSubscription(
+				ctx,
+				"a-inbound-monitor",
+			)
+			if problem != nil {
+				return nil, errors.New(problem.Detail)
+			}
+			return response, nil
+		},
+	})
+
+	type result struct {
+		response *backend.StandardResponse
+		problem  *models.ProblemDetails
+	}
+	results := make(chan result, 2)
+	go func() {
+		response, problem := processorA.HandleDeleteMLModelProvision(
+			t.Context(),
+			"a-outbound-provision",
+		)
+		results <- result{response: response, problem: problem}
+	}()
+	go func() {
+		response, problem := processorC.HandleDeleteMLModelMonitorSubscription(
+			t.Context(),
+			"c-outbound-monitor",
+		)
+		results <- result{response: response, problem: problem}
+	}()
+
+	for range 2 {
+		select {
+		case <-arrived:
+		case <-time.After(time.Second):
+			t.Fatal("opposite peer DELETE did not reach the peer boundary")
+		}
+	}
+	close(release)
+	for range 2 {
+		select {
+		case got := <-results:
+			if got.problem != nil || got.response == nil ||
+				got.response.StatusCode != http.StatusNoContent {
+				t.Fatalf("delete response=%+v problem=%+v", got.response, got.problem)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("opposite peer DELETE requests deadlocked")
+		}
+	}
+	if len(ctxA.GetAllMLModelProvisionSubscriptionRoutes()) != 0 ||
+		len(ctxA.GetAllMLModelMonitorSubscriptionRoutes()) != 0 ||
+		len(ctxC.GetAllMLModelProvisionSubscriptionRoutes()) != 0 ||
+		len(ctxC.GetAllMLModelMonitorSubscriptionRoutes()) != 0 {
+		t.Fatal("cross-node delete left a route behind")
+	}
+}
+
+func TestConcurrentDeleteDoesNotDuplicatePeerRequest(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+	_ = mtlfBackend
+	_ = anlfBackend
+	_ = mtlfAvailability
+	_ = anlfAvailability
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	peer := &crossNodeMLModelPeerConsumer{
+		mlModelPeerConsumerStub: &mlModelPeerConsumerStub{},
+		deleteProvision: func(
+			_ context.Context,
+			_ string,
+		) (*backend.StandardResponse, error) {
+			started <- struct{}{}
+			<-release
+			return noContentMLModelResponse(), nil
+		},
+	}
+	processor.SetMLModelPeerConsumer(peer)
+	if !ctx.AddMLModelProvisionSubscriptionRoute(
+		nwdaf_context.MLModelProvisionSubscriptionRoute{
+			SubscriptionID: "provision",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				Direction:      nwdaf_context.MLModelRouteDirectionOutbound,
+				SelectedTarget: &backend.SelectedTarget{NFInstanceID: "peer"},
+				PeerLocation:   "http://peer.example/provision",
+				LifecycleState: nwdaf_context.MLModelRouteActive,
+			},
+		},
+	) {
+		t.Fatal("could not seed provision route")
+	}
+
+	firstDone := make(chan *models.ProblemDetails, 1)
+	go func() {
+		_, problem := processor.HandleDeleteMLModelProvision(t.Context(), "provision")
+		firstDone <- problem
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first peer DELETE did not start")
+	}
+	response, problem := processor.HandleDeleteMLModelProvision(t.Context(), "provision")
+	if response != nil || problem == nil || problem.Status != http.StatusServiceUnavailable {
+		t.Fatalf("concurrent delete response=%+v problem=%+v", response, problem)
+	}
+	close(release)
+	select {
+	case problem = <-firstDone:
+		if problem != nil {
+			t.Fatalf("first delete problem=%+v", problem)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first peer DELETE did not complete")
+	}
+}
+
+func TestDeleteTreatsMissingDestinationResourceAsCompleted(t *testing.T) {
+	missing := func() error {
+		return &backend.StandardError{
+			StatusCode: http.StatusNotFound,
+			ProblemDetails: models.ProblemDetails{
+				Status: http.StatusNotFound,
+				Cause:  "RESOURCE_NOT_FOUND",
+			},
+		}
+	}
+	assertCompleted := func(
+		t *testing.T,
+		response *backend.StandardResponse,
+		problem *models.ProblemDetails,
+	) {
+		t.Helper()
+		if problem != nil || response == nil || response.StatusCode != http.StatusNoContent {
+			t.Fatalf("delete response=%+v problem=%+v", response, problem)
+		}
+	}
+
+	t.Run("provision", func(t *testing.T) {
+		processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+		_ = anlfBackend
+		_ = mtlfAvailability
+		_ = anlfAvailability
+		mtlfBackend.err = missing()
+		ctx.AddMLModelProvisionSubscriptionRoute(nwdaf_context.MLModelProvisionSubscriptionRoute{
+			SubscriptionID: "provision",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				BackendResourceID: "backend-provision",
+				LifecycleState:    nwdaf_context.MLModelRouteActive,
+			},
+		})
+		response, problem := processor.HandleDeleteMLModelProvision(t.Context(), "provision")
+		assertCompleted(t, response, problem)
+	})
+
+	t.Run("registration", func(t *testing.T) {
+		processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+		_ = anlfBackend
+		_ = mtlfAvailability
+		_ = anlfAvailability
+		mtlfBackend.err = missing()
+		ctx.AddMLModelMonitorRegistrationRoute(nwdaf_context.MLModelMonitorRegistrationRoute{
+			RegistrationID: "registration",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				BackendResourceID: "backend-registration",
+				LifecycleState:    nwdaf_context.MLModelRouteActive,
+			},
+		})
+		response, problem := processor.HandleDeleteMLModelMonitorRegistration(
+			t.Context(),
+			"registration",
+		)
+		assertCompleted(t, response, problem)
+	})
+
+	t.Run("monitor", func(t *testing.T) {
+		processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+		_ = mtlfBackend
+		_ = mtlfAvailability
+		_ = anlfAvailability
+		anlfBackend.err = missing()
+		ctx.AddMLModelMonitorSubscriptionRoute(nwdaf_context.MLModelMonitorSubscriptionRoute{
+			SubscriptionID: "monitor",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				BackendResourceID: "backend-monitor",
+				LifecycleState:    nwdaf_context.MLModelRouteActive,
+			},
+		})
+		response, problem := processor.HandleDeleteMLModelMonitorSubscription(t.Context(), "monitor")
+		assertCompleted(t, response, problem)
+	})
+
+	t.Run("training", func(t *testing.T) {
+		processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+		_ = anlfBackend
+		_ = mtlfAvailability
+		_ = anlfAvailability
+		mtlfBackend.trainingDeleteError = missing()
+		ctx.AddMLModelTrainingSubscriptionRoute(nwdaf_context.MLModelTrainingSubscriptionRoute{
+			SubscriptionID: "training",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				BackendResourceID: "backend-training",
+				LifecycleState:    nwdaf_context.MLModelRouteActive,
+			},
+			NotificationCorrelationID: "training-correlation",
+		})
+		response, problem := processor.HandleDeleteMLModelTraining(t.Context(), "training")
+		assertCompleted(t, response, problem)
+	})
+}
+
+func TestDeleteCompletionAfterBackendResetDoesNotRecreateRouteOrConsumeTombstone(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+	_ = mtlfBackend
+	_ = anlfBackend
+	_ = mtlfAvailability
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	peer := &crossNodeMLModelPeerConsumer{
+		mlModelPeerConsumerStub: &mlModelPeerConsumerStub{},
+		deleteProvision: func(
+			_ context.Context,
+			_ string,
+		) (*backend.StandardResponse, error) {
+			started <- struct{}{}
+			<-release
+			return noContentMLModelResponse(), nil
+		},
+	}
+	processor.SetMLModelPeerConsumer(peer)
+	if !ctx.AddMLModelProvisionSubscriptionRoute(
+		nwdaf_context.MLModelProvisionSubscriptionRoute{
+			SubscriptionID: "provision",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				Direction:         nwdaf_context.MLModelRouteDirectionOutbound,
+				SelectedTarget:    &backend.SelectedTarget{NFInstanceID: "peer"},
+				PeerLocation:      "http://peer.example/provision",
+				LifecycleState:    nwdaf_context.MLModelRouteActive,
+				ProcessGeneration: anlfAvailability.generation,
+			},
+		},
+	) {
+		t.Fatal("could not seed provision route")
+	}
+
+	deleteDone := make(chan struct {
+		response *backend.StandardResponse
+		problem  *models.ProblemDetails
+	}, 1)
+	go func() {
+		response, problem := processor.HandleDeleteMLModelProvision(t.Context(), "provision")
+		deleteDone <- struct {
+			response *backend.StandardResponse
+			problem  *models.ProblemDetails
+		}{response: response, problem: problem}
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("peer DELETE did not start")
+	}
+
+	resetDone := make(chan struct{})
+	go func() {
+		processor.ResetMLModelBackendGeneration(
+			t.Context(),
+			backend.KindAnLF,
+			anlfAvailability.generation,
+		)
+		close(resetDone)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("backend reset cleanup did not start")
+	}
+	close(release)
+
+	select {
+	case got := <-deleteDone:
+		if got.problem != nil || got.response == nil ||
+			got.response.StatusCode != http.StatusNoContent {
+			t.Fatalf("stale delete response=%+v problem=%+v", got.response, got.problem)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stale delete completion did not finish")
+	}
+	select {
+	case <-resetDone:
+	case <-time.After(time.Second):
+		t.Fatal("backend reset did not finish")
+	}
+	if _, found := ctx.GetMLModelProvisionSubscriptionRoute("provision"); found {
+		t.Fatal("stale completion recreated a reset route")
+	}
+	if _, found := ctx.GetMLModelDeletionRecord(
+		nwdaf_context.MLModelResourceProvisionSubscription,
+		"provision",
+	); !found {
+		t.Fatal("stale completion consumed the late-delete tombstone")
+	}
+	response, problem := processor.HandleDeleteMLModelProvision(t.Context(), "provision")
+	if problem != nil || response == nil || response.StatusCode != http.StatusNoContent {
+		t.Fatalf("late delete response=%+v problem=%+v", response, problem)
+	}
+	response, problem = processor.HandleDeleteMLModelProvision(t.Context(), "provision")
+	if response != nil || problem == nil || problem.Status != http.StatusNotFound {
+		t.Fatalf("second late delete response=%+v problem=%+v", response, problem)
+	}
+}
+
+func TestPendingCleanupAllowsOnlyOneInFlightPeerDelete(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+	_ = mtlfBackend
+	_ = anlfBackend
+	_ = mtlfAvailability
+	_ = anlfAvailability
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	processor.SetMLModelPeerConsumer(&crossNodeMLModelPeerConsumer{
+		mlModelPeerConsumerStub: &mlModelPeerConsumerStub{},
+		deleteProvision: func(
+			_ context.Context,
+			_ string,
+		) (*backend.StandardResponse, error) {
+			started <- struct{}{}
+			<-release
+			return noContentMLModelResponse(), nil
+		},
+	})
+	now := time.Now()
+	if !ctx.AddMLModelProvisionSubscriptionRoute(
+		nwdaf_context.MLModelProvisionSubscriptionRoute{
+			SubscriptionID: "pending",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				SelectedTarget:  &backend.SelectedTarget{NFInstanceID: "peer"},
+				PeerLocation:    "http://peer.example/provision",
+				LifecycleState:  nwdaf_context.MLModelRoutePendingCleanup,
+				CleanupAttempts: 1,
+				NextCleanupAt:   now,
+			},
+		},
+	) {
+		t.Fatal("could not seed pending cleanup route")
+	}
+	firstDone := make(chan struct{})
+	go func() {
+		processor.ReconcilePendingMLModelPeerCleanup(t.Context(), now)
+		close(firstDone)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first cleanup did not start")
+	}
+	processor.ReconcilePendingMLModelPeerCleanup(t.Context(), now)
+	select {
+	case <-started:
+		t.Fatal("a second cleanup request started while the first was in flight")
+	default:
+	}
+	close(release)
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first cleanup did not finish")
+	}
+	if _, found := ctx.GetMLModelProvisionSubscriptionRoute("pending"); found {
+		t.Fatal("completed cleanup route remains")
+	}
+}
+
+func TestStaleDeleteCompletionCannotRemoveNewerRouteWithSameID(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+	_ = mtlfBackend
+	_ = anlfBackend
+	_ = mtlfAvailability
+	_ = anlfAvailability
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	processor.SetMLModelPeerConsumer(&crossNodeMLModelPeerConsumer{
+		mlModelPeerConsumerStub: &mlModelPeerConsumerStub{},
+		deleteProvision: func(
+			_ context.Context,
+			_ string,
+		) (*backend.StandardResponse, error) {
+			started <- struct{}{}
+			<-release
+			return noContentMLModelResponse(), nil
+		},
+	})
+	if !ctx.AddMLModelProvisionSubscriptionRoute(
+		nwdaf_context.MLModelProvisionSubscriptionRoute{
+			SubscriptionID: "provision",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				SelectedTarget: &backend.SelectedTarget{NFInstanceID: "old-peer"},
+				PeerLocation:   "http://old-peer.example/provision",
+				LifecycleState: nwdaf_context.MLModelRouteActive,
+			},
+		},
+	) {
+		t.Fatal("could not seed old provision route")
+	}
+	result := make(chan struct {
+		response *backend.StandardResponse
+		problem  *models.ProblemDetails
+	}, 1)
+	go func() {
+		response, problem := processor.HandleDeleteMLModelProvision(t.Context(), "provision")
+		result <- struct {
+			response *backend.StandardResponse
+			problem  *models.ProblemDetails
+		}{response: response, problem: problem}
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("old peer DELETE did not start")
+	}
+
+	processor.mlModelMu.Lock()
+	ctx.DeleteMLModelProvisionSubscriptionRoute("provision")
+	ctx.AddMLModelProvisionSubscriptionRoute(nwdaf_context.MLModelProvisionSubscriptionRoute{
+		SubscriptionID: "provision",
+		PeerRoute: nwdaf_context.MLModelPeerRoute{
+			SelectedTarget:    &backend.SelectedTarget{NFInstanceID: "new-peer"},
+			PeerLocation:      "http://new-peer.example/provision",
+			LifecycleState:    nwdaf_context.MLModelRouteActive,
+			OperationRevision: processor.nextMLModelOperationRevisionLocked(),
+		},
+	})
+	processor.mlModelMu.Unlock()
+	close(release)
+
+	select {
+	case got := <-result:
+		if got.response != nil || got.problem == nil ||
+			got.problem.Status != http.StatusServiceUnavailable {
+			t.Fatalf("stale completion response=%+v problem=%+v", got.response, got.problem)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("old peer DELETE did not complete")
+	}
+	newRoute, found := ctx.GetMLModelProvisionSubscriptionRoute("provision")
+	if !found || newRoute.PeerRoute.SelectedTarget == nil ||
+		newRoute.PeerRoute.SelectedTarget.NFInstanceID != "new-peer" ||
+		newRoute.PeerRoute.LifecycleState != nwdaf_context.MLModelRouteActive {
+		t.Fatalf("newer route was changed by stale completion: %+v found=%v", newRoute, found)
+	}
+}
+
+func TestTransientDeleteFailureRestoresActiveRoute(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+	_ = mtlfBackend
+	_ = anlfBackend
+	_ = mtlfAvailability
+	_ = anlfAvailability
+	processor.SetMLModelPeerConsumer(&crossNodeMLModelPeerConsumer{
+		mlModelPeerConsumerStub: &mlModelPeerConsumerStub{},
+		deleteProvision: func(
+			_ context.Context,
+			_ string,
+		) (*backend.StandardResponse, error) {
+			return nil, &backend.TransportError{
+				Operation: "delete peer provision",
+				Cause:     errors.New("peer unavailable"),
+			}
+		},
+	})
+	if !ctx.AddMLModelProvisionSubscriptionRoute(
+		nwdaf_context.MLModelProvisionSubscriptionRoute{
+			SubscriptionID: "provision",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				SelectedTarget: &backend.SelectedTarget{NFInstanceID: "peer"},
+				PeerLocation:   "http://peer.example/provision",
+				LifecycleState: nwdaf_context.MLModelRouteActive,
+			},
+		},
+	) {
+		t.Fatal("could not seed provision route")
+	}
+	response, problem := processor.HandleDeleteMLModelProvision(t.Context(), "provision")
+	if response != nil || problem == nil || problem.Status != http.StatusServiceUnavailable {
+		t.Fatalf("delete response=%+v problem=%+v", response, problem)
+	}
+	route, found := ctx.GetMLModelProvisionSubscriptionRoute("provision")
+	if !found || route.PeerRoute.LifecycleState != nwdaf_context.MLModelRouteActive ||
+		route.PeerRoute.OperationRevision == 0 {
+		t.Fatalf("route was not restored after transient failure: %+v found=%v", route, found)
+	}
+}
+
+func TestTrainingReplacePeerNotFoundRestoresCommittedRoute(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+	_ = anlfBackend
+	_ = mtlfAvailability
+	_ = anlfAvailability
+	body := []byte(`{
+		"mLEventSubscs":[{
+			"mLEvent":"UE_COMMUNICATION",
+			"mLEventFilter":{},
+			"modelInterInfo":"bundle-v1"
+		}],
+		"notifUri":"http://server.example/training-callback",
+		"notifCorreId":"training-correlation",
+		"mlCorreId":"fl-process-001",
+		"mLPreFlag":true,
+		"mLModelTrainInfos":[{
+			"dataAvReq":{"inpEvents":[{"upfEvent":"USER_DATA_USAGE_TRENDS"}]},
+			"timeAvReq":"PT5M"
+		}]
+	}`)
+	if _, problem := processor.HandleCreateMLModelTraining(t.Context(), body); problem != nil {
+		t.Fatalf("create problem=%+v", problem)
+	}
+	routes := ctx.GetAllMLModelTrainingSubscriptionRoutes()
+	if len(routes) != 1 {
+		t.Fatalf("training routes=%+v", routes)
+	}
+	route := routes[0]
+	route.PeerRoute.SelectedTarget = &backend.SelectedTarget{NFInstanceID: "peer"}
+	route.PeerRoute.PeerLocation = "http://peer.example/training"
+	if !ctx.UpdateMLModelTrainingSubscriptionRoute(route) {
+		t.Fatal("could not convert training route to peer route")
+	}
+	peer := &mlModelPeerConsumerStub{}
+	processor.SetMLModelPeerConsumer(peer)
+	// The training stub is unused after the route is converted to a peer route.
+	_ = mtlfBackend
+	peerTrainingError := &backend.StandardError{
+		StatusCode: http.StatusNotFound,
+		ProblemDetails: models.ProblemDetails{
+			Status: http.StatusNotFound,
+			Cause:  "RESOURCE_NOT_FOUND",
+		},
+	}
+	peer.trainingReplaceError = peerTrainingError
+	response, problem := processor.HandleReplaceMLModelTraining(
+		t.Context(),
+		route.SubscriptionID,
+		body,
+	)
+	if response != nil || problem == nil || problem.Status != http.StatusNotFound {
+		t.Fatalf("replace response=%+v problem=%+v", response, problem)
+	}
+	current, found := ctx.GetMLModelTrainingSubscriptionRoute(route.SubscriptionID)
+	if !found || current.PeerRoute.LifecycleState != nwdaf_context.MLModelRouteActive ||
+		!bytes.Equal(current.AcceptedRepresentation, route.AcceptedRepresentation) {
+		t.Fatalf("training route not restored: %+v found=%v", current, found)
+	}
+}
+
+func TestPendingCleanupRetainsRouteOnMalformedSuccess(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+	_ = mtlfBackend
+	_ = anlfBackend
+	_ = mtlfAvailability
+	_ = anlfAvailability
+	processor.SetMLModelPeerConsumer(&crossNodeMLModelPeerConsumer{
+		mlModelPeerConsumerStub: &mlModelPeerConsumerStub{},
+		deleteProvision: func(
+			_ context.Context,
+			_ string,
+		) (*backend.StandardResponse, error) {
+			return nil, nil
+		},
+	})
+	now := time.Now()
+	if !ctx.AddMLModelProvisionSubscriptionRoute(
+		nwdaf_context.MLModelProvisionSubscriptionRoute{
+			SubscriptionID: "pending",
+			PeerRoute: nwdaf_context.MLModelPeerRoute{
+				SelectedTarget:  &backend.SelectedTarget{NFInstanceID: "peer"},
+				PeerLocation:    "http://peer.example/provision",
+				LifecycleState:  nwdaf_context.MLModelRoutePendingCleanup,
+				CleanupAttempts: 1,
+				NextCleanupAt:   now,
+			},
+		},
+	) {
+		t.Fatal("could not seed pending route")
+	}
+	processor.ReconcilePendingMLModelPeerCleanup(t.Context(), now)
+	route, found := ctx.GetMLModelProvisionSubscriptionRoute("pending")
+	if !found || route.PeerRoute.LifecycleState != nwdaf_context.MLModelRoutePendingCleanup ||
+		route.PeerRoute.CleanupAttempts != 2 || !route.PeerRoute.NextCleanupAt.After(now) {
+		t.Fatalf("malformed cleanup result was accepted: %+v found=%v", route, found)
 	}
 }

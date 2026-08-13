@@ -12,6 +12,7 @@ func TestMLModelRouteMirrorsCopyRawRepresentations(t *testing.T) {
 	backendRepresentation := []byte(`{"notifUri":"http://go.internal/callback","future":1}`)
 	route := MLModelProvisionSubscriptionRoute{
 		SubscriptionID:             "sub-1",
+		PeerRoute:                  MLModelPeerRoute{OperationRevision: 42},
 		AcceptedRepresentation:     accepted,
 		BackendRepresentation:      backendRepresentation,
 		Initiator:                  MLModelRoutePartyExternal,
@@ -25,7 +26,8 @@ func TestMLModelRouteMirrorsCopyRawRepresentations(t *testing.T) {
 	accepted[0] = 'x'
 	backendRepresentation[0] = 'x'
 	stored, found := ctx.GetMLModelProvisionSubscriptionRoute("sub-1")
-	if !found || stored.AcceptedRepresentation[0] != '{' || stored.BackendRepresentation[0] != '{' {
+	if !found || stored.PeerRoute.OperationRevision != 42 ||
+		stored.AcceptedRepresentation[0] != '{' || stored.BackendRepresentation[0] != '{' {
 		t.Fatalf("stored route was aliased: %+v", stored)
 	}
 	stored.AcceptedRepresentation[0] = 'y'

@@ -66,9 +66,6 @@ func (p *Processor) handleCreateMLModelProvision(
 	initiator nwdaf_context.MLModelRouteParty,
 	destination nwdaf_context.MLModelRouteParty,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
-	p.mlModelMu.Lock()
-	defer p.mlModelMu.Unlock()
-
 	parsed, err := wire.ParseMLModelProvisionSubscription(body)
 	if err != nil {
 		return nil, malformedMLModelProblem(err)
@@ -86,57 +83,76 @@ func (p *Processor) handleCreateMLModelProvision(
 	if err != nil {
 		return nil, malformedMLModelProblem(err)
 	}
-	response, err := p.mtlfMLModelBackend.CreateMLModelProvisionSubscription(requestContext, backendBody)
-	if err != nil {
-		return nil, p.mlModelBackendProblem(err, p.mtlfAvailability)
-	}
-	if response == nil || response.StatusCode != http.StatusCreated {
-		return nil, mlModelBadGatewayProblem("MTLF backend returned an invalid create response")
-	}
-	backendResourceID, err := backend.ResourceIDFromLocation(response.Location)
-	if err != nil {
-		return nil, mlModelBadGatewayProblem(err.Error())
-	}
 	localRouteID := uuid.New().String()
-	externalBody, err := wire.ReplaceStringField(response.Body, "notifUri", parsed.NotificationURI)
-	if err != nil {
-		return nil, mlModelBadGatewayProblem("MTLF backend returned an invalid provision representation")
-	}
 	peerRoute := nwdaf_context.MLModelPeerRoute{
 		Direction:         nwdaf_context.MLModelRouteDirectionInbound,
-		BackendLocation:   response.Location,
-		BackendResourceID: backendResourceID,
-		LifecycleState:    nwdaf_context.MLModelRouteActive,
+		LifecycleState:    nwdaf_context.MLModelRouteCreating,
 		ProcessGeneration: p.backendGeneration(p.mtlfAvailability),
 	}
 	if initiator == nwdaf_context.MLModelRoutePartyAnLFBackend {
 		peerRoute.RelatedBackend = backend.KindAnLF
 		peerRoute.RelatedGeneration = p.backendGeneration(p.anlfAvailability)
 	}
+	p.mlModelMu.Lock()
+	peerRoute.OperationRevision = p.nextMLModelOperationRevisionLocked()
+	revision := peerRoute.OperationRevision
 	nwdafContext := p.nwdaf.Context()
-	if nwdafContext == nil || !nwdafContext.AddMLModelProvisionSubscriptionRoute(
+	reserved := nwdafContext != nil && nwdafContext.AddMLModelProvisionSubscriptionRoute(
 		nwdaf_context.MLModelProvisionSubscriptionRoute{
 			SubscriptionID:             localRouteID,
 			PeerRoute:                  peerRoute,
-			AcceptedRepresentation:     externalBody,
-			BackendRepresentation:      response.Body,
 			Initiator:                  initiator,
 			Destination:                destination,
 			DestinationNotificationURI: parsed.NotificationURI,
 			NotificationCorrelationID:  parsed.NotificationID,
 		},
+	)
+	p.mlModelMu.Unlock()
+	if !reserved {
+		return nil, mlModelInternalProblem("could not reserve ML Model Provision subscription route")
+	}
+	response, err := p.mtlfMLModelBackend.CreateMLModelProvisionSubscription(requestContext, backendBody)
+	if err != nil {
+		p.removeCreatingProvisionRoute(localRouteID, revision)
+		return nil, p.mlModelBackendProblem(err, p.mtlfAvailability)
+	}
+	if response == nil || response.StatusCode != http.StatusCreated {
+		p.removeCreatingProvisionRoute(localRouteID, revision)
+		return nil, mlModelBadGatewayProblem("MTLF backend returned an invalid create response")
+	}
+	backendResourceID, err := backend.ResourceIDFromLocation(response.Location)
+	if err != nil {
+		p.removeCreatingProvisionRoute(localRouteID, revision)
+		return nil, mlModelBadGatewayProblem(err.Error())
+	}
+	externalBody, err := wire.ReplaceStringField(response.Body, "notifUri", parsed.NotificationURI)
+	if err != nil {
+		p.removeCreatingProvisionRoute(localRouteID, revision)
+		p.compensateLocalProvisionCreate(requestContext, backendResourceID)
+		return nil, mlModelBadGatewayProblem("MTLF backend returned an invalid provision representation")
+	}
+	p.mlModelMu.Lock()
+	current, found := nwdafContext.GetMLModelProvisionSubscriptionRoute(localRouteID)
+	if !found || !mlModelRouteOperationCurrent(
+		current.PeerRoute,
+		nwdaf_context.MLModelRouteCreating,
+		revision,
 	) {
-		if _, cleanupErr := p.mtlfMLModelBackend.DeleteMLModelProvisionSubscription(
-			requestContext, backendResourceID,
-		); cleanupErr != nil {
-			logger.ProcLog.Errorf(
-				"Failed to compensate ML Model Provision route collision: subscriptionId=%s err=%v",
-				backendResourceID,
-				cleanupErr,
-			)
-		}
+		p.mlModelMu.Unlock()
+		p.compensateLocalProvisionCreate(requestContext, backendResourceID)
+		return nil, mlModelUnavailableProblem()
+	}
+	current.PeerRoute.BackendLocation = response.Location
+	current.PeerRoute.BackendResourceID = backendResourceID
+	restoreActiveMLModelRoute(&current.PeerRoute)
+	current.AcceptedRepresentation = externalBody
+	current.BackendRepresentation = response.Body
+	if !nwdafContext.UpdateMLModelProvisionSubscriptionRoute(current) {
+		p.mlModelMu.Unlock()
+		p.compensateLocalProvisionCreate(requestContext, backendResourceID)
 		return nil, mlModelInternalProblem("could not record ML Model Provision subscription route")
 	}
+	p.mlModelMu.Unlock()
 	p.mtlfAvailability.Refresh()
 	return &backend.StandardResponse{
 		StatusCode:  http.StatusCreated,
@@ -144,6 +160,36 @@ func (p *Processor) handleCreateMLModelProvision(
 		ContentType: "application/json",
 		Body:        externalBody,
 	}, nil
+}
+
+func (p *Processor) removeCreatingProvisionRoute(routeID string, revision uint64) {
+	p.mlModelMu.Lock()
+	defer p.mlModelMu.Unlock()
+	nwdafContext := p.nwdaf.Context()
+	if nwdafContext == nil {
+		return
+	}
+	route, found := nwdafContext.GetMLModelProvisionSubscriptionRoute(routeID)
+	if found && mlModelRouteOperationCurrent(
+		route.PeerRoute,
+		nwdaf_context.MLModelRouteCreating,
+		revision,
+	) {
+		nwdafContext.DeleteMLModelProvisionSubscriptionRoute(routeID)
+	}
+}
+
+func (p *Processor) compensateLocalProvisionCreate(ctx context.Context, backendResourceID string) {
+	if _, cleanupErr := p.mtlfMLModelBackend.DeleteMLModelProvisionSubscription(
+		ctx,
+		backendResourceID,
+	); cleanupErr != nil {
+		logger.ProcLog.Errorf(
+			"Failed to compensate ML Model Provision create: subscriptionId=%s err=%v",
+			backendResourceID,
+			cleanupErr,
+		)
+	}
 }
 
 func (p *Processor) HandleReplaceMLModelProvisionFromBackend(
@@ -166,21 +212,21 @@ func (p *Processor) HandleMLModelProvisionNotification(
 	pathSubscriptionID string,
 	body []byte,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
-	p.mlModelMu.Lock()
-	defer p.mlModelMu.Unlock()
-
 	notifications, err := wire.ParseMLModelProvisionNotifications(body)
 	if err != nil {
 		return nil, malformedMLModelProblem(err)
 	}
+	p.mlModelMu.Lock()
 	nwdafContext := p.nwdaf.Context()
 	if nwdafContext == nil {
+		p.mlModelMu.Unlock()
 		return nil, mlModelInternalProblem("NWDAF context is unavailable")
 	}
 	subscriptionID := notifications[0].SubscriptionID
 	if pathSubscriptionID != "" {
 		pathRoute, found := nwdafContext.GetMLModelProvisionSubscriptionRoute(pathSubscriptionID)
 		if !found {
+			p.mlModelMu.Unlock()
 			return nil, mlModelResourceNotFoundProblem(
 				"ML Model Provision subscription",
 				pathSubscriptionID,
@@ -190,10 +236,12 @@ func (p *Processor) HandleMLModelProvisionNotification(
 			pathRoute.PeerRoute,
 			p.anlfAvailability,
 		); problem != nil {
+			p.mlModelMu.Unlock()
 			return nil, problem
 		}
 		if hint := peerResourceIDHint(pathRoute.PeerRoute.PeerLocation); hint != "" &&
 			hint != subscriptionID {
+			p.mlModelMu.Unlock()
 			return nil, malformedMLModelProblem(errors.New(
 				"notification subscriptionId does not match peer resource",
 			))
@@ -201,10 +249,12 @@ func (p *Processor) HandleMLModelProvisionNotification(
 		if subscriptionID != pathSubscriptionID {
 			body, err = wire.ReplaceProvisionNotificationSubscriptionID(body, pathSubscriptionID)
 			if err != nil {
+				p.mlModelMu.Unlock()
 				return nil, malformedMLModelProblem(err)
 			}
 			notifications, err = wire.ParseMLModelProvisionNotifications(body)
 			if err != nil {
+				p.mlModelMu.Unlock()
 				return nil, malformedMLModelProblem(err)
 			}
 		}
@@ -214,6 +264,7 @@ func (p *Processor) HandleMLModelProvisionNotification(
 			backendRoute, backendFound := nwdafContext.
 				FindMLModelProvisionSubscriptionRouteByBackendResourceID(subscriptionID)
 			if !backendFound {
+				p.mlModelMu.Unlock()
 				return nil, mlModelResourceNotFoundProblem(
 					"ML Model Provision subscription",
 					subscriptionID,
@@ -224,10 +275,12 @@ func (p *Processor) HandleMLModelProvisionNotification(
 				backendRoute.SubscriptionID,
 			)
 			if err != nil {
+				p.mlModelMu.Unlock()
 				return nil, malformedMLModelProblem(err)
 			}
 			notifications, err = wire.ParseMLModelProvisionNotifications(body)
 			if err != nil {
+				p.mlModelMu.Unlock()
 				return nil, malformedMLModelProblem(err)
 			}
 			subscriptionID = backendRoute.SubscriptionID
@@ -235,13 +288,19 @@ func (p *Processor) HandleMLModelProvisionNotification(
 	}
 	route, found := nwdafContext.GetMLModelProvisionSubscriptionRoute(subscriptionID)
 	if !found {
+		p.mlModelMu.Unlock()
 		return nil, mlModelResourceNotFoundProblem(
 			"ML Model Provision subscription",
 			subscriptionID,
 		)
 	}
+	if !mlModelRouteAcceptsCallback(route.PeerRoute) {
+		p.mlModelMu.Unlock()
+		return nil, mlModelUnavailableProblem()
+	}
 	for _, notification := range notifications {
 		if notification.SubscriptionID != subscriptionID {
+			p.mlModelMu.Unlock()
 			return nil, malformedMLModelProblem(errors.New(
 				"notification array must reference one provision subscription",
 			))
@@ -249,6 +308,7 @@ func (p *Processor) HandleMLModelProvisionNotification(
 		for _, event := range notification.EventNotifications {
 			if route.NotificationCorrelationID != "" &&
 				event.NotificationID != route.NotificationCorrelationID {
+				p.mlModelMu.Unlock()
 				return nil, malformedMLModelProblem(errors.New(
 					"notification correlation does not match provision subscription",
 				))
@@ -257,15 +317,21 @@ func (p *Processor) HandleMLModelProvisionNotification(
 	}
 
 	var response *backend.StandardResponse
-	switch route.Destination {
-	case nwdaf_context.MLModelRoutePartyAnLFBackend:
-		generationLease2, admitted2 := acquireBackend(p.anlfMLModelBackend, p.anlfAvailability)
-		if !admitted2 {
+	var generationLease *backend.GenerationLease
+	if route.Destination == nwdaf_context.MLModelRoutePartyAnLFBackend {
+		var admitted bool
+		generationLease, admitted = acquireBackend(p.anlfMLModelBackend, p.anlfAvailability)
+		if !admitted {
+			p.mlModelMu.Unlock()
 			return nil, mlModelUnavailableProblem()
 		}
-		if generationLease2 != nil {
-			defer generationLease2.Release()
-		}
+	}
+	p.mlModelMu.Unlock()
+	if generationLease != nil {
+		defer generationLease.Release()
+	}
+	switch route.Destination {
+	case nwdaf_context.MLModelRoutePartyAnLFBackend:
 		response, err = p.anlfMLModelBackend.DeliverMLModelProvisionNotification(
 			requestContext,
 			subscriptionID,
@@ -307,115 +373,130 @@ func (p *Processor) HandleReplaceMLModelProvision(
 	subscriptionID string,
 	body []byte,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
-	p.mlModelMu.Lock()
-	defer p.mlModelMu.Unlock()
-
 	parsed, err := wire.ParseMLModelProvisionSubscription(body)
 	if err != nil {
 		return nil, malformedMLModelProblem(err)
 	}
+	p.mlModelMu.Lock()
 	nwdafContext := p.nwdaf.Context()
 	if nwdafContext == nil {
+		p.mlModelMu.Unlock()
 		return nil, mlModelInternalProblem("NWDAF context is unavailable")
 	}
 	route, found := nwdafContext.GetMLModelProvisionSubscriptionRoute(subscriptionID)
 	if !found {
+		p.mlModelMu.Unlock()
 		return nil, mlModelResourceNotFoundProblem("ML Model Provision subscription", subscriptionID)
 	}
-	if route.PeerRoute.SelectedTarget != nil {
+	revision, problem := p.beginMLModelRouteOperationLocked(
+		&route.PeerRoute,
+		nwdaf_context.MLModelRouteReplacing,
+	)
+	if problem != nil {
+		p.mlModelMu.Unlock()
+		return nil, problem
+	}
+	if !nwdafContext.UpdateMLModelProvisionSubscriptionRoute(route) {
+		p.mlModelMu.Unlock()
+		return nil, mlModelInternalProblem("could not reserve ML Model Provision replacement")
+	}
+	isPeer := route.PeerRoute.SelectedTarget != nil
+	var generationLease *backend.GenerationLease
+	if isPeer {
 		if p.mlModelPeerConsumer == nil {
+			restoreActiveMLModelRoute(&route.PeerRoute)
+			nwdafContext.UpdateMLModelProvisionSubscriptionRoute(route)
+			p.mlModelMu.Unlock()
 			return nil, mlModelUnavailableProblem()
 		}
-		peerBody, replaceErr := wire.ReplaceStringField(
-			body,
-			"notifUri",
-			p.publicMLModelCallbackURI("ml-model-provision", subscriptionID),
-		)
-		if replaceErr != nil {
-			return nil, malformedMLModelProblem(replaceErr)
+	} else {
+		var admitted bool
+		generationLease, admitted = acquireBackend(p.mtlfMLModelBackend, p.mtlfAvailability)
+		if !admitted {
+			restoreActiveMLModelRoute(&route.PeerRoute)
+			nwdafContext.UpdateMLModelProvisionSubscriptionRoute(route)
+			p.mlModelMu.Unlock()
+			return nil, mlModelUnavailableProblem()
 		}
-		response, peerErr := p.mlModelPeerConsumer.ReplacePeerMLModelProvision(
-			requestContext,
-			route.PeerRoute.PeerLocation,
-			peerBody,
-		)
-		if peerErr != nil {
-			if peerMissing(peerErr) {
-				nwdafContext.DeleteMLModelProvisionSubscriptionRoute(subscriptionID)
-			}
-			return nil, p.mlModelPeerProblem(peerErr)
-		}
-		externalBody := append(json.RawMessage(nil), body...)
-		if response.StatusCode == http.StatusOK {
-			externalBody, replaceErr = wire.ReplaceStringField(
-				response.Body,
-				"notifUri",
-				parsed.NotificationURI,
-			)
-			if replaceErr != nil {
-				return nil, mlModelBadGatewayProblem(
-					"peer returned an invalid provision representation",
-				)
-			}
-		}
-		route.AcceptedRepresentation = externalBody
-		route.BackendRepresentation = externalBody
-		route.DestinationNotificationURI = parsed.NotificationURI
-		route.NotificationCorrelationID = parsed.NotificationID
-		if response.PermanentRedirectURI != "" {
-			route.PeerRoute.PeerLocation = response.PermanentRedirectURI
-		}
-		if !nwdafContext.UpdateMLModelProvisionSubscriptionRoute(route) {
-			return nil, mlModelInternalProblem("could not update remote provision route")
-		}
-		return &backend.StandardResponse{
-			StatusCode:  response.StatusCode,
-			ContentType: response.ContentType,
-			Body:        externalBodyForStatus(response.StatusCode, externalBody),
-		}, nil
 	}
-	generationLease3, admitted3 := acquireBackend(p.mtlfMLModelBackend, p.mtlfAvailability)
-	if !admitted3 {
-		return nil, mlModelUnavailableProblem()
+	callbackURI := p.mtlfCallbackURI(mlModelProvisionCallbackPath)
+	if isPeer {
+		callbackURI = p.publicMLModelCallbackURI("ml-model-provision", subscriptionID)
 	}
-	if generationLease3 != nil {
-		defer generationLease3.Release()
-	}
-	backendBody, err := wire.ReplaceStringField(
-		body, "notifUri", p.mtlfCallbackURI(mlModelProvisionCallbackPath),
-	)
+	routedBody, err := wire.ReplaceStringField(body, "notifUri", callbackURI)
 	if err != nil {
+		restoreActiveMLModelRoute(&route.PeerRoute)
+		nwdafContext.UpdateMLModelProvisionSubscriptionRoute(route)
+		p.mlModelMu.Unlock()
 		return nil, malformedMLModelProblem(err)
 	}
-	response, err := p.mtlfMLModelBackend.ReplaceMLModelProvisionSubscription(
-		requestContext, route.PeerRoute.BackendResourceID, backendBody,
-	)
-	if err != nil {
-		return nil, p.mlModelBackendProblem(err, p.mtlfAvailability)
+	p.mlModelMu.Unlock()
+	if generationLease != nil {
+		defer generationLease.Release()
 	}
-	if response == nil {
-		return nil, mlModelBadGatewayProblem("MTLF backend returned no replace response")
+
+	var response *backend.StandardResponse
+	var operationErr error
+	if isPeer {
+		response, operationErr = p.mlModelPeerConsumer.ReplacePeerMLModelProvision(
+			requestContext,
+			route.PeerRoute.PeerLocation,
+			routedBody,
+		)
+	} else {
+		response, operationErr = p.mtlfMLModelBackend.ReplaceMLModelProvisionSubscription(
+			requestContext,
+			route.PeerRoute.BackendResourceID,
+			routedBody,
+		)
 	}
-	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNoContent {
-		return nil, mlModelBadGatewayProblem("MTLF backend returned an invalid replace status")
+	if operationErr != nil {
+		p.finishProvisionReplaceFailure(subscriptionID, revision, isPeer && peerMissing(operationErr))
+		if isPeer {
+			return nil, p.mlModelPeerProblem(operationErr)
+		}
+		return nil, p.mlModelBackendProblem(operationErr, p.mtlfAvailability)
+	}
+	if response == nil || response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNoContent {
+		p.finishProvisionReplaceFailure(subscriptionID, revision, false)
+		return nil, mlModelBadGatewayProblem("ML Model Provision destination returned an invalid replace response")
 	}
 	externalBody := append(json.RawMessage(nil), body...)
-	backendRepresentation := append(json.RawMessage(nil), backendBody...)
+	backendRepresentation := append(json.RawMessage(nil), routedBody...)
 	if response.StatusCode == http.StatusOK {
 		externalBody, err = wire.ReplaceStringField(response.Body, "notifUri", parsed.NotificationURI)
 		if err != nil {
-			return nil, mlModelBadGatewayProblem("MTLF backend returned an invalid provision representation")
+			p.finishProvisionReplaceFailure(subscriptionID, revision, false)
+			return nil, mlModelBadGatewayProblem("ML Model Provision destination returned an invalid representation")
 		}
 		backendRepresentation = append(json.RawMessage(nil), response.Body...)
 	}
-	route.AcceptedRepresentation = externalBody
-	route.BackendRepresentation = backendRepresentation
-	route.DestinationNotificationURI = parsed.NotificationURI
-	route.NotificationCorrelationID = parsed.NotificationID
-	if !nwdafContext.UpdateMLModelProvisionSubscriptionRoute(route) {
+	p.mlModelMu.Lock()
+	current, found := nwdafContext.GetMLModelProvisionSubscriptionRoute(subscriptionID)
+	if !found || !mlModelRouteOperationCurrent(
+		current.PeerRoute,
+		nwdaf_context.MLModelRouteReplacing,
+		revision,
+	) {
+		p.mlModelMu.Unlock()
+		return nil, mlModelUnavailableProblem()
+	}
+	restoreActiveMLModelRoute(&current.PeerRoute)
+	current.AcceptedRepresentation = externalBody
+	current.BackendRepresentation = backendRepresentation
+	current.DestinationNotificationURI = parsed.NotificationURI
+	current.NotificationCorrelationID = parsed.NotificationID
+	if response.PermanentRedirectURI != "" {
+		current.PeerRoute.PeerLocation = response.PermanentRedirectURI
+	}
+	if !nwdafContext.UpdateMLModelProvisionSubscriptionRoute(current) {
+		p.mlModelMu.Unlock()
 		return nil, mlModelInternalProblem("could not update ML Model Provision subscription route")
 	}
-	p.mtlfAvailability.Refresh()
+	p.mlModelMu.Unlock()
+	if !isPeer {
+		p.mtlfAvailability.Refresh()
+	}
 	return &backend.StandardResponse{
 		StatusCode:  response.StatusCode,
 		ContentType: response.ContentType,
@@ -423,69 +504,152 @@ func (p *Processor) HandleReplaceMLModelProvision(
 	}, nil
 }
 
+func (p *Processor) finishProvisionReplaceFailure(
+	subscriptionID string,
+	revision uint64,
+	deleteRoute bool,
+) {
+	p.mlModelMu.Lock()
+	defer p.mlModelMu.Unlock()
+	nwdafContext := p.nwdaf.Context()
+	if nwdafContext == nil {
+		return
+	}
+	route, found := nwdafContext.GetMLModelProvisionSubscriptionRoute(subscriptionID)
+	if !found || !mlModelRouteOperationCurrent(
+		route.PeerRoute,
+		nwdaf_context.MLModelRouteReplacing,
+		revision,
+	) {
+		return
+	}
+	if deleteRoute {
+		nwdafContext.DeleteMLModelProvisionSubscriptionRoute(subscriptionID)
+		return
+	}
+	restoreActiveMLModelRoute(&route.PeerRoute)
+	nwdafContext.UpdateMLModelProvisionSubscriptionRoute(route)
+}
+
 func (p *Processor) HandleDeleteMLModelProvision(
 	requestContext context.Context,
 	subscriptionID string,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
 	p.mlModelMu.Lock()
-	defer p.mlModelMu.Unlock()
-
 	nwdafContext := p.nwdaf.Context()
 	if nwdafContext == nil {
+		p.mlModelMu.Unlock()
 		return nil, mlModelInternalProblem("NWDAF context is unavailable")
 	}
 	if nwdafContext.ConsumeMLModelDeletionRecord(
 		nwdaf_context.MLModelResourceProvisionSubscription,
 		subscriptionID,
 	) {
-		return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+		p.mlModelMu.Unlock()
+		return noContentMLModelResponse(), nil
 	}
 	route, found := nwdafContext.GetMLModelProvisionSubscriptionRoute(subscriptionID)
 	if !found {
+		p.mlModelMu.Unlock()
 		return nil, mlModelResourceNotFoundProblem("ML Model Provision subscription", subscriptionID)
 	}
-	if route.PeerRoute.SelectedTarget != nil {
+	revision, problem := p.beginMLModelRouteOperationLocked(
+		&route.PeerRoute,
+		nwdaf_context.MLModelRouteDeleting,
+	)
+	if problem != nil {
+		p.mlModelMu.Unlock()
+		return nil, problem
+	}
+	if !nwdafContext.UpdateMLModelProvisionSubscriptionRoute(route) {
+		p.mlModelMu.Unlock()
+		return nil, mlModelInternalProblem("could not reserve ML Model Provision deletion")
+	}
+	isPeer := route.PeerRoute.SelectedTarget != nil
+	var generationLease *backend.GenerationLease
+	if isPeer {
 		if p.mlModelPeerConsumer == nil {
+			restoreActiveMLModelRoute(&route.PeerRoute)
+			nwdafContext.UpdateMLModelProvisionSubscriptionRoute(route)
+			p.mlModelMu.Unlock()
 			return nil, mlModelUnavailableProblem()
 		}
-		response, peerErr := p.mlModelPeerConsumer.DeletePeerMLModelProvision(
+	} else {
+		var admitted bool
+		generationLease, admitted = acquireBackend(p.mtlfMLModelBackend, p.mtlfAvailability)
+		if !admitted {
+			restoreActiveMLModelRoute(&route.PeerRoute)
+			nwdafContext.UpdateMLModelProvisionSubscriptionRoute(route)
+			p.mlModelMu.Unlock()
+			return nil, mlModelUnavailableProblem()
+		}
+	}
+	p.mlModelMu.Unlock()
+	if generationLease != nil {
+		defer generationLease.Release()
+	}
+
+	var response *backend.StandardResponse
+	var operationErr error
+	if isPeer {
+		response, operationErr = p.mlModelPeerConsumer.DeletePeerMLModelProvision(
 			requestContext,
 			route.PeerRoute.PeerLocation,
 		)
-		if peerErr != nil && !peerMissing(peerErr) {
-			return nil, p.mlModelPeerProblem(peerErr)
+	} else {
+		response, operationErr = p.mtlfMLModelBackend.DeleteMLModelProvisionSubscription(
+			requestContext,
+			route.PeerRoute.BackendResourceID,
+		)
+	}
+	missingDestination := peerMissing(operationErr)
+	terminal := operationErr == nil && response != nil &&
+		(response.StatusCode == http.StatusNoContent || response.StatusCode == http.StatusNotFound)
+	if missingDestination {
+		terminal = true
+	}
+
+	p.mlModelMu.Lock()
+	current, exists := nwdafContext.GetMLModelProvisionSubscriptionRoute(subscriptionID)
+	if !exists || !mlModelRouteOperationCurrent(
+		current.PeerRoute,
+		nwdaf_context.MLModelRouteDeleting,
+		revision,
+	) {
+		_, resetDeleted := nwdafContext.GetMLModelDeletionRecord(
+			nwdaf_context.MLModelResourceProvisionSubscription,
+			subscriptionID,
+		)
+		p.mlModelMu.Unlock()
+		if !exists && resetDeleted {
+			return noContentMLModelResponse(), nil
 		}
+		return nil, mlModelUnavailableProblem()
+	}
+	if terminal {
 		nwdafContext.DeleteMLModelProvisionSubscriptionRoute(subscriptionID)
-		if response == nil {
-			return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+	} else {
+		restoreActiveMLModelRoute(&current.PeerRoute)
+		nwdafContext.UpdateMLModelProvisionSubscriptionRoute(current)
+	}
+	p.mlModelMu.Unlock()
+
+	if terminal {
+		if !isPeer {
+			p.mtlfAvailability.Refresh()
+		}
+		if missingDestination || response == nil || response.StatusCode == http.StatusNotFound {
+			return noContentMLModelResponse(), nil
 		}
 		return response, nil
 	}
-	generationLease4, admitted4 := acquireBackend(p.mtlfMLModelBackend, p.mtlfAvailability)
-	if !admitted4 {
-		return nil, mlModelUnavailableProblem()
+	if operationErr != nil {
+		if isPeer {
+			return nil, p.mlModelPeerProblem(operationErr)
+		}
+		return nil, p.mlModelBackendProblem(operationErr, p.mtlfAvailability)
 	}
-	if generationLease4 != nil {
-		defer generationLease4.Release()
-	}
-	response, err := p.mtlfMLModelBackend.DeleteMLModelProvisionSubscription(
-		requestContext,
-		route.PeerRoute.BackendResourceID,
-	)
-	if err != nil {
-		return nil, p.mlModelBackendProblem(err, p.mtlfAvailability)
-	}
-	if response == nil {
-		return nil, mlModelBadGatewayProblem("MTLF backend returned no delete response")
-	}
-	if response.StatusCode != http.StatusNoContent {
-		return nil, mlModelBadGatewayProblem("MTLF backend returned an invalid delete status")
-	}
-	if !nwdafContext.DeleteMLModelProvisionSubscriptionRoute(subscriptionID) {
-		return nil, mlModelInternalProblem("could not remove ML Model Provision subscription route")
-	}
-	p.mtlfAvailability.Refresh()
-	return response, nil
+	return nil, mlModelBadGatewayProblem("ML Model Provision destination returned an invalid delete response")
 }
 
 func (p *Processor) HandleCreateMLModelMonitorRegistration(
@@ -527,9 +691,6 @@ func (p *Processor) handleCreateMLModelMonitorRegistration(
 	body []byte,
 	initiator nwdaf_context.MLModelRouteParty,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
-	p.mlModelMu.Lock()
-	defer p.mlModelMu.Unlock()
-
 	if _, err := wire.ParseMLModelMonitorRegistration(body); err != nil {
 		return nil, malformedMLModelProblem(err)
 	}
@@ -540,50 +701,67 @@ func (p *Processor) handleCreateMLModelMonitorRegistration(
 	if generationLease5 != nil {
 		defer generationLease5.Release()
 	}
-	response, err := p.mtlfMLModelBackend.CreateMLModelMonitorRegistration(requestContext, body)
-	if err != nil {
-		return nil, p.mlModelBackendProblem(err, p.mtlfAvailability)
-	}
-	if response == nil || response.StatusCode != http.StatusCreated {
-		return nil, mlModelBadGatewayProblem("MTLF backend returned an invalid registration response")
-	}
-	backendResourceID, err := backend.ResourceIDFromLocation(response.Location)
-	if err != nil {
-		return nil, mlModelBadGatewayProblem(err.Error())
-	}
 	localRouteID := uuid.New().String()
 	peerRoute := nwdaf_context.MLModelPeerRoute{
 		Direction:         nwdaf_context.MLModelRouteDirectionInbound,
-		BackendLocation:   response.Location,
-		BackendResourceID: backendResourceID,
-		LifecycleState:    nwdaf_context.MLModelRouteActive,
+		LifecycleState:    nwdaf_context.MLModelRouteCreating,
 		ProcessGeneration: p.backendGeneration(p.mtlfAvailability),
 	}
 	if initiator == nwdaf_context.MLModelRoutePartyAnLFBackend {
 		peerRoute.RelatedBackend = backend.KindAnLF
 		peerRoute.RelatedGeneration = p.backendGeneration(p.anlfAvailability)
 	}
+	p.mlModelMu.Lock()
+	peerRoute.OperationRevision = p.nextMLModelOperationRevisionLocked()
+	revision := peerRoute.OperationRevision
 	nwdafContext := p.nwdaf.Context()
-	if nwdafContext == nil || !nwdafContext.AddMLModelMonitorRegistrationRoute(
+	reserved := nwdafContext != nil && nwdafContext.AddMLModelMonitorRegistrationRoute(
 		nwdaf_context.MLModelMonitorRegistrationRoute{
-			RegistrationID:         localRouteID,
-			PeerRoute:              peerRoute,
-			AcceptedRepresentation: response.Body,
-			BackendRepresentation:  response.Body,
-			Initiator:              initiator,
+			RegistrationID: localRouteID,
+			PeerRoute:      peerRoute,
+			Initiator:      initiator,
 		},
+	)
+	p.mlModelMu.Unlock()
+	if !reserved {
+		return nil, mlModelInternalProblem("could not reserve ML Model Monitor registration route")
+	}
+	response, err := p.mtlfMLModelBackend.CreateMLModelMonitorRegistration(requestContext, body)
+	if err != nil {
+		p.removeCreatingRegistrationRoute(localRouteID, revision)
+		return nil, p.mlModelBackendProblem(err, p.mtlfAvailability)
+	}
+	if response == nil || response.StatusCode != http.StatusCreated {
+		p.removeCreatingRegistrationRoute(localRouteID, revision)
+		return nil, mlModelBadGatewayProblem("MTLF backend returned an invalid registration response")
+	}
+	backendResourceID, err := backend.ResourceIDFromLocation(response.Location)
+	if err != nil {
+		p.removeCreatingRegistrationRoute(localRouteID, revision)
+		return nil, mlModelBadGatewayProblem(err.Error())
+	}
+	p.mlModelMu.Lock()
+	current, found := nwdafContext.GetMLModelMonitorRegistrationRoute(localRouteID)
+	if !found || !mlModelRouteOperationCurrent(
+		current.PeerRoute,
+		nwdaf_context.MLModelRouteCreating,
+		revision,
 	) {
-		if _, cleanupErr := p.mtlfMLModelBackend.DeleteMLModelMonitorRegistration(
-			requestContext, backendResourceID,
-		); cleanupErr != nil {
-			logger.ProcLog.Errorf(
-				"Failed to compensate ML Model Monitor registration collision: registrationId=%s err=%v",
-				backendResourceID,
-				cleanupErr,
-			)
-		}
+		p.mlModelMu.Unlock()
+		p.compensateLocalRegistrationCreate(requestContext, backendResourceID)
+		return nil, mlModelUnavailableProblem()
+	}
+	current.PeerRoute.BackendLocation = response.Location
+	current.PeerRoute.BackendResourceID = backendResourceID
+	restoreActiveMLModelRoute(&current.PeerRoute)
+	current.AcceptedRepresentation = response.Body
+	current.BackendRepresentation = response.Body
+	if !nwdafContext.UpdateMLModelMonitorRegistrationRoute(current) {
+		p.mlModelMu.Unlock()
+		p.compensateLocalRegistrationCreate(requestContext, backendResourceID)
 		return nil, mlModelInternalProblem("could not record ML Model Monitor registration route")
 	}
+	p.mlModelMu.Unlock()
 	p.mtlfAvailability.Refresh()
 	return &backend.StandardResponse{
 		StatusCode:  http.StatusCreated,
@@ -591,6 +769,36 @@ func (p *Processor) handleCreateMLModelMonitorRegistration(
 		ContentType: "application/json",
 		Body:        append(json.RawMessage(nil), response.Body...),
 	}, nil
+}
+
+func (p *Processor) removeCreatingRegistrationRoute(routeID string, revision uint64) {
+	p.mlModelMu.Lock()
+	defer p.mlModelMu.Unlock()
+	nwdafContext := p.nwdaf.Context()
+	if nwdafContext == nil {
+		return
+	}
+	route, found := nwdafContext.GetMLModelMonitorRegistrationRoute(routeID)
+	if found && mlModelRouteOperationCurrent(
+		route.PeerRoute,
+		nwdaf_context.MLModelRouteCreating,
+		revision,
+	) {
+		nwdafContext.DeleteMLModelMonitorRegistrationRoute(routeID)
+	}
+}
+
+func (p *Processor) compensateLocalRegistrationCreate(ctx context.Context, backendResourceID string) {
+	if _, cleanupErr := p.mtlfMLModelBackend.DeleteMLModelMonitorRegistration(
+		ctx,
+		backendResourceID,
+	); cleanupErr != nil {
+		logger.ProcLog.Errorf(
+			"Failed to compensate ML Model Monitor registration create: registrationId=%s err=%v",
+			backendResourceID,
+			cleanupErr,
+		)
+	}
 }
 
 func (p *Processor) HandleDeleteMLModelMonitorRegistrationFromBackend(
@@ -605,65 +813,120 @@ func (p *Processor) HandleDeleteMLModelMonitorRegistration(
 	registrationID string,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
 	p.mlModelMu.Lock()
-	defer p.mlModelMu.Unlock()
-
 	nwdafContext := p.nwdaf.Context()
 	if nwdafContext == nil {
+		p.mlModelMu.Unlock()
 		return nil, mlModelInternalProblem("NWDAF context is unavailable")
 	}
 	if nwdafContext.ConsumeMLModelDeletionRecord(
 		nwdaf_context.MLModelResourceMonitorRegistration,
 		registrationID,
 	) {
-		return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+		p.mlModelMu.Unlock()
+		return noContentMLModelResponse(), nil
 	}
 	route, found := nwdafContext.GetMLModelMonitorRegistrationRoute(registrationID)
 	if !found {
+		p.mlModelMu.Unlock()
 		return nil, mlModelResourceNotFoundProblem("ML Model Monitor registration", registrationID)
 	}
-	if route.PeerRoute.SelectedTarget != nil {
+	revision, problem := p.beginMLModelRouteOperationLocked(
+		&route.PeerRoute,
+		nwdaf_context.MLModelRouteDeleting,
+	)
+	if problem != nil {
+		p.mlModelMu.Unlock()
+		return nil, problem
+	}
+	if !nwdafContext.UpdateMLModelMonitorRegistrationRoute(route) {
+		p.mlModelMu.Unlock()
+		return nil, mlModelInternalProblem("could not reserve ML Model Monitor registration deletion")
+	}
+	isPeer := route.PeerRoute.SelectedTarget != nil
+	var generationLease *backend.GenerationLease
+	if isPeer {
 		if p.mlModelPeerConsumer == nil {
+			restoreActiveMLModelRoute(&route.PeerRoute)
+			nwdafContext.UpdateMLModelMonitorRegistrationRoute(route)
+			p.mlModelMu.Unlock()
 			return nil, mlModelUnavailableProblem()
 		}
-		response, peerErr := p.mlModelPeerConsumer.DeletePeerMLModelMonitorRegistration(
+	} else {
+		var admitted bool
+		generationLease, admitted = acquireBackend(p.mtlfMLModelBackend, p.mtlfAvailability)
+		if !admitted {
+			restoreActiveMLModelRoute(&route.PeerRoute)
+			nwdafContext.UpdateMLModelMonitorRegistrationRoute(route)
+			p.mlModelMu.Unlock()
+			return nil, mlModelUnavailableProblem()
+		}
+	}
+	p.mlModelMu.Unlock()
+	if generationLease != nil {
+		defer generationLease.Release()
+	}
+
+	var response *backend.StandardResponse
+	var operationErr error
+	if isPeer {
+		response, operationErr = p.mlModelPeerConsumer.DeletePeerMLModelMonitorRegistration(
 			requestContext,
 			route.PeerRoute.PeerLocation,
 		)
-		if peerErr != nil && !peerMissing(peerErr) {
-			return nil, p.mlModelPeerProblem(peerErr)
+	} else {
+		response, operationErr = p.mtlfMLModelBackend.DeleteMLModelMonitorRegistration(
+			requestContext,
+			route.PeerRoute.BackendResourceID,
+		)
+	}
+	missingDestination := peerMissing(operationErr)
+	terminal := operationErr == nil && response != nil &&
+		(response.StatusCode == http.StatusNoContent || response.StatusCode == http.StatusNotFound)
+	if missingDestination {
+		terminal = true
+	}
+
+	p.mlModelMu.Lock()
+	current, exists := nwdafContext.GetMLModelMonitorRegistrationRoute(registrationID)
+	if !exists || !mlModelRouteOperationCurrent(
+		current.PeerRoute,
+		nwdaf_context.MLModelRouteDeleting,
+		revision,
+	) {
+		_, resetDeleted := nwdafContext.GetMLModelDeletionRecord(
+			nwdaf_context.MLModelResourceMonitorRegistration,
+			registrationID,
+		)
+		p.mlModelMu.Unlock()
+		if !exists && resetDeleted {
+			return noContentMLModelResponse(), nil
 		}
+		return nil, mlModelUnavailableProblem()
+	}
+	if terminal {
 		nwdafContext.DeleteMLModelMonitorRegistrationRoute(registrationID)
-		if response == nil {
-			return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+	} else {
+		restoreActiveMLModelRoute(&current.PeerRoute)
+		nwdafContext.UpdateMLModelMonitorRegistrationRoute(current)
+	}
+	p.mlModelMu.Unlock()
+
+	if terminal {
+		if !isPeer {
+			p.mtlfAvailability.Refresh()
+		}
+		if missingDestination || response == nil || response.StatusCode == http.StatusNotFound {
+			return noContentMLModelResponse(), nil
 		}
 		return response, nil
 	}
-	generationLease6, admitted6 := acquireBackend(p.mtlfMLModelBackend, p.mtlfAvailability)
-	if !admitted6 {
-		return nil, mlModelUnavailableProblem()
+	if operationErr != nil {
+		if isPeer {
+			return nil, p.mlModelPeerProblem(operationErr)
+		}
+		return nil, p.mlModelBackendProblem(operationErr, p.mtlfAvailability)
 	}
-	if generationLease6 != nil {
-		defer generationLease6.Release()
-	}
-	backendResourceID := route.PeerRoute.BackendResourceID
-	response, err := p.mtlfMLModelBackend.DeleteMLModelMonitorRegistration(
-		requestContext,
-		backendResourceID,
-	)
-	if err != nil {
-		return nil, p.mlModelBackendProblem(err, p.mtlfAvailability)
-	}
-	if response == nil {
-		return nil, mlModelBadGatewayProblem("MTLF backend returned no registration delete response")
-	}
-	if response.StatusCode != http.StatusNoContent {
-		return nil, mlModelBadGatewayProblem("MTLF backend returned an invalid registration delete status")
-	}
-	if !nwdafContext.DeleteMLModelMonitorRegistrationRoute(registrationID) {
-		return nil, mlModelInternalProblem("could not remove ML Model Monitor registration route")
-	}
-	p.mtlfAvailability.Refresh()
-	return response, nil
+	return nil, mlModelBadGatewayProblem("ML Model Monitor registration destination returned an invalid delete response")
 }
 
 func (p *Processor) HandleCreateMLModelMonitorSubscription(
@@ -687,10 +950,12 @@ func (p *Processor) HandleCreateMLModelMonitorSubscriptionFromBackend(
 	if target != nil {
 		nwdafContext := p.nwdaf.Context()
 		if nwdafContext != nil && target.NFInstanceID == nwdafContext.NfId {
+			p.mlModelMu.Lock()
 			normalizedOwnerID, err := normalizeMonitorOwnerRegistrationID(
 				nwdafContext,
 				ownerRegistrationID,
 			)
+			p.mlModelMu.Unlock()
 			if err != nil {
 				return nil, malformedMLModelProblem(err)
 			}
@@ -722,9 +987,6 @@ func (p *Processor) handleCreateMLModelMonitorSubscription(
 	destination nwdaf_context.MLModelRouteParty,
 	ownerRegistrationID string,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
-	p.mlModelMu.Lock()
-	defer p.mlModelMu.Unlock()
-
 	parsed, err := wire.ParseMLModelMonitorSubscription(body)
 	if err != nil {
 		return nil, malformedMLModelProblem(err)
@@ -742,57 +1004,76 @@ func (p *Processor) handleCreateMLModelMonitorSubscription(
 	if err != nil {
 		return nil, malformedMLModelProblem(err)
 	}
-	response, err := p.anlfMLModelBackend.CreateMLModelMonitorSubscription(requestContext, backendBody)
-	if err != nil {
-		return nil, p.mlModelBackendProblem(err, p.anlfAvailability)
-	}
-	if response == nil || response.StatusCode != http.StatusCreated {
-		return nil, mlModelBadGatewayProblem("AnLF backend returned an invalid subscription response")
-	}
-	backendResourceID, err := backend.ResourceIDFromLocation(response.Location)
-	if err != nil {
-		return nil, mlModelBadGatewayProblem(err.Error())
-	}
 	localRouteID := uuid.New().String()
-	externalBody, err := wire.ReplaceStringField(response.Body, "notificationUri", parsed.NotificationURI)
-	if err != nil {
-		return nil, mlModelBadGatewayProblem("AnLF backend returned an invalid monitor representation")
-	}
 	peerRoute := nwdaf_context.MLModelPeerRoute{
 		Direction:         nwdaf_context.MLModelRouteDirectionInbound,
-		BackendLocation:   response.Location,
-		BackendResourceID: backendResourceID,
-		LifecycleState:    nwdaf_context.MLModelRouteActive,
+		LifecycleState:    nwdaf_context.MLModelRouteCreating,
 		ProcessGeneration: p.backendGeneration(p.anlfAvailability),
 	}
 	if destination == nwdaf_context.MLModelRoutePartyMTLFBackend {
 		peerRoute.RelatedBackend = backend.KindMTLF
 		peerRoute.RelatedGeneration = p.backendGeneration(p.mtlfAvailability)
 	}
+	p.mlModelMu.Lock()
+	peerRoute.OperationRevision = p.nextMLModelOperationRevisionLocked()
+	revision := peerRoute.OperationRevision
 	nwdafContext := p.nwdaf.Context()
-	if nwdafContext == nil || !nwdafContext.AddMLModelMonitorSubscriptionRoute(
+	reserved := nwdafContext != nil && nwdafContext.AddMLModelMonitorSubscriptionRoute(
 		nwdaf_context.MLModelMonitorSubscriptionRoute{
 			SubscriptionID:             localRouteID,
 			PeerRoute:                  peerRoute,
 			OwnerRegistrationID:        ownerRegistrationID,
-			AcceptedRepresentation:     externalBody,
-			BackendRepresentation:      response.Body,
 			Destination:                destination,
 			DestinationNotificationURI: parsed.NotificationURI,
 			NotificationCorrelationID:  parsed.NotificationID,
 		},
+	)
+	p.mlModelMu.Unlock()
+	if !reserved {
+		return nil, mlModelInternalProblem("could not reserve ML Model Monitor subscription route")
+	}
+	response, err := p.anlfMLModelBackend.CreateMLModelMonitorSubscription(requestContext, backendBody)
+	if err != nil {
+		p.removeCreatingMonitorRoute(localRouteID, revision)
+		return nil, p.mlModelBackendProblem(err, p.anlfAvailability)
+	}
+	if response == nil || response.StatusCode != http.StatusCreated {
+		p.removeCreatingMonitorRoute(localRouteID, revision)
+		return nil, mlModelBadGatewayProblem("AnLF backend returned an invalid subscription response")
+	}
+	backendResourceID, err := backend.ResourceIDFromLocation(response.Location)
+	if err != nil {
+		p.removeCreatingMonitorRoute(localRouteID, revision)
+		return nil, mlModelBadGatewayProblem(err.Error())
+	}
+	externalBody, err := wire.ReplaceStringField(response.Body, "notificationUri", parsed.NotificationURI)
+	if err != nil {
+		p.removeCreatingMonitorRoute(localRouteID, revision)
+		p.compensateLocalMonitorCreate(requestContext, backendResourceID)
+		return nil, mlModelBadGatewayProblem("AnLF backend returned an invalid monitor representation")
+	}
+	p.mlModelMu.Lock()
+	current, found := nwdafContext.GetMLModelMonitorSubscriptionRoute(localRouteID)
+	if !found || !mlModelRouteOperationCurrent(
+		current.PeerRoute,
+		nwdaf_context.MLModelRouteCreating,
+		revision,
 	) {
-		if _, cleanupErr := p.anlfMLModelBackend.DeleteMLModelMonitorSubscription(
-			requestContext, backendResourceID,
-		); cleanupErr != nil {
-			logger.ProcLog.Errorf(
-				"Failed to compensate ML Model Monitor subscription collision: subscriptionId=%s err=%v",
-				backendResourceID,
-				cleanupErr,
-			)
-		}
+		p.mlModelMu.Unlock()
+		p.compensateLocalMonitorCreate(requestContext, backendResourceID)
+		return nil, mlModelUnavailableProblem()
+	}
+	current.PeerRoute.BackendLocation = response.Location
+	current.PeerRoute.BackendResourceID = backendResourceID
+	restoreActiveMLModelRoute(&current.PeerRoute)
+	current.AcceptedRepresentation = externalBody
+	current.BackendRepresentation = response.Body
+	if !nwdafContext.UpdateMLModelMonitorSubscriptionRoute(current) {
+		p.mlModelMu.Unlock()
+		p.compensateLocalMonitorCreate(requestContext, backendResourceID)
 		return nil, mlModelInternalProblem("could not record ML Model Monitor subscription route")
 	}
+	p.mlModelMu.Unlock()
 	p.anlfAvailability.Refresh()
 	return &backend.StandardResponse{
 		StatusCode:  http.StatusCreated,
@@ -800,6 +1081,36 @@ func (p *Processor) handleCreateMLModelMonitorSubscription(
 		ContentType: "application/json",
 		Body:        externalBody,
 	}, nil
+}
+
+func (p *Processor) removeCreatingMonitorRoute(routeID string, revision uint64) {
+	p.mlModelMu.Lock()
+	defer p.mlModelMu.Unlock()
+	nwdafContext := p.nwdaf.Context()
+	if nwdafContext == nil {
+		return
+	}
+	route, found := nwdafContext.GetMLModelMonitorSubscriptionRoute(routeID)
+	if found && mlModelRouteOperationCurrent(
+		route.PeerRoute,
+		nwdaf_context.MLModelRouteCreating,
+		revision,
+	) {
+		nwdafContext.DeleteMLModelMonitorSubscriptionRoute(routeID)
+	}
+}
+
+func (p *Processor) compensateLocalMonitorCreate(ctx context.Context, backendResourceID string) {
+	if _, cleanupErr := p.anlfMLModelBackend.DeleteMLModelMonitorSubscription(
+		ctx,
+		backendResourceID,
+	); cleanupErr != nil {
+		logger.ProcLog.Errorf(
+			"Failed to compensate ML Model Monitor create: subscriptionId=%s err=%v",
+			backendResourceID,
+			cleanupErr,
+		)
+	}
 }
 
 func (p *Processor) HandleReplaceMLModelMonitorSubscriptionFromBackend(
@@ -822,15 +1133,14 @@ func (p *Processor) HandleMLModelMonitorNotification(
 	pathSubscriptionID string,
 	body []byte,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
-	p.mlModelMu.Lock()
-	defer p.mlModelMu.Unlock()
-
 	notification, err := wire.ParseMLModelMonitorNotification(body)
 	if err != nil {
 		return nil, malformedMLModelProblem(err)
 	}
+	p.mlModelMu.Lock()
 	nwdafContext := p.nwdaf.Context()
 	if nwdafContext == nil {
+		p.mlModelMu.Unlock()
 		return nil, mlModelInternalProblem("NWDAF context is unavailable")
 	}
 	var route nwdaf_context.MLModelMonitorSubscriptionRoute
@@ -843,6 +1153,7 @@ func (p *Processor) HandleMLModelMonitorNotification(
 		)
 	}
 	if !found {
+		p.mlModelMu.Unlock()
 		return nil, mlModelResourceNotFoundProblem(
 			"ML Model Monitor subscription",
 			pathSubscriptionID,
@@ -853,10 +1164,16 @@ func (p *Processor) HandleMLModelMonitorNotification(
 			route.PeerRoute,
 			p.mtlfAvailability,
 		); problem != nil {
+			p.mlModelMu.Unlock()
 			return nil, problem
 		}
 	}
+	if !mlModelRouteAcceptsCallback(route.PeerRoute) {
+		p.mlModelMu.Unlock()
+		return nil, mlModelUnavailableProblem()
+	}
 	if notification.NotificationID != route.NotificationCorrelationID {
+		p.mlModelMu.Unlock()
 		return nil, malformedMLModelProblem(errors.New(
 			"notification correlation does not match monitor subscription",
 		))
@@ -865,19 +1182,26 @@ func (p *Processor) HandleMLModelMonitorNotification(
 		route.AcceptedRepresentation,
 		notification,
 	); validationErr != nil {
+		p.mlModelMu.Unlock()
 		return nil, malformedMLModelProblem(validationErr)
 	}
 
 	var response *backend.StandardResponse
-	switch route.Destination {
-	case nwdaf_context.MLModelRoutePartyMTLFBackend:
-		generationLease8, admitted8 := acquireBackend(p.mtlfMLModelBackend, p.mtlfAvailability)
-		if !admitted8 {
+	var generationLease *backend.GenerationLease
+	if route.Destination == nwdaf_context.MLModelRoutePartyMTLFBackend {
+		var admitted bool
+		generationLease, admitted = acquireBackend(p.mtlfMLModelBackend, p.mtlfAvailability)
+		if !admitted {
+			p.mlModelMu.Unlock()
 			return nil, mlModelUnavailableProblem()
 		}
-		if generationLease8 != nil {
-			defer generationLease8.Release()
-		}
+	}
+	p.mlModelMu.Unlock()
+	if generationLease != nil {
+		defer generationLease.Release()
+	}
+	switch route.Destination {
+	case nwdaf_context.MLModelRoutePartyMTLFBackend:
 		response, err = p.mtlfMLModelBackend.DeliverMLModelMonitorNotification(
 			requestContext,
 			body,
@@ -918,115 +1242,130 @@ func (p *Processor) HandleReplaceMLModelMonitorSubscription(
 	subscriptionID string,
 	body []byte,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
-	p.mlModelMu.Lock()
-	defer p.mlModelMu.Unlock()
-
 	parsed, err := wire.ParseMLModelMonitorSubscription(body)
 	if err != nil {
 		return nil, malformedMLModelProblem(err)
 	}
+	p.mlModelMu.Lock()
 	nwdafContext := p.nwdaf.Context()
 	if nwdafContext == nil {
+		p.mlModelMu.Unlock()
 		return nil, mlModelInternalProblem("NWDAF context is unavailable")
 	}
 	route, found := nwdafContext.GetMLModelMonitorSubscriptionRoute(subscriptionID)
 	if !found {
+		p.mlModelMu.Unlock()
 		return nil, mlModelResourceNotFoundProblem("ML Model Monitor subscription", subscriptionID)
 	}
-	if route.PeerRoute.SelectedTarget != nil {
+	revision, problem := p.beginMLModelRouteOperationLocked(
+		&route.PeerRoute,
+		nwdaf_context.MLModelRouteReplacing,
+	)
+	if problem != nil {
+		p.mlModelMu.Unlock()
+		return nil, problem
+	}
+	if !nwdafContext.UpdateMLModelMonitorSubscriptionRoute(route) {
+		p.mlModelMu.Unlock()
+		return nil, mlModelInternalProblem("could not reserve ML Model Monitor replacement")
+	}
+	isPeer := route.PeerRoute.SelectedTarget != nil
+	var generationLease *backend.GenerationLease
+	if isPeer {
 		if p.mlModelPeerConsumer == nil {
+			restoreActiveMLModelRoute(&route.PeerRoute)
+			nwdafContext.UpdateMLModelMonitorSubscriptionRoute(route)
+			p.mlModelMu.Unlock()
 			return nil, mlModelUnavailableProblem()
 		}
-		peerBody, replaceErr := wire.ReplaceStringField(
-			body,
-			"notificationUri",
-			p.publicMLModelCallbackURI("ml-model-monitor", subscriptionID),
-		)
-		if replaceErr != nil {
-			return nil, malformedMLModelProblem(replaceErr)
+	} else {
+		var admitted bool
+		generationLease, admitted = acquireBackend(p.anlfMLModelBackend, p.anlfAvailability)
+		if !admitted {
+			restoreActiveMLModelRoute(&route.PeerRoute)
+			nwdafContext.UpdateMLModelMonitorSubscriptionRoute(route)
+			p.mlModelMu.Unlock()
+			return nil, mlModelUnavailableProblem()
 		}
-		response, peerErr := p.mlModelPeerConsumer.ReplacePeerMLModelMonitorSubscription(
-			requestContext,
-			route.PeerRoute.PeerLocation,
-			peerBody,
-		)
-		if peerErr != nil {
-			if peerMissing(peerErr) {
-				nwdafContext.DeleteMLModelMonitorSubscriptionRoute(subscriptionID)
-			}
-			return nil, p.mlModelPeerProblem(peerErr)
-		}
-		externalBody := append(json.RawMessage(nil), body...)
-		if response.StatusCode == http.StatusOK {
-			externalBody, replaceErr = wire.ReplaceStringField(
-				response.Body,
-				"notificationUri",
-				parsed.NotificationURI,
-			)
-			if replaceErr != nil {
-				return nil, mlModelBadGatewayProblem(
-					"peer returned an invalid monitor representation",
-				)
-			}
-		}
-		route.AcceptedRepresentation = externalBody
-		route.BackendRepresentation = externalBody
-		route.DestinationNotificationURI = parsed.NotificationURI
-		route.NotificationCorrelationID = parsed.NotificationID
-		if response.PermanentRedirectURI != "" {
-			route.PeerRoute.PeerLocation = response.PermanentRedirectURI
-		}
-		if !nwdafContext.UpdateMLModelMonitorSubscriptionRoute(route) {
-			return nil, mlModelInternalProblem("could not update remote monitor route")
-		}
-		return &backend.StandardResponse{
-			StatusCode:  response.StatusCode,
-			ContentType: response.ContentType,
-			Body:        externalBodyForStatus(response.StatusCode, externalBody),
-		}, nil
 	}
-	generationLease9, admitted9 := acquireBackend(p.anlfMLModelBackend, p.anlfAvailability)
-	if !admitted9 {
-		return nil, mlModelUnavailableProblem()
+	callbackURI := p.anlfCallbackURI(mlModelMonitorCallbackPath)
+	if isPeer {
+		callbackURI = p.publicMLModelCallbackURI("ml-model-monitor", subscriptionID)
 	}
-	if generationLease9 != nil {
-		defer generationLease9.Release()
-	}
-	backendBody, err := wire.ReplaceStringField(
-		body, "notificationUri", p.anlfCallbackURI(mlModelMonitorCallbackPath),
-	)
+	routedBody, err := wire.ReplaceStringField(body, "notificationUri", callbackURI)
 	if err != nil {
+		restoreActiveMLModelRoute(&route.PeerRoute)
+		nwdafContext.UpdateMLModelMonitorSubscriptionRoute(route)
+		p.mlModelMu.Unlock()
 		return nil, malformedMLModelProblem(err)
 	}
-	response, err := p.anlfMLModelBackend.ReplaceMLModelMonitorSubscription(
-		requestContext, route.PeerRoute.BackendResourceID, backendBody,
-	)
-	if err != nil {
-		return nil, p.mlModelBackendProblem(err, p.anlfAvailability)
+	p.mlModelMu.Unlock()
+	if generationLease != nil {
+		defer generationLease.Release()
 	}
-	if response == nil {
-		return nil, mlModelBadGatewayProblem("AnLF backend returned no replace response")
+
+	var response *backend.StandardResponse
+	var operationErr error
+	if isPeer {
+		response, operationErr = p.mlModelPeerConsumer.ReplacePeerMLModelMonitorSubscription(
+			requestContext,
+			route.PeerRoute.PeerLocation,
+			routedBody,
+		)
+	} else {
+		response, operationErr = p.anlfMLModelBackend.ReplaceMLModelMonitorSubscription(
+			requestContext,
+			route.PeerRoute.BackendResourceID,
+			routedBody,
+		)
 	}
-	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNoContent {
-		return nil, mlModelBadGatewayProblem("AnLF backend returned an invalid replace status")
+	if operationErr != nil {
+		p.finishMonitorReplaceFailure(subscriptionID, revision, isPeer && peerMissing(operationErr))
+		if isPeer {
+			return nil, p.mlModelPeerProblem(operationErr)
+		}
+		return nil, p.mlModelBackendProblem(operationErr, p.anlfAvailability)
+	}
+	if response == nil || response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNoContent {
+		p.finishMonitorReplaceFailure(subscriptionID, revision, false)
+		return nil, mlModelBadGatewayProblem("ML Model Monitor destination returned an invalid replace response")
 	}
 	externalBody := append(json.RawMessage(nil), body...)
-	backendRepresentation := append(json.RawMessage(nil), backendBody...)
+	backendRepresentation := append(json.RawMessage(nil), routedBody...)
 	if response.StatusCode == http.StatusOK {
 		externalBody, err = wire.ReplaceStringField(response.Body, "notificationUri", parsed.NotificationURI)
 		if err != nil {
-			return nil, mlModelBadGatewayProblem("AnLF backend returned an invalid monitor representation")
+			p.finishMonitorReplaceFailure(subscriptionID, revision, false)
+			return nil, mlModelBadGatewayProblem("ML Model Monitor destination returned an invalid representation")
 		}
 		backendRepresentation = append(json.RawMessage(nil), response.Body...)
 	}
-	route.AcceptedRepresentation = externalBody
-	route.BackendRepresentation = backendRepresentation
-	route.DestinationNotificationURI = parsed.NotificationURI
-	route.NotificationCorrelationID = parsed.NotificationID
-	if !nwdafContext.UpdateMLModelMonitorSubscriptionRoute(route) {
+	p.mlModelMu.Lock()
+	current, found := nwdafContext.GetMLModelMonitorSubscriptionRoute(subscriptionID)
+	if !found || !mlModelRouteOperationCurrent(
+		current.PeerRoute,
+		nwdaf_context.MLModelRouteReplacing,
+		revision,
+	) {
+		p.mlModelMu.Unlock()
+		return nil, mlModelUnavailableProblem()
+	}
+	restoreActiveMLModelRoute(&current.PeerRoute)
+	current.AcceptedRepresentation = externalBody
+	current.BackendRepresentation = backendRepresentation
+	current.DestinationNotificationURI = parsed.NotificationURI
+	current.NotificationCorrelationID = parsed.NotificationID
+	if response.PermanentRedirectURI != "" {
+		current.PeerRoute.PeerLocation = response.PermanentRedirectURI
+	}
+	if !nwdafContext.UpdateMLModelMonitorSubscriptionRoute(current) {
+		p.mlModelMu.Unlock()
 		return nil, mlModelInternalProblem("could not update ML Model Monitor subscription route")
 	}
-	p.anlfAvailability.Refresh()
+	p.mlModelMu.Unlock()
+	if !isPeer {
+		p.anlfAvailability.Refresh()
+	}
 	return &backend.StandardResponse{
 		StatusCode:  response.StatusCode,
 		ContentType: response.ContentType,
@@ -1034,69 +1373,152 @@ func (p *Processor) HandleReplaceMLModelMonitorSubscription(
 	}, nil
 }
 
+func (p *Processor) finishMonitorReplaceFailure(
+	subscriptionID string,
+	revision uint64,
+	deleteRoute bool,
+) {
+	p.mlModelMu.Lock()
+	defer p.mlModelMu.Unlock()
+	nwdafContext := p.nwdaf.Context()
+	if nwdafContext == nil {
+		return
+	}
+	route, found := nwdafContext.GetMLModelMonitorSubscriptionRoute(subscriptionID)
+	if !found || !mlModelRouteOperationCurrent(
+		route.PeerRoute,
+		nwdaf_context.MLModelRouteReplacing,
+		revision,
+	) {
+		return
+	}
+	if deleteRoute {
+		nwdafContext.DeleteMLModelMonitorSubscriptionRoute(subscriptionID)
+		return
+	}
+	restoreActiveMLModelRoute(&route.PeerRoute)
+	nwdafContext.UpdateMLModelMonitorSubscriptionRoute(route)
+}
+
 func (p *Processor) HandleDeleteMLModelMonitorSubscription(
 	requestContext context.Context,
 	subscriptionID string,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
 	p.mlModelMu.Lock()
-	defer p.mlModelMu.Unlock()
-
 	nwdafContext := p.nwdaf.Context()
 	if nwdafContext == nil {
+		p.mlModelMu.Unlock()
 		return nil, mlModelInternalProblem("NWDAF context is unavailable")
 	}
 	if nwdafContext.ConsumeMLModelDeletionRecord(
 		nwdaf_context.MLModelResourceMonitorSubscription,
 		subscriptionID,
 	) {
-		return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+		p.mlModelMu.Unlock()
+		return noContentMLModelResponse(), nil
 	}
 	route, found := nwdafContext.GetMLModelMonitorSubscriptionRoute(subscriptionID)
 	if !found {
+		p.mlModelMu.Unlock()
 		return nil, mlModelResourceNotFoundProblem("ML Model Monitor subscription", subscriptionID)
 	}
-	if route.PeerRoute.SelectedTarget != nil {
+	revision, problem := p.beginMLModelRouteOperationLocked(
+		&route.PeerRoute,
+		nwdaf_context.MLModelRouteDeleting,
+	)
+	if problem != nil {
+		p.mlModelMu.Unlock()
+		return nil, problem
+	}
+	if !nwdafContext.UpdateMLModelMonitorSubscriptionRoute(route) {
+		p.mlModelMu.Unlock()
+		return nil, mlModelInternalProblem("could not reserve ML Model Monitor subscription deletion")
+	}
+	isPeer := route.PeerRoute.SelectedTarget != nil
+	var generationLease *backend.GenerationLease
+	if isPeer {
 		if p.mlModelPeerConsumer == nil {
+			restoreActiveMLModelRoute(&route.PeerRoute)
+			nwdafContext.UpdateMLModelMonitorSubscriptionRoute(route)
+			p.mlModelMu.Unlock()
 			return nil, mlModelUnavailableProblem()
 		}
-		response, peerErr := p.mlModelPeerConsumer.DeletePeerMLModelMonitorSubscription(
+	} else {
+		var admitted bool
+		generationLease, admitted = acquireBackend(p.anlfMLModelBackend, p.anlfAvailability)
+		if !admitted {
+			restoreActiveMLModelRoute(&route.PeerRoute)
+			nwdafContext.UpdateMLModelMonitorSubscriptionRoute(route)
+			p.mlModelMu.Unlock()
+			return nil, mlModelUnavailableProblem()
+		}
+	}
+	p.mlModelMu.Unlock()
+	if generationLease != nil {
+		defer generationLease.Release()
+	}
+
+	var response *backend.StandardResponse
+	var operationErr error
+	if isPeer {
+		response, operationErr = p.mlModelPeerConsumer.DeletePeerMLModelMonitorSubscription(
 			requestContext,
 			route.PeerRoute.PeerLocation,
 		)
-		if peerErr != nil && !peerMissing(peerErr) {
-			return nil, p.mlModelPeerProblem(peerErr)
+	} else {
+		response, operationErr = p.anlfMLModelBackend.DeleteMLModelMonitorSubscription(
+			requestContext,
+			route.PeerRoute.BackendResourceID,
+		)
+	}
+	missingDestination := peerMissing(operationErr)
+	terminal := operationErr == nil && response != nil &&
+		(response.StatusCode == http.StatusNoContent || response.StatusCode == http.StatusNotFound)
+	if missingDestination {
+		terminal = true
+	}
+
+	p.mlModelMu.Lock()
+	current, exists := nwdafContext.GetMLModelMonitorSubscriptionRoute(subscriptionID)
+	if !exists || !mlModelRouteOperationCurrent(
+		current.PeerRoute,
+		nwdaf_context.MLModelRouteDeleting,
+		revision,
+	) {
+		_, resetDeleted := nwdafContext.GetMLModelDeletionRecord(
+			nwdaf_context.MLModelResourceMonitorSubscription,
+			subscriptionID,
+		)
+		p.mlModelMu.Unlock()
+		if !exists && resetDeleted {
+			return noContentMLModelResponse(), nil
 		}
+		return nil, mlModelUnavailableProblem()
+	}
+	if terminal {
 		nwdafContext.DeleteMLModelMonitorSubscriptionRoute(subscriptionID)
-		if response == nil {
-			return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
+	} else {
+		restoreActiveMLModelRoute(&current.PeerRoute)
+		nwdafContext.UpdateMLModelMonitorSubscriptionRoute(current)
+	}
+	p.mlModelMu.Unlock()
+
+	if terminal {
+		if !isPeer {
+			p.anlfAvailability.Refresh()
+		}
+		if missingDestination || response == nil || response.StatusCode == http.StatusNotFound {
+			return noContentMLModelResponse(), nil
 		}
 		return response, nil
 	}
-	generationLease10, admitted10 := acquireBackend(p.anlfMLModelBackend, p.anlfAvailability)
-	if !admitted10 {
-		return nil, mlModelUnavailableProblem()
+	if operationErr != nil {
+		if isPeer {
+			return nil, p.mlModelPeerProblem(operationErr)
+		}
+		return nil, p.mlModelBackendProblem(operationErr, p.anlfAvailability)
 	}
-	if generationLease10 != nil {
-		defer generationLease10.Release()
-	}
-	response, err := p.anlfMLModelBackend.DeleteMLModelMonitorSubscription(
-		requestContext,
-		route.PeerRoute.BackendResourceID,
-	)
-	if err != nil {
-		return nil, p.mlModelBackendProblem(err, p.anlfAvailability)
-	}
-	if response == nil {
-		return nil, mlModelBadGatewayProblem("AnLF backend returned no delete response")
-	}
-	if response.StatusCode != http.StatusNoContent {
-		return nil, mlModelBadGatewayProblem("AnLF backend returned an invalid delete status")
-	}
-	if !nwdafContext.DeleteMLModelMonitorSubscriptionRoute(subscriptionID) {
-		return nil, mlModelInternalProblem("could not remove ML Model Monitor subscription route")
-	}
-	p.anlfAvailability.Refresh()
-	return response, nil
+	return nil, mlModelBadGatewayProblem("ML Model Monitor destination returned an invalid delete response")
 }
 
 func (p *Processor) anlfCallbackURI(path string) string {
@@ -1131,7 +1553,7 @@ func validateOutboundMLModelCallbackRoute(
 			"callback resource does not identify an outbound peer route",
 		))
 	}
-	if route.LifecycleState != nwdaf_context.MLModelRouteActive ||
+	if !mlModelRouteAcceptsCallback(route) ||
 		availability == nil ||
 		!availability.Usable() {
 		return mlModelUnavailableProblem()

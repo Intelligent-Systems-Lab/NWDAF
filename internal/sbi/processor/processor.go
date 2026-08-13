@@ -106,17 +106,20 @@ type mlModelPeerConsumer interface {
 }
 
 type Processor struct {
-	nwdaf               NwdafApp
-	eventsBackend       eventsSubscriptionBackend
-	eventsAvailability  backendAvailability
-	eventsMu            sync.Mutex
-	mlModelMu           sync.Mutex
-	mtlfMLModelBackend  mtlfMLModelBackend
-	anlfMLModelBackend  anlfMLModelBackend
-	mtlfAvailability    backendAvailability
-	anlfAvailability    backendAvailability
-	mlModelHTTPClient   *http.Client
-	mlModelPeerConsumer mlModelPeerConsumer
+	nwdaf              NwdafApp
+	eventsBackend      eventsSubscriptionBackend
+	eventsAvailability backendAvailability
+	eventsMu           sync.Mutex
+	// mlModelMu protects only in-memory ML model route transitions. Peer,
+	// backend, and callback I/O must run after releasing it.
+	mlModelMu                sync.Mutex
+	mlModelOperationRevision uint64
+	mtlfMLModelBackend       mtlfMLModelBackend
+	anlfMLModelBackend       anlfMLModelBackend
+	mtlfAvailability         backendAvailability
+	anlfAvailability         backendAvailability
+	mlModelHTTPClient        *http.Client
+	mlModelPeerConsumer      mlModelPeerConsumer
 }
 
 func (p *Processor) config() *factory.Config {

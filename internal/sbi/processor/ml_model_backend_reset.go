@@ -275,10 +275,10 @@ func (p *Processor) trainingResetCleanup(
 }
 
 func cleanupResponseAccepted(response *backend.StandardResponse, err error) bool {
-	if err != nil {
-		return false
+	if peerMissing(err) {
+		return true
 	}
-	return response != nil &&
+	return err == nil && response != nil &&
 		(response.StatusCode == http.StatusNoContent || response.StatusCode == http.StatusNotFound)
 }
 

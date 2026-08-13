@@ -25,9 +25,6 @@ func (p *Processor) handleCreateRemoteMLModelProvision(
 	body []byte,
 	target backend.SelectedTarget,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
-	p.mlModelMu.Lock()
-	defer p.mlModelMu.Unlock()
-
 	parsed, err := wire.ParseMLModelProvisionSubscription(body)
 	if err != nil {
 		return nil, malformedMLModelProblem(err)
@@ -45,6 +42,8 @@ func (p *Processor) handleCreateRemoteMLModelProvision(
 		return nil, malformedMLModelProblem(err)
 	}
 	nwdafContext := p.nwdaf.Context()
+	p.mlModelMu.Lock()
+	revision := p.nextMLModelOperationRevisionLocked()
 	if nwdafContext == nil || !nwdafContext.AddMLModelProvisionSubscriptionRoute(
 		nwdaf_context.MLModelProvisionSubscriptionRoute{
 			SubscriptionID: localRouteID,
@@ -52,6 +51,7 @@ func (p *Processor) handleCreateRemoteMLModelProvision(
 				Direction:         nwdaf_context.MLModelRouteDirectionOutbound,
 				SelectedTarget:    copySelectedTarget(target),
 				LifecycleState:    nwdaf_context.MLModelRouteCreating,
+				OperationRevision: revision,
 				ProcessGeneration: p.backendGeneration(p.anlfAvailability),
 			},
 			Initiator:                  nwdaf_context.MLModelRoutePartyAnLFBackend,
@@ -60,47 +60,50 @@ func (p *Processor) handleCreateRemoteMLModelProvision(
 			NotificationCorrelationID:  parsed.NotificationID,
 		},
 	) {
+		p.mlModelMu.Unlock()
 		return nil, mlModelInternalProblem("could not reserve remote ML Model Provision route")
 	}
+	p.mlModelMu.Unlock()
 	response, peerErr := p.mlModelPeerConsumer.CreatePeerMLModelProvision(
 		requestContext,
 		target,
 		peerBody,
 	)
 	if peerErr != nil {
-		p.finishFailedPeerProvisionCreate(requestContext, localRouteID, response)
+		p.finishFailedPeerProvisionCreate(requestContext, localRouteID, revision, response)
 		return nil, p.mlModelPeerProblem(peerErr)
 	}
 	peerLocation, err := resolvedPeerLocation(response)
 	if err != nil {
-		p.finishFailedPeerProvisionCreate(requestContext, localRouteID, response)
+		p.finishFailedPeerProvisionCreate(requestContext, localRouteID, revision, response)
 		return nil, mlModelBadGatewayProblem(err.Error())
 	}
 	backendView, err := wire.ReplaceStringField(response.Body, "notifUri", parsed.NotificationURI)
 	if err != nil {
-		p.finishFailedPeerProvisionCreate(requestContext, localRouteID, response)
+		p.finishFailedPeerProvisionCreate(requestContext, localRouteID, revision, response)
 		return nil, mlModelBadGatewayProblem("peer returned an invalid provision representation")
 	}
-	route := nwdaf_context.MLModelProvisionSubscriptionRoute{
-		SubscriptionID: localRouteID,
-		PeerRoute: nwdaf_context.MLModelPeerRoute{
-			Direction:         nwdaf_context.MLModelRouteDirectionOutbound,
-			SelectedTarget:    copySelectedTarget(target),
-			PeerLocation:      peerLocation,
-			LifecycleState:    nwdaf_context.MLModelRouteActive,
-			ProcessGeneration: p.backendGeneration(p.anlfAvailability),
-		},
-		AcceptedRepresentation:     backendView,
-		BackendRepresentation:      backendView,
-		Initiator:                  nwdaf_context.MLModelRoutePartyAnLFBackend,
-		Destination:                nwdaf_context.MLModelRoutePartyAnLFBackend,
-		DestinationNotificationURI: parsed.NotificationURI,
-		NotificationCorrelationID:  parsed.NotificationID,
+	p.mlModelMu.Lock()
+	route, found := nwdafContext.GetMLModelProvisionSubscriptionRoute(localRouteID)
+	if !found || !mlModelRouteOperationCurrent(
+		route.PeerRoute,
+		nwdaf_context.MLModelRouteCreating,
+		revision,
+	) {
+		p.mlModelMu.Unlock()
+		p.finishFailedPeerProvisionCreate(requestContext, localRouteID, revision, response)
+		return nil, mlModelUnavailableProblem()
 	}
+	route.PeerRoute.PeerLocation = peerLocation
+	restoreActiveMLModelRoute(&route.PeerRoute)
+	route.AcceptedRepresentation = backendView
+	route.BackendRepresentation = backendView
 	if !nwdafContext.UpdateMLModelProvisionSubscriptionRoute(route) {
-		p.finishFailedPeerProvisionCreate(requestContext, localRouteID, response)
+		p.mlModelMu.Unlock()
+		p.finishFailedPeerProvisionCreate(requestContext, localRouteID, revision, response)
 		return nil, mlModelInternalProblem("could not record remote ML Model Provision route")
 	}
+	p.mlModelMu.Unlock()
 	return &backend.StandardResponse{
 		StatusCode: http.StatusCreated,
 		Location: p.privateMLModelResourceLocation(
@@ -118,9 +121,6 @@ func (p *Processor) handleCreateRemoteMLModelMonitorRegistration(
 	body []byte,
 	target backend.SelectedTarget,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
-	p.mlModelMu.Lock()
-	defer p.mlModelMu.Unlock()
-
 	if _, err := wire.ParseMLModelMonitorRegistration(body); err != nil {
 		return nil, malformedMLModelProblem(err)
 	}
@@ -129,6 +129,8 @@ func (p *Processor) handleCreateRemoteMLModelMonitorRegistration(
 	}
 	localRouteID := uuid.New().String()
 	nwdafContext := p.nwdaf.Context()
+	p.mlModelMu.Lock()
+	revision := p.nextMLModelOperationRevisionLocked()
 	if nwdafContext == nil || !nwdafContext.AddMLModelMonitorRegistrationRoute(
 		nwdaf_context.MLModelMonitorRegistrationRoute{
 			RegistrationID: localRouteID,
@@ -136,44 +138,51 @@ func (p *Processor) handleCreateRemoteMLModelMonitorRegistration(
 				Direction:         nwdaf_context.MLModelRouteDirectionOutbound,
 				SelectedTarget:    copySelectedTarget(target),
 				LifecycleState:    nwdaf_context.MLModelRouteCreating,
+				OperationRevision: revision,
 				ProcessGeneration: p.backendGeneration(p.anlfAvailability),
 			},
 			Initiator: nwdaf_context.MLModelRoutePartyAnLFBackend,
 		},
 	) {
+		p.mlModelMu.Unlock()
 		return nil, mlModelInternalProblem("could not reserve remote ML Model Monitor registration")
 	}
+	p.mlModelMu.Unlock()
 	response, peerErr := p.mlModelPeerConsumer.CreatePeerMLModelMonitorRegistration(
 		requestContext,
 		target,
 		body,
 	)
 	if peerErr != nil {
-		p.finishFailedPeerRegistrationCreate(requestContext, localRouteID, response)
+		p.finishFailedPeerRegistrationCreate(requestContext, localRouteID, revision, response)
 		return nil, p.mlModelPeerProblem(peerErr)
 	}
 	peerLocation, err := resolvedPeerLocation(response)
 	if err != nil {
-		p.finishFailedPeerRegistrationCreate(requestContext, localRouteID, response)
+		p.finishFailedPeerRegistrationCreate(requestContext, localRouteID, revision, response)
 		return nil, mlModelBadGatewayProblem(err.Error())
 	}
-	route := nwdaf_context.MLModelMonitorRegistrationRoute{
-		RegistrationID: localRouteID,
-		PeerRoute: nwdaf_context.MLModelPeerRoute{
-			Direction:         nwdaf_context.MLModelRouteDirectionOutbound,
-			SelectedTarget:    copySelectedTarget(target),
-			PeerLocation:      peerLocation,
-			LifecycleState:    nwdaf_context.MLModelRouteActive,
-			ProcessGeneration: p.backendGeneration(p.anlfAvailability),
-		},
-		AcceptedRepresentation: append(json.RawMessage(nil), response.Body...),
-		BackendRepresentation:  append(json.RawMessage(nil), response.Body...),
-		Initiator:              nwdaf_context.MLModelRoutePartyAnLFBackend,
+	p.mlModelMu.Lock()
+	route, found := nwdafContext.GetMLModelMonitorRegistrationRoute(localRouteID)
+	if !found || !mlModelRouteOperationCurrent(
+		route.PeerRoute,
+		nwdaf_context.MLModelRouteCreating,
+		revision,
+	) {
+		p.mlModelMu.Unlock()
+		p.finishFailedPeerRegistrationCreate(requestContext, localRouteID, revision, response)
+		return nil, mlModelUnavailableProblem()
 	}
+	route.PeerRoute.PeerLocation = peerLocation
+	restoreActiveMLModelRoute(&route.PeerRoute)
+	route.AcceptedRepresentation = append(json.RawMessage(nil), response.Body...)
+	route.BackendRepresentation = append(json.RawMessage(nil), response.Body...)
 	if !nwdafContext.UpdateMLModelMonitorRegistrationRoute(route) {
-		p.finishFailedPeerRegistrationCreate(requestContext, localRouteID, response)
+		p.mlModelMu.Unlock()
+		p.finishFailedPeerRegistrationCreate(requestContext, localRouteID, revision, response)
 		return nil, mlModelInternalProblem("could not record remote ML Model Monitor registration")
 	}
+	p.mlModelMu.Unlock()
 	return &backend.StandardResponse{
 		StatusCode: http.StatusCreated,
 		Location: p.privateMLModelResourceLocation(
@@ -192,9 +201,6 @@ func (p *Processor) handleCreateRemoteMLModelMonitorSubscription(
 	ownerRegistrationID string,
 	target backend.SelectedTarget,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
-	p.mlModelMu.Lock()
-	defer p.mlModelMu.Unlock()
-
 	parsed, err := wire.ParseMLModelMonitorSubscription(body)
 	if err != nil {
 		return nil, malformedMLModelProblem(err)
@@ -203,13 +209,6 @@ func (p *Processor) handleCreateRemoteMLModelMonitorSubscription(
 		return nil, mlModelUnavailableProblem()
 	}
 	nwdafContext := p.nwdaf.Context()
-	normalizedOwnerID, normalizeErr := normalizeMonitorOwnerRegistrationID(
-		nwdafContext,
-		ownerRegistrationID,
-	)
-	if normalizeErr != nil {
-		return nil, malformedMLModelProblem(normalizeErr)
-	}
 	localRouteID := uuid.New().String()
 	peerBody, err := wire.ReplaceStringField(
 		body,
@@ -219,6 +218,16 @@ func (p *Processor) handleCreateRemoteMLModelMonitorSubscription(
 	if err != nil {
 		return nil, malformedMLModelProblem(err)
 	}
+	p.mlModelMu.Lock()
+	normalizedOwnerID, normalizeErr := normalizeMonitorOwnerRegistrationID(
+		nwdafContext,
+		ownerRegistrationID,
+	)
+	if normalizeErr != nil {
+		p.mlModelMu.Unlock()
+		return nil, malformedMLModelProblem(normalizeErr)
+	}
+	revision := p.nextMLModelOperationRevisionLocked()
 	if nwdafContext == nil || !nwdafContext.AddMLModelMonitorSubscriptionRoute(
 		nwdaf_context.MLModelMonitorSubscriptionRoute{
 			SubscriptionID: localRouteID,
@@ -226,6 +235,7 @@ func (p *Processor) handleCreateRemoteMLModelMonitorSubscription(
 				Direction:         nwdaf_context.MLModelRouteDirectionOutbound,
 				SelectedTarget:    copySelectedTarget(target),
 				LifecycleState:    nwdaf_context.MLModelRouteCreating,
+				OperationRevision: revision,
 				ProcessGeneration: p.backendGeneration(p.mtlfAvailability),
 			},
 			OwnerRegistrationID:        normalizedOwnerID,
@@ -234,20 +244,22 @@ func (p *Processor) handleCreateRemoteMLModelMonitorSubscription(
 			NotificationCorrelationID:  parsed.NotificationID,
 		},
 	) {
+		p.mlModelMu.Unlock()
 		return nil, mlModelInternalProblem("could not reserve remote ML Model Monitor subscription")
 	}
+	p.mlModelMu.Unlock()
 	response, peerErr := p.mlModelPeerConsumer.CreatePeerMLModelMonitorSubscription(
 		requestContext,
 		target,
 		peerBody,
 	)
 	if peerErr != nil {
-		p.finishFailedPeerMonitorCreate(requestContext, localRouteID, response)
+		p.finishFailedPeerMonitorCreate(requestContext, localRouteID, revision, response)
 		return nil, p.mlModelPeerProblem(peerErr)
 	}
 	peerLocation, err := resolvedPeerLocation(response)
 	if err != nil {
-		p.finishFailedPeerMonitorCreate(requestContext, localRouteID, response)
+		p.finishFailedPeerMonitorCreate(requestContext, localRouteID, revision, response)
 		return nil, mlModelBadGatewayProblem(err.Error())
 	}
 	backendView, err := wire.ReplaceStringField(
@@ -256,29 +268,30 @@ func (p *Processor) handleCreateRemoteMLModelMonitorSubscription(
 		parsed.NotificationURI,
 	)
 	if err != nil {
-		p.finishFailedPeerMonitorCreate(requestContext, localRouteID, response)
+		p.finishFailedPeerMonitorCreate(requestContext, localRouteID, revision, response)
 		return nil, mlModelBadGatewayProblem("peer returned an invalid monitor representation")
 	}
-	route := nwdaf_context.MLModelMonitorSubscriptionRoute{
-		SubscriptionID: localRouteID,
-		PeerRoute: nwdaf_context.MLModelPeerRoute{
-			Direction:         nwdaf_context.MLModelRouteDirectionOutbound,
-			SelectedTarget:    copySelectedTarget(target),
-			PeerLocation:      peerLocation,
-			LifecycleState:    nwdaf_context.MLModelRouteActive,
-			ProcessGeneration: p.backendGeneration(p.mtlfAvailability),
-		},
-		OwnerRegistrationID:        normalizedOwnerID,
-		AcceptedRepresentation:     backendView,
-		BackendRepresentation:      backendView,
-		Destination:                nwdaf_context.MLModelRoutePartyMTLFBackend,
-		DestinationNotificationURI: parsed.NotificationURI,
-		NotificationCorrelationID:  parsed.NotificationID,
+	p.mlModelMu.Lock()
+	route, found := nwdafContext.GetMLModelMonitorSubscriptionRoute(localRouteID)
+	if !found || !mlModelRouteOperationCurrent(
+		route.PeerRoute,
+		nwdaf_context.MLModelRouteCreating,
+		revision,
+	) {
+		p.mlModelMu.Unlock()
+		p.finishFailedPeerMonitorCreate(requestContext, localRouteID, revision, response)
+		return nil, mlModelUnavailableProblem()
 	}
+	route.PeerRoute.PeerLocation = peerLocation
+	restoreActiveMLModelRoute(&route.PeerRoute)
+	route.AcceptedRepresentation = backendView
+	route.BackendRepresentation = backendView
 	if !nwdafContext.UpdateMLModelMonitorSubscriptionRoute(route) {
-		p.finishFailedPeerMonitorCreate(requestContext, localRouteID, response)
+		p.mlModelMu.Unlock()
+		p.finishFailedPeerMonitorCreate(requestContext, localRouteID, revision, response)
 		return nil, mlModelInternalProblem("could not record remote ML Model Monitor subscription")
 	}
+	p.mlModelMu.Unlock()
 	return &backend.StandardResponse{
 		StatusCode: http.StatusCreated,
 		Location: p.privateMLModelResourceLocation(
@@ -413,99 +426,151 @@ func isActiveLocalMonitorRegistration(
 func (p *Processor) finishFailedPeerProvisionCreate(
 	requestContext context.Context,
 	routeID string,
+	revision uint64,
 	response *backend.StandardResponse,
 ) {
 	nwdafContext := p.nwdaf.Context()
 	location, err := resolvedPeerLocation(response)
 	if err != nil {
-		nwdafContext.DeleteMLModelProvisionSubscriptionRoute(routeID)
+		p.mlModelMu.Lock()
+		route, found := nwdafContext.GetMLModelProvisionSubscriptionRoute(routeID)
+		if found && mlModelRouteOperationCurrent(
+			route.PeerRoute,
+			nwdaf_context.MLModelRouteCreating,
+			revision,
+		) {
+			nwdafContext.DeleteMLModelProvisionSubscriptionRoute(routeID)
+		}
+		p.mlModelMu.Unlock()
 		return
 	}
-	_, cleanupErr := p.mlModelPeerConsumer.DeletePeerMLModelProvision(requestContext, location)
-	if cleanupErr == nil || peerMissing(cleanupErr) {
-		nwdafContext.DeleteMLModelProvisionSubscriptionRoute(routeID)
-		return
-	}
+	cleanupResponse, cleanupErr := p.mlModelPeerConsumer.DeletePeerMLModelProvision(
+		requestContext,
+		location,
+	)
+	p.mlModelMu.Lock()
+	defer p.mlModelMu.Unlock()
 	route, found := nwdafContext.GetMLModelProvisionSubscriptionRoute(routeID)
-	if !found {
+	if !found || !mlModelRouteOperationCurrent(
+		route.PeerRoute,
+		nwdaf_context.MLModelRouteCreating,
+		revision,
+	) {
+		return
+	}
+	if cleanupResponseAccepted(cleanupResponse, cleanupErr) {
+		nwdafContext.DeleteMLModelProvisionSubscriptionRoute(routeID)
 		return
 	}
 	route.PeerRoute.PeerLocation = location
-	markPeerRoutePendingCleanup(&route.PeerRoute)
+	p.markPeerRoutePendingCleanupLocked(&route.PeerRoute)
 	route.AcceptedRepresentation = nil
 	route.BackendRepresentation = nil
 	route.DestinationNotificationURI = ""
 	route.NotificationCorrelationID = ""
 	nwdafContext.UpdateMLModelProvisionSubscriptionRoute(route)
-	logPeerCleanupError("compensate peer provision create", cleanupErr)
+	logPeerCleanupFailure("compensate peer provision create", cleanupResponse, cleanupErr)
 }
 
 func (p *Processor) finishFailedPeerRegistrationCreate(
 	requestContext context.Context,
 	routeID string,
+	revision uint64,
 	response *backend.StandardResponse,
 ) {
 	nwdafContext := p.nwdaf.Context()
 	location, err := resolvedPeerLocation(response)
 	if err != nil {
-		nwdafContext.DeleteMLModelMonitorRegistrationRoute(routeID)
+		p.mlModelMu.Lock()
+		route, found := nwdafContext.GetMLModelMonitorRegistrationRoute(routeID)
+		if found && mlModelRouteOperationCurrent(
+			route.PeerRoute,
+			nwdaf_context.MLModelRouteCreating,
+			revision,
+		) {
+			nwdafContext.DeleteMLModelMonitorRegistrationRoute(routeID)
+		}
+		p.mlModelMu.Unlock()
 		return
 	}
-	_, cleanupErr := p.mlModelPeerConsumer.DeletePeerMLModelMonitorRegistration(
+	cleanupResponse, cleanupErr := p.mlModelPeerConsumer.DeletePeerMLModelMonitorRegistration(
 		requestContext,
 		location,
 	)
-	if cleanupErr == nil || peerMissing(cleanupErr) {
+	p.mlModelMu.Lock()
+	defer p.mlModelMu.Unlock()
+	route, found := nwdafContext.GetMLModelMonitorRegistrationRoute(routeID)
+	if !found || !mlModelRouteOperationCurrent(
+		route.PeerRoute,
+		nwdaf_context.MLModelRouteCreating,
+		revision,
+	) {
+		return
+	}
+	if cleanupResponseAccepted(cleanupResponse, cleanupErr) {
 		nwdafContext.DeleteMLModelMonitorRegistrationRoute(routeID)
 		return
 	}
-	route, found := nwdafContext.GetMLModelMonitorRegistrationRoute(routeID)
-	if !found {
-		return
-	}
 	route.PeerRoute.PeerLocation = location
-	markPeerRoutePendingCleanup(&route.PeerRoute)
+	p.markPeerRoutePendingCleanupLocked(&route.PeerRoute)
 	route.AcceptedRepresentation = nil
 	route.BackendRepresentation = nil
 	nwdafContext.UpdateMLModelMonitorRegistrationRoute(route)
-	logPeerCleanupError("compensate peer monitor registration create", cleanupErr)
+	logPeerCleanupFailure("compensate peer monitor registration create", cleanupResponse, cleanupErr)
 }
 
 func (p *Processor) finishFailedPeerMonitorCreate(
 	requestContext context.Context,
 	routeID string,
+	revision uint64,
 	response *backend.StandardResponse,
 ) {
 	nwdafContext := p.nwdaf.Context()
 	location, err := resolvedPeerLocation(response)
 	if err != nil {
-		nwdafContext.DeleteMLModelMonitorSubscriptionRoute(routeID)
+		p.mlModelMu.Lock()
+		route, found := nwdafContext.GetMLModelMonitorSubscriptionRoute(routeID)
+		if found && mlModelRouteOperationCurrent(
+			route.PeerRoute,
+			nwdaf_context.MLModelRouteCreating,
+			revision,
+		) {
+			nwdafContext.DeleteMLModelMonitorSubscriptionRoute(routeID)
+		}
+		p.mlModelMu.Unlock()
 		return
 	}
-	_, cleanupErr := p.mlModelPeerConsumer.DeletePeerMLModelMonitorSubscription(
+	cleanupResponse, cleanupErr := p.mlModelPeerConsumer.DeletePeerMLModelMonitorSubscription(
 		requestContext,
 		location,
 	)
-	if cleanupErr == nil || peerMissing(cleanupErr) {
+	p.mlModelMu.Lock()
+	defer p.mlModelMu.Unlock()
+	route, found := nwdafContext.GetMLModelMonitorSubscriptionRoute(routeID)
+	if !found || !mlModelRouteOperationCurrent(
+		route.PeerRoute,
+		nwdaf_context.MLModelRouteCreating,
+		revision,
+	) {
+		return
+	}
+	if cleanupResponseAccepted(cleanupResponse, cleanupErr) {
 		nwdafContext.DeleteMLModelMonitorSubscriptionRoute(routeID)
 		return
 	}
-	route, found := nwdafContext.GetMLModelMonitorSubscriptionRoute(routeID)
-	if !found {
-		return
-	}
 	route.PeerRoute.PeerLocation = location
-	markPeerRoutePendingCleanup(&route.PeerRoute)
+	p.markPeerRoutePendingCleanupLocked(&route.PeerRoute)
 	route.OwnerRegistrationID = ""
 	route.AcceptedRepresentation = nil
 	route.BackendRepresentation = nil
 	route.DestinationNotificationURI = ""
 	route.NotificationCorrelationID = ""
 	nwdafContext.UpdateMLModelMonitorSubscriptionRoute(route)
-	logPeerCleanupError("compensate peer monitor subscription create", cleanupErr)
+	logPeerCleanupFailure("compensate peer monitor subscription create", cleanupResponse, cleanupErr)
 }
 
-func markPeerRoutePendingCleanup(route *nwdaf_context.MLModelPeerRoute) {
+func (p *Processor) markPeerRoutePendingCleanupLocked(route *nwdaf_context.MLModelPeerRoute) {
+	route.OperationRevision = p.nextMLModelOperationRevisionLocked()
 	route.LifecycleState = nwdaf_context.MLModelRoutePendingCleanup
 	route.ProcessGeneration = ""
 	route.CleanupAttempts = 1
@@ -541,72 +606,184 @@ func (p *Processor) ReconcilePendingMLModelPeerCleanup(
 	requestContext context.Context,
 	now time.Time,
 ) {
-	p.mlModelMu.Lock()
-	defer p.mlModelMu.Unlock()
 	if p.mlModelPeerConsumer == nil || p.nwdaf == nil || p.nwdaf.Context() == nil {
 		return
 	}
 	nwdafContext := p.nwdaf.Context()
 	for _, route := range nwdafContext.GetAllMLModelProvisionSubscriptionRoutes() {
-		if !peerCleanupDue(route.PeerRoute, now) {
-			continue
-		}
-		_, err := p.mlModelPeerConsumer.DeletePeerMLModelProvision(
-			requestContext,
-			route.PeerRoute.PeerLocation,
-		)
-		if err == nil || peerMissing(err) {
-			nwdafContext.DeleteMLModelProvisionSubscriptionRoute(route.SubscriptionID)
-			continue
-		}
-		scheduleNextPeerCleanup(&route.PeerRoute, now)
-		nwdafContext.UpdateMLModelProvisionSubscriptionRoute(route)
+		p.reconcilePendingProvisionCleanup(requestContext, route.SubscriptionID, now)
 	}
 	for _, route := range nwdafContext.GetAllMLModelMonitorRegistrationRoutes() {
-		if !peerCleanupDue(route.PeerRoute, now) {
-			continue
-		}
-		_, err := p.mlModelPeerConsumer.DeletePeerMLModelMonitorRegistration(
-			requestContext,
-			route.PeerRoute.PeerLocation,
-		)
-		if err == nil || peerMissing(err) {
-			nwdafContext.DeleteMLModelMonitorRegistrationRoute(route.RegistrationID)
-			continue
-		}
-		scheduleNextPeerCleanup(&route.PeerRoute, now)
-		nwdafContext.UpdateMLModelMonitorRegistrationRoute(route)
+		p.reconcilePendingRegistrationCleanup(requestContext, route.RegistrationID, now)
 	}
 	for _, route := range nwdafContext.GetAllMLModelMonitorSubscriptionRoutes() {
-		if !peerCleanupDue(route.PeerRoute, now) {
-			continue
-		}
-		_, err := p.mlModelPeerConsumer.DeletePeerMLModelMonitorSubscription(
-			requestContext,
-			route.PeerRoute.PeerLocation,
-		)
-		if err == nil || peerMissing(err) {
-			nwdafContext.DeleteMLModelMonitorSubscriptionRoute(route.SubscriptionID)
-			continue
-		}
-		scheduleNextPeerCleanup(&route.PeerRoute, now)
-		nwdafContext.UpdateMLModelMonitorSubscriptionRoute(route)
+		p.reconcilePendingMonitorCleanup(requestContext, route.SubscriptionID, now)
 	}
 	for _, route := range nwdafContext.GetAllMLModelTrainingSubscriptionRoutes() {
-		if !peerCleanupDue(route.PeerRoute, now) {
-			continue
-		}
-		_, err := p.mlModelPeerConsumer.DeletePeerMLModelTraining(
-			requestContext,
-			route.PeerRoute.PeerLocation,
-		)
-		if err == nil || peerMissing(err) {
-			nwdafContext.DeleteMLModelTrainingSubscriptionRoute(route.SubscriptionID)
-			continue
-		}
-		scheduleNextPeerCleanup(&route.PeerRoute, now)
-		nwdafContext.UpdateMLModelTrainingSubscriptionRoute(route)
+		p.reconcilePendingTrainingCleanup(requestContext, route.SubscriptionID, now)
 	}
+}
+
+func (p *Processor) reconcilePendingProvisionCleanup(
+	ctx context.Context,
+	id string,
+	now time.Time,
+) {
+	nwdafContext := p.nwdaf.Context()
+	p.mlModelMu.Lock()
+	route, found := nwdafContext.GetMLModelProvisionSubscriptionRoute(id)
+	if !found || !peerCleanupDue(route.PeerRoute, now) {
+		p.mlModelMu.Unlock()
+		return
+	}
+	revision := p.claimPendingCleanupLocked(&route.PeerRoute)
+	nwdafContext.UpdateMLModelProvisionSubscriptionRoute(route)
+	p.mlModelMu.Unlock()
+
+	response, err := p.mlModelPeerConsumer.DeletePeerMLModelProvision(
+		ctx,
+		route.PeerRoute.PeerLocation,
+	)
+	p.mlModelMu.Lock()
+	current, found := nwdafContext.GetMLModelProvisionSubscriptionRoute(id)
+	if found && mlModelRouteOperationCurrent(
+		current.PeerRoute,
+		nwdaf_context.MLModelRouteDeleting,
+		revision,
+	) {
+		if cleanupResponseAccepted(response, err) {
+			nwdafContext.DeleteMLModelProvisionSubscriptionRoute(id)
+		} else {
+			current.PeerRoute.LifecycleState = nwdaf_context.MLModelRoutePendingCleanup
+			scheduleNextPeerCleanup(&current.PeerRoute, now)
+			nwdafContext.UpdateMLModelProvisionSubscriptionRoute(current)
+			logPeerCleanupFailure("retry peer provision cleanup", response, err)
+		}
+	}
+	p.mlModelMu.Unlock()
+}
+
+func (p *Processor) reconcilePendingRegistrationCleanup(
+	ctx context.Context,
+	id string,
+	now time.Time,
+) {
+	nwdafContext := p.nwdaf.Context()
+	p.mlModelMu.Lock()
+	route, found := nwdafContext.GetMLModelMonitorRegistrationRoute(id)
+	if !found || !peerCleanupDue(route.PeerRoute, now) {
+		p.mlModelMu.Unlock()
+		return
+	}
+	revision := p.claimPendingCleanupLocked(&route.PeerRoute)
+	nwdafContext.UpdateMLModelMonitorRegistrationRoute(route)
+	p.mlModelMu.Unlock()
+
+	response, err := p.mlModelPeerConsumer.DeletePeerMLModelMonitorRegistration(
+		ctx,
+		route.PeerRoute.PeerLocation,
+	)
+	p.mlModelMu.Lock()
+	current, found := nwdafContext.GetMLModelMonitorRegistrationRoute(id)
+	if found && mlModelRouteOperationCurrent(
+		current.PeerRoute,
+		nwdaf_context.MLModelRouteDeleting,
+		revision,
+	) {
+		if cleanupResponseAccepted(response, err) {
+			nwdafContext.DeleteMLModelMonitorRegistrationRoute(id)
+		} else {
+			current.PeerRoute.LifecycleState = nwdaf_context.MLModelRoutePendingCleanup
+			scheduleNextPeerCleanup(&current.PeerRoute, now)
+			nwdafContext.UpdateMLModelMonitorRegistrationRoute(current)
+			logPeerCleanupFailure("retry peer monitor registration cleanup", response, err)
+		}
+	}
+	p.mlModelMu.Unlock()
+}
+
+func (p *Processor) reconcilePendingMonitorCleanup(
+	ctx context.Context,
+	id string,
+	now time.Time,
+) {
+	nwdafContext := p.nwdaf.Context()
+	p.mlModelMu.Lock()
+	route, found := nwdafContext.GetMLModelMonitorSubscriptionRoute(id)
+	if !found || !peerCleanupDue(route.PeerRoute, now) {
+		p.mlModelMu.Unlock()
+		return
+	}
+	revision := p.claimPendingCleanupLocked(&route.PeerRoute)
+	nwdafContext.UpdateMLModelMonitorSubscriptionRoute(route)
+	p.mlModelMu.Unlock()
+
+	response, err := p.mlModelPeerConsumer.DeletePeerMLModelMonitorSubscription(
+		ctx,
+		route.PeerRoute.PeerLocation,
+	)
+	p.mlModelMu.Lock()
+	current, found := nwdafContext.GetMLModelMonitorSubscriptionRoute(id)
+	if found && mlModelRouteOperationCurrent(
+		current.PeerRoute,
+		nwdaf_context.MLModelRouteDeleting,
+		revision,
+	) {
+		if cleanupResponseAccepted(response, err) {
+			nwdafContext.DeleteMLModelMonitorSubscriptionRoute(id)
+		} else {
+			current.PeerRoute.LifecycleState = nwdaf_context.MLModelRoutePendingCleanup
+			scheduleNextPeerCleanup(&current.PeerRoute, now)
+			nwdafContext.UpdateMLModelMonitorSubscriptionRoute(current)
+			logPeerCleanupFailure("retry peer monitor subscription cleanup", response, err)
+		}
+	}
+	p.mlModelMu.Unlock()
+}
+
+func (p *Processor) reconcilePendingTrainingCleanup(
+	ctx context.Context,
+	id string,
+	now time.Time,
+) {
+	nwdafContext := p.nwdaf.Context()
+	p.mlModelMu.Lock()
+	route, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(id)
+	if !found || !peerCleanupDue(route.PeerRoute, now) {
+		p.mlModelMu.Unlock()
+		return
+	}
+	revision := p.claimPendingCleanupLocked(&route.PeerRoute)
+	nwdafContext.UpdateMLModelTrainingSubscriptionRoute(route)
+	p.mlModelMu.Unlock()
+
+	response, err := p.mlModelPeerConsumer.DeletePeerMLModelTraining(
+		ctx,
+		route.PeerRoute.PeerLocation,
+	)
+	p.mlModelMu.Lock()
+	current, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(id)
+	if found && mlModelRouteOperationCurrent(
+		current.PeerRoute,
+		nwdaf_context.MLModelRouteDeleting,
+		revision,
+	) {
+		if cleanupResponseAccepted(response, err) {
+			nwdafContext.DeleteMLModelTrainingSubscriptionRoute(id)
+		} else {
+			current.PeerRoute.LifecycleState = nwdaf_context.MLModelRoutePendingCleanup
+			scheduleNextPeerCleanup(&current.PeerRoute, now)
+			nwdafContext.UpdateMLModelTrainingSubscriptionRoute(current)
+			logPeerCleanupFailure("retry peer training cleanup", response, err)
+		}
+	}
+	p.mlModelMu.Unlock()
+}
+
+func (p *Processor) claimPendingCleanupLocked(route *nwdaf_context.MLModelPeerRoute) uint64 {
+	route.OperationRevision = p.nextMLModelOperationRevisionLocked()
+	route.LifecycleState = nwdaf_context.MLModelRouteDeleting
+	return route.OperationRevision
 }
 
 func peerCleanupDue(route nwdaf_context.MLModelPeerRoute, now time.Time) bool {
@@ -624,4 +801,20 @@ func logPeerCleanupError(operation string, err error) {
 	if err != nil {
 		logger.ProcLog.Warnf("%s failed: %v", operation, err)
 	}
+}
+
+func logPeerCleanupFailure(
+	operation string,
+	response *backend.StandardResponse,
+	err error,
+) {
+	if err != nil {
+		logPeerCleanupError(operation, err)
+		return
+	}
+	logger.ProcLog.Warnf(
+		"%s returned an invalid response: status=%d",
+		operation,
+		cleanupStatus(response),
+	)
 }
