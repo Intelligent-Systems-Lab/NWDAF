@@ -21,12 +21,26 @@ func (s *Server) nwdafContextRoutes() []Route {
 func (s *Server) GetContainingNwdafContext(c *gin.Context) {
 	context := nwdaf_context.GetSelf()
 	if context == nil {
-		c.Status(http.StatusServiceUnavailable)
+		c.AbortWithStatus(http.StatusServiceUnavailable)
 		return
 	}
+	projection, err := context.FLCapabilityProjection()
+	if err != nil {
+		mtlfLog.Warnf("Cannot project containing NWDAF FL capabilities: %v", err)
+		c.AbortWithStatus(http.StatusServiceUnavailable)
+		return
+	}
+	capabilities := make([]backend.MLAnalyticsCapability, len(projection))
+	for index, entry := range projection {
+		capabilities[index] = backend.MLAnalyticsCapability{
+			MLAnalyticsIDs:   entry.MLAnalyticsIDs,
+			FLCapabilityType: entry.FLCapabilityType,
+		}
+	}
 	c.JSON(http.StatusOK, backend.NwdafContextResponse{
-		NFInstanceID:    context.NfId,
-		APIRoot:         s.publicCallbackBaseURI,
-		InternalAPIRoot: s.internalAPIBaseURI,
+		NFInstanceID:            context.NfId,
+		APIRoot:                 s.publicCallbackBaseURI,
+		InternalAPIRoot:         s.internalAPIBaseURI,
+		MLAnalyticsCapabilities: capabilities,
 	})
 }

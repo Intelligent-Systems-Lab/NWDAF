@@ -4,6 +4,7 @@ import (
 	"time"
 
 	adrfcompat "github.com/free5gc/nwdaf/internal/compat/adrf"
+	compatnrf "github.com/free5gc/nwdaf/internal/compat/nrf"
 	"github.com/free5gc/openapi/models"
 )
 
@@ -28,9 +29,15 @@ type HealthResponse struct {
 }
 
 type NwdafContextResponse struct {
-	NFInstanceID    string `json:"nfInstanceId"`
-	APIRoot         string `json:"apiRoot"`
-	InternalAPIRoot string `json:"internalApiRoot"`
+	NFInstanceID            string                  `json:"nfInstanceId"`
+	APIRoot                 string                  `json:"apiRoot"`
+	InternalAPIRoot         string                  `json:"internalApiRoot"`
+	MLAnalyticsCapabilities []MLAnalyticsCapability `json:"mlAnalyticsCapabilities,omitempty"`
+}
+
+type MLAnalyticsCapability struct {
+	MLAnalyticsIDs   []models.NwdafEvent        `json:"mlAnalyticsIds"`
+	FLCapabilityType compatnrf.FLCapabilityType `json:"flCapabilityType"`
 }
 
 type StoredDataSpec struct {

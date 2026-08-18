@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 
@@ -306,6 +307,11 @@ type NFManagementConfig struct {
 	NwdafInfo    *compatnrf.NwdafInfo
 }
 
+type FLCapabilityProjectionEntry struct {
+	MLAnalyticsIDs   []models.NwdafEvent
+	FLCapabilityType compatnrf.FLCapabilityType
+}
+
 func (c *NWDAFContext) ConfigureNFManagement(config NFManagementConfig) error {
 	if c == nil {
 		return fmt.Errorf("NWDAF context is nil")
@@ -484,6 +490,80 @@ func (c *NWDAFContext) NFProfileSnapshot() (compatnrf.NFProfile, error) {
 		return compatnrf.NFProfile{}, fmt.Errorf("decode NF profile snapshot: %w", err)
 	}
 	return snapshot, nil
+}
+
+func (c *NWDAFContext) FLCapabilityProjection() ([]FLCapabilityProjectionEntry, error) {
+	profile, err := c.NFProfileSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(profile.NfInstanceId) == "" ||
+		profile.NfType != models.NrfNfManagementNfType_NWDAF ||
+		profile.NfStatus != models.NrfNfManagementNfStatus_REGISTERED {
+		return nil, fmt.Errorf("NF profile snapshot is not initialized for NWDAF registration")
+	}
+
+	projection := make([]FLCapabilityProjectionEntry, 0)
+	if profile.NwdafInfo == nil {
+		return projection, nil
+	}
+	for index, entry := range profile.NwdafInfo.MLAnalyticsList {
+		if entry.FLCapabilityType == "" {
+			continue
+		}
+		if !compatnrf.IsKnownFLCapability(entry.FLCapabilityType) {
+			return nil, fmt.Errorf(
+				"NF profile mlAnalyticsList[%d] has unsupported flCapabilityType %q",
+				index,
+				entry.FLCapabilityType,
+			)
+		}
+		if len(entry.MLAnalyticsIDs) == 0 {
+			return nil, fmt.Errorf(
+				"NF profile mlAnalyticsList[%d] requires mlAnalyticsIds for FL capability",
+				index,
+			)
+		}
+
+		analyticsIDs := append([]models.NwdafEvent(nil), entry.MLAnalyticsIDs...)
+		for analyticsIndex, analyticsID := range analyticsIDs {
+			if value := string(analyticsID); value == "" || strings.TrimSpace(value) != value {
+				return nil, fmt.Errorf(
+					"NF profile mlAnalyticsList[%d].mlAnalyticsIds[%d] is invalid",
+					index,
+					analyticsIndex,
+				)
+			}
+		}
+		slices.SortFunc(analyticsIDs, func(left, right models.NwdafEvent) int {
+			return strings.Compare(string(left), string(right))
+		})
+		analyticsIDs = slices.Compact(analyticsIDs)
+		projection = append(projection, FLCapabilityProjectionEntry{
+			MLAnalyticsIDs:   analyticsIDs,
+			FLCapabilityType: entry.FLCapabilityType,
+		})
+	}
+
+	slices.SortFunc(projection, func(left, right FLCapabilityProjectionEntry) int {
+		return strings.Compare(flCapabilityProjectionKey(left), flCapabilityProjectionKey(right))
+	})
+	projection = slices.CompactFunc(
+		projection,
+		func(left, right FLCapabilityProjectionEntry) bool {
+			return flCapabilityProjectionKey(left) == flCapabilityProjectionKey(right)
+		},
+	)
+	return projection, nil
+}
+
+func flCapabilityProjectionKey(entry FLCapabilityProjectionEntry) string {
+	values := make([]string, 0, len(entry.MLAnalyticsIDs)+1)
+	values = append(values, string(entry.FLCapabilityType))
+	for _, analyticsID := range entry.MLAnalyticsIDs {
+		values = append(values, string(analyticsID))
+	}
+	return strings.Join(values, "\x00")
 }
 
 func (c *NWDAFContext) MarkRegistered(resourceURI string) {

@@ -290,6 +290,114 @@ func TestConfigureNFManagementAdvertisesMLAnalyticsWithoutEventsCapability(t *te
 	}
 }
 
+func TestFLCapabilityProjectionCanonicalizesAdvertisedCapabilities(t *testing.T) {
+	t.Parallel()
+
+	ctx := &NWDAFContext{NfId: "11111111-1111-4111-8111-111111111111"}
+	if err := ctx.ConfigureNFManagement(NFManagementConfig{
+		NrfURI:       "http://127.0.0.10:8000",
+		NwdafName:    "NWDAF",
+		SBIURI:       "http://192.0.2.10:8080",
+		SBIScheme:    "http",
+		RegisterIPv4: "192.0.2.10",
+		SBIPort:      8080,
+		NwdafInfo: &compatnrf.NwdafInfo{
+			MLAnalyticsList: []compatnrf.MLAnalyticsInfo{
+				{
+					MLAnalyticsIDs: []models.NwdafEvent{
+						models.NwdafEvent_UE_MOBILITY,
+						models.NwdafEvent_UE_COMMUNICATION,
+						models.NwdafEvent_UE_COMMUNICATION,
+					},
+					FLCapabilityType: compatnrf.FLCapabilityTypeServerAndClient,
+				},
+				{
+					MLAnalyticsIDs:   []models.NwdafEvent{models.NwdafEvent_UE_COMMUNICATION},
+					FLCapabilityType: compatnrf.FLCapabilityTypeClient,
+				},
+				{
+					MLAnalyticsIDs:   []models.NwdafEvent{models.NwdafEvent_UE_COMMUNICATION},
+					FLCapabilityType: compatnrf.FLCapabilityTypeClient,
+					NFSetIDList:      []string{"set-that-is-not-projected"},
+				},
+				{
+					MLAnalyticsIDs: []models.NwdafEvent{models.NwdafEvent_UE_COMMUNICATION},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("ConfigureNFManagement() error = %v", err)
+	}
+
+	projection, err := ctx.FLCapabilityProjection()
+	if err != nil {
+		t.Fatalf("FLCapabilityProjection() error = %v", err)
+	}
+	if len(projection) != 2 {
+		t.Fatalf("projection = %+v, want 2 canonical entries", projection)
+	}
+	if projection[0].FLCapabilityType != compatnrf.FLCapabilityTypeClient ||
+		len(projection[0].MLAnalyticsIDs) != 1 ||
+		projection[0].MLAnalyticsIDs[0] != models.NwdafEvent_UE_COMMUNICATION {
+		t.Fatalf("projection[0] = %+v", projection[0])
+	}
+	if projection[1].FLCapabilityType != compatnrf.FLCapabilityTypeServerAndClient ||
+		len(projection[1].MLAnalyticsIDs) != 2 ||
+		projection[1].MLAnalyticsIDs[0] != models.NwdafEvent_UE_COMMUNICATION ||
+		projection[1].MLAnalyticsIDs[1] != models.NwdafEvent_UE_MOBILITY {
+		t.Fatalf("projection[1] = %+v", projection[1])
+	}
+}
+
+func TestFLCapabilityProjectionRejectsInvalidProfile(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]*NWDAFContext{
+		"unconfigured profile": {
+			NfId: "11111111-1111-4111-8111-111111111111",
+		},
+		"unsupported capability": configuredContextWithMLAnalytics(t, []compatnrf.MLAnalyticsInfo{{
+			MLAnalyticsIDs:   []models.NwdafEvent{models.NwdafEvent_UE_COMMUNICATION},
+			FLCapabilityType: compatnrf.FLCapabilityType("UNKNOWN"),
+		}}),
+		"missing analytics IDs": configuredContextWithMLAnalytics(t, []compatnrf.MLAnalyticsInfo{{
+			FLCapabilityType: compatnrf.FLCapabilityTypeServer,
+		}}),
+	}
+
+	for name, ctx := range tests {
+		ctx := ctx
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if projection, err := ctx.FLCapabilityProjection(); err == nil {
+				t.Fatalf("FLCapabilityProjection() = %+v, want error", projection)
+			}
+		})
+	}
+}
+
+func configuredContextWithMLAnalytics(
+	t *testing.T,
+	entries []compatnrf.MLAnalyticsInfo,
+) *NWDAFContext {
+	t.Helper()
+	ctx := &NWDAFContext{NfId: "11111111-1111-4111-8111-111111111111"}
+	if err := ctx.ConfigureNFManagement(NFManagementConfig{
+		NrfURI:       "http://127.0.0.10:8000",
+		NwdafName:    "NWDAF",
+		SBIURI:       "http://192.0.2.10:8080",
+		SBIScheme:    "http",
+		RegisterIPv4: "192.0.2.10",
+		SBIPort:      8080,
+		NwdafInfo: &compatnrf.NwdafInfo{
+			MLAnalyticsList: entries,
+		},
+	}); err != nil {
+		t.Fatalf("ConfigureNFManagement() error = %v", err)
+	}
+	return ctx
+}
+
 func mustProfileSnapshot(t *testing.T, ctx *NWDAFContext) compatnrf.NFProfile {
 	t.Helper()
 	profile, err := ctx.NFProfileSnapshot()
