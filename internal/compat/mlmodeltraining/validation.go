@@ -313,16 +313,15 @@ func validateNotificationShape(value *NwdafMLModelTrainNotif) error {
 	}
 	hasDelay := value.DelayEventNotification != nil
 	hasModels := len(value.MLModelInfos) > 0
-	hasStatusReport := value.StatusReport != nil
 	hasTermination := value.TerminationRequest != ""
-	if !hasDelay && !hasModels && !hasStatusReport && !hasTermination {
+	if !hasDelay && !hasModels && !hasTermination {
 		return errors.New(
-			"at least one of delayEventNotif, mLModelInfos, statusReport or termTrainReq is required",
+			"at least one of delayEventNotif, mLModelInfos or termTrainReq is required",
 		)
 	}
-	if hasDelay && (hasModels || hasStatusReport || hasTermination) {
+	if hasDelay && (hasModels || hasTermination) {
 		return errors.New(
-			"delayEventNotif cannot coexist with mLModelInfos, statusReport or termTrainReq",
+			"delayEventNotif cannot coexist with mLModelInfos or termTrainReq",
 		)
 	}
 	if value.MLModelInfos != nil && !hasModels {

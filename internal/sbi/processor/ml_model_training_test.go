@@ -60,7 +60,7 @@ func TestMLModelTrainingCreateReturnsPublicRouteAndInternalizesCallback(t *testi
 	}
 }
 
-func TestMLModelTrainingStatusReportOnlyCallbackIsRelayed(t *testing.T) {
+func TestMLModelTrainingNotificationContractIsAppliedBeforeRelay(t *testing.T) {
 	var delivered string
 	callback := httptest.NewServer(http.HandlerFunc(func(
 		writer http.ResponseWriter,
@@ -110,10 +110,29 @@ func TestMLModelTrainingStatusReportOnlyCallbackIsRelayed(t *testing.T) {
 	response, problem := processor.HandleMLModelTrainingNotification(
 		context.Background(), "", notification,
 	)
-	if problem != nil || response.StatusCode != http.StatusNoContent {
+	if problem == nil || response != nil {
+		t.Fatalf("callback response=%+v problem=%+v, want validation problem", response, problem)
+	}
+	if delivered != "" {
+		t.Fatalf("invalid callback was relayed: %s", delivered)
+	}
+
+	validNotification := []byte(`{
+		"notifCorreId":"prep-client-a",
+		"mlCorreId":"fl-process-001",
+		"mLModelInfos":[{
+			"event":"UE_COMMUNICATION",
+			"mLFileAddr":{"mLModelUrl":"http://client.example/preparation-result"}
+		}],
+		"termTrainReq":"NOT_AVAILABLE_ML_TRAIN"
+	}`)
+	response, problem = processor.HandleMLModelTrainingNotification(
+		context.Background(), "", validNotification,
+	)
+	if problem != nil || response == nil || response.StatusCode != http.StatusNoContent {
 		t.Fatalf("callback response=%+v problem=%+v", response, problem)
 	}
-	if delivered != string(notification) {
+	if delivered != string(validNotification) {
 		t.Fatalf("delivered body = %s", delivered)
 	}
 }

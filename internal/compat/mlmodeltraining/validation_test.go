@@ -95,26 +95,18 @@ func TestFLNotificationMatchesProcessAndRound(t *testing.T) {
 	}
 }
 
-func TestFLPreparationStatusReportOnlyNotification(t *testing.T) {
+func TestFLPreparationStatusReportOnlyNotificationIsRejected(t *testing.T) {
 	t.Parallel()
 
-	value, err := ParseNwdafMLModelTrainNotif([]byte(`{
+	_, err := ParseNwdafMLModelTrainNotif([]byte(`{
 		"notifCorreId":"preparation-client-a",
 		"mlCorreId":"fl-process-001",
 		"statusReport":{
 			"trainInDataInfo":{"samplRatio":100}
 		}
 	}`))
-	if err != nil {
-		t.Fatalf("ParseNwdafMLModelTrainNotif() error = %v", err)
-	}
-	existing := &TrainingResourceIdentity{
-		SubscriptionID:            "sub-1",
-		MLCorrelationID:           "fl-process-001",
-		NotificationCorrelationID: "preparation-client-a",
-	}
-	if validationErr := ValidateFLNotification(value, existing); validationErr != nil {
-		t.Fatalf("ValidateFLNotification() error = %v", validationErr)
+	if err == nil {
+		t.Fatal("statusReport-only preparation notification unexpectedly passed validation")
 	}
 }
 

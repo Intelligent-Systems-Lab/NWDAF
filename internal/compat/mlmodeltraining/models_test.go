@@ -165,10 +165,16 @@ func TestTrainingNotificationCombinationRules(t *testing.T) {
 
 	valid := []string{
 		`{"notifCorreId":"corr","delayEventNotif":{"delayEventInd":true}}`,
+		`{"notifCorreId":"corr","delayEventNotif":{"delayEventInd":true},
+			"statusReport":{"mlModelAcc":92}}`,
 		`{"notifCorreId":"corr","mLModelInfos":[{
 			"event":"UE_COMMUNICATION",
 			"mLFileAddr":{"mLModelUrl":"http://client.example/local-model"}
 		}]}`,
+		`{"notifCorreId":"corr","mLModelInfos":[{
+			"event":"UE_COMMUNICATION",
+			"mLFileAddr":{"mLModelUrl":"http://client.example/local-model"}
+		}],"statusReport":{"mlModelAcc":92}}`,
 		`{"notifCorreId":"corr","termTrainReq":"OTHERS"}`,
 		`{"notifCorreId":"corr","mLModelInfos":[{
 			"event":"UE_COMMUNICATION",
@@ -183,6 +189,12 @@ func TestTrainingNotificationCombinationRules(t *testing.T) {
 
 	invalid := []string{
 		`{"notifCorreId":"corr"}`,
+		`{"notifCorreId":"corr","statusReport":{"mlModelAcc":92}}`,
+		`{"notifCorreId":"corr","delayEventNotif":{"delayEventInd":true},
+			"mLModelInfos":[{
+				"event":"UE_COMMUNICATION",
+				"mLFileAddr":{"mLModelUrl":"http://client.example/local-model"}
+			}]}`,
 		`{"notifCorreId":"corr","delayEventNotif":{"delayEventInd":true},"termTrainReq":"OTHERS"}`,
 		`{"notifCorreId":"corr","delayEventNotif":{}}`,
 		`{"notifCorreId":"corr","mLModelInfos":[]}`,
