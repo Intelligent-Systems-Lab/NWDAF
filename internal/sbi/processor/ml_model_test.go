@@ -217,6 +217,7 @@ type mlModelPeerConsumerStub struct {
 	deletedProvision         string
 	deletedRegistration      string
 	deletedMonitor           string
+	deletedTraining          []string
 	provisionResponse        *backend.StandardResponse
 	provisionError           error
 	provisionReplaceResponse *backend.StandardResponse
@@ -295,8 +296,9 @@ func (s *mlModelPeerConsumerStub) PatchPeerMLModelTraining(
 }
 
 func (s *mlModelPeerConsumerStub) DeletePeerMLModelTraining(
-	_ context.Context, _ string,
+	_ context.Context, location string,
 ) (*backend.StandardResponse, error) {
+	s.deletedTraining = append(s.deletedTraining, location)
 	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
 }
 

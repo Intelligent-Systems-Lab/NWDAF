@@ -21,6 +21,7 @@ func TestGetContainingNwdafContext(t *testing.T) {
 	server := &Server{
 		publicCallbackBaseURI: "http://nwdaf.example:8000",
 		internalAPIBaseURI:    "http://nwdaf.example:8091",
+		processInstanceID:     "22222222-2222-4222-8222-222222222222",
 	}
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)
@@ -38,6 +39,7 @@ func TestGetContainingNwdafContext(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 	if response.NFInstanceID != "11111111-1111-4111-8111-111111111111" ||
+		response.ProcessInstanceID != "22222222-2222-4222-8222-222222222222" ||
 		response.APIRoot != "http://nwdaf.example:8000" ||
 		response.InternalAPIRoot != "http://nwdaf.example:8091" ||
 		len(response.MLAnalyticsCapabilities) != 0 {
@@ -65,6 +67,7 @@ func TestGetContainingNwdafContextProjectsFLCapabilities(t *testing.T) {
 	server := &Server{
 		publicCallbackBaseURI: "http://nwdaf.example:8000",
 		internalAPIBaseURI:    "http://nwdaf.example:8091",
+		processInstanceID:     "22222222-2222-4222-8222-222222222222",
 	}
 	recorder := httptest.NewRecorder()
 	requestContext, _ := gin.CreateTestContext(recorder)
@@ -101,6 +104,28 @@ func TestGetContainingNwdafContextProjectsFLCapabilities(t *testing.T) {
 func TestGetContainingNwdafContextRejectsUnconfiguredProfile(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	nwdaf_context.InitWithNFInstanceID("11111111-1111-4111-8111-111111111111")
+	server := &Server{
+		publicCallbackBaseURI: "http://nwdaf.example:8000",
+		internalAPIBaseURI:    "http://nwdaf.example:8091",
+		processInstanceID:     "22222222-2222-4222-8222-222222222222",
+	}
+	recorder := httptest.NewRecorder()
+	requestContext, _ := gin.CreateTestContext(recorder)
+	requestContext.Request = httptest.NewRequestWithContext(
+		t.Context(), http.MethodGet, "/internal/v1/nwdaf-context", nil,
+	)
+
+	server.GetContainingNwdafContext(requestContext)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestGetContainingNwdafContextRejectsMissingProcessGeneration(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	nwdaf_context.InitWithNFInstanceID("11111111-1111-4111-8111-111111111111")
+	configureContainingNwdafProfile(t, nil)
 	server := &Server{
 		publicCallbackBaseURI: "http://nwdaf.example:8000",
 		internalAPIBaseURI:    "http://nwdaf.example:8091",

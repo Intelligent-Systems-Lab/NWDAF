@@ -10,6 +10,8 @@ import (
 
 func TestResetMTLFGenerationClearsProviderAndConsumerRelationships(t *testing.T) {
 	processor, ctx, _, anlfBackend, mtlfAvailability, anlfAvailability := newMLModelProcessorTestSubject()
+	peerConsumer := &mlModelPeerConsumerStub{}
+	processor.mlModelPeerConsumer = peerConsumer
 	mtlfGeneration := mtlfAvailability.generation
 	anlfGeneration := anlfAvailability.generation
 
@@ -63,6 +65,18 @@ func TestResetMTLFGenerationClearsProviderAndConsumerRelationships(t *testing.T)
 	}) {
 		t.Fatal("could not add local training route")
 	}
+	if !ctx.AddMLModelTrainingSubscriptionRoute(nwdaf_context.MLModelTrainingSubscriptionRoute{
+		SubscriptionID: "training-peer",
+		PeerRoute: nwdaf_context.MLModelPeerRoute{
+			Direction:         nwdaf_context.MLModelRouteDirectionOutbound,
+			SelectedTarget:    &backend.SelectedTarget{NFInstanceID: "peer-nwdaf"},
+			PeerLocation:      "http://peer.example/subscriptions/training-peer",
+			ProcessGeneration: mtlfGeneration,
+		},
+		NotificationCorrelationID: "training-peer-correlation",
+	}) {
+		t.Fatal("could not add peer training route")
+	}
 
 	processor.ResetMLModelBackendGeneration(t.Context(), backend.KindMTLF, mtlfGeneration)
 
@@ -77,6 +91,13 @@ func TestResetMTLFGenerationClearsProviderAndConsumerRelationships(t *testing.T)
 	}
 	if _, found := ctx.GetMLModelTrainingSubscriptionRoute("training-local"); found {
 		t.Fatal("MTLF training route remains active")
+	}
+	if _, found := ctx.GetMLModelTrainingSubscriptionRoute("training-peer"); found {
+		t.Fatal("MTLF peer training route remains active")
+	}
+	if len(peerConsumer.deletedTraining) != 1 ||
+		peerConsumer.deletedTraining[0] != "http://peer.example/subscriptions/training-peer" {
+		t.Fatalf("peer training cleanup = %#v", peerConsumer.deletedTraining)
 	}
 	if anlfBackend.deleted != "monitor-backend" {
 		t.Fatalf("AnLF monitor cleanup id = %q", anlfBackend.deleted)
@@ -99,6 +120,35 @@ func TestResetMTLFGenerationClearsProviderAndConsumerRelationships(t *testing.T)
 	response, problem = processor.HandleDeleteMLModelProvision(t.Context(), "provision-local")
 	if response != nil || problem == nil || problem.Status != http.StatusNotFound {
 		t.Fatalf("second provision DELETE response=%+v problem=%+v", response, problem)
+	}
+	response, problem = processor.HandleDeleteMLModelTraining(t.Context(), "training-local")
+	if problem != nil || response == nil || response.StatusCode != http.StatusNoContent {
+		t.Fatalf("late training DELETE response=%+v problem=%+v", response, problem)
+	}
+	response, problem = processor.HandleDeleteMLModelTraining(t.Context(), "training-local")
+	if response != nil || problem == nil || problem.Status != http.StatusNotFound {
+		t.Fatalf("second training DELETE response=%+v problem=%+v", response, problem)
+	}
+	response, problem = processor.HandlePatchMLModelTraining(
+		t.Context(),
+		"training-local",
+		[]byte(`{"mLTrainRepInfo":{"maxResTime":300}}`),
+	)
+	if response != nil || problem == nil || problem.Status != http.StatusNotFound {
+		t.Fatalf("late training PATCH response=%+v problem=%+v", response, problem)
+	}
+	response, problem = processor.HandleMLModelTrainingNotification(
+		t.Context(),
+		"training-local",
+		[]byte(`{"notifCorreId":"training-correlation","termTrainReq":"STOP"}`),
+	)
+	if response != nil || problem == nil || problem.Status != http.StatusNotFound {
+		t.Fatalf("late training callback response=%+v problem=%+v", response, problem)
+	}
+
+	processor.ResetMLModelBackendGeneration(t.Context(), backend.KindMTLF, mtlfGeneration)
+	if len(peerConsumer.deletedTraining) != 1 {
+		t.Fatalf("peer training cleanup repeated = %#v", peerConsumer.deletedTraining)
 	}
 }
 

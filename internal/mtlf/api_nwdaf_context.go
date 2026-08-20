@@ -19,6 +19,10 @@ func (s *Server) nwdafContextRoutes() []Route {
 }
 
 func (s *Server) GetContainingNwdafContext(c *gin.Context) {
+	if s.processInstanceID == "" {
+		c.AbortWithStatus(http.StatusServiceUnavailable)
+		return
+	}
 	context := nwdaf_context.GetSelf()
 	if context == nil {
 		c.AbortWithStatus(http.StatusServiceUnavailable)
@@ -39,6 +43,7 @@ func (s *Server) GetContainingNwdafContext(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, backend.NwdafContextResponse{
 		NFInstanceID:            context.NfId,
+		ProcessInstanceID:       s.processInstanceID,
 		APIRoot:                 s.publicCallbackBaseURI,
 		InternalAPIRoot:         s.internalAPIBaseURI,
 		MLAnalyticsCapabilities: capabilities,

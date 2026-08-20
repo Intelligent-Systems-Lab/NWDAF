@@ -52,9 +52,10 @@ type Server struct {
 	processor             any
 	publicCallbackBaseURI string
 	internalAPIBaseURI    string
+	processInstanceID     string
 }
 
-func NewServer(cfg *factory.Config, processor any) (*Server, error) {
+func NewServer(cfg *factory.Config, processor any, processInstanceID string) (*Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 
 	s := &Server{
@@ -62,6 +63,7 @@ func NewServer(cfg *factory.Config, processor any) (*Server, error) {
 		processor:             processor,
 		publicCallbackBaseURI: strings.TrimRight(cfg.GetSbiUri(), "/"),
 		internalAPIBaseURI:    strings.TrimRight(cfg.GetMtlfServerURI(), "/"),
+		processInstanceID:     processInstanceID,
 	}
 	s.router.Use(gin.Recovery())
 	routes := s.nwdafContextRoutes()

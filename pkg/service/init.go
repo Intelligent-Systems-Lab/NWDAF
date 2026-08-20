@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 
 	"github.com/free5gc/nwdaf/internal/anlf"
@@ -51,6 +52,7 @@ type NwdafApp struct {
 	anlfBackendClient *anlfclient.Client
 	mtlfBackendClient *mtlfclient.BackendClient
 	mtlfServer        *mtlf.Server
+	processInstanceID string
 	wg                sync.WaitGroup
 	deregisterTimeout time.Duration
 }
@@ -60,6 +62,7 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		cfg:               cfg,
 		wg:                sync.WaitGroup{},
 		deregisterTimeout: nrfDeregistrationTimeout,
+		processInstanceID: uuid.New().String(),
 	}
 
 	// Set log settings
@@ -169,7 +172,11 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 		discoveryProxy = nwdaf.consumer
 	}
 	mtlfProcessor := mtlfprocessor.New(nwdaf.processor, discoveryProxy, nwdaf.consumer)
-	nwdaf.mtlfServer, err = mtlf.NewServer(cfg, mtlfProcessor)
+	nwdaf.mtlfServer, err = mtlf.NewServer(
+		cfg,
+		mtlfProcessor,
+		nwdaf.processInstanceID,
+	)
 	if err != nil {
 		return nil, err
 	}

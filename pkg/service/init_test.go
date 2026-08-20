@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 
@@ -94,6 +95,41 @@ func TestNewAppDoesNotRequireRunningBackends(t *testing.T) {
 		t.Fatal("configured backend availability trackers were not constructed")
 	}
 	app.Terminate()
+}
+
+func TestNewAppOwnsOneFreshProcessInstanceIDPerLifetime(t *testing.T) {
+	cfg := newFreeLifecycleTestConfig(t)
+	cfg.Configuration.NfInstanceID = "11111111-1111-4111-8111-111111111111"
+	first, err := NewApp(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("first NewApp() error = %v", err)
+	}
+	firstID := first.processInstanceID
+	parsedFirstID, err := uuid.Parse(firstID)
+	if err != nil {
+		t.Fatalf("first processInstanceID = %q: %v", firstID, err)
+	}
+	if parsedFirstID.Version() != 4 || parsedFirstID.String() != firstID {
+		t.Fatalf("first processInstanceID is not canonical UUIDv4: %q", firstID)
+	}
+	firstNFID := first.nwdafCtx.NfId
+	first.Terminate()
+
+	second, err := NewApp(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("second NewApp() error = %v", err)
+	}
+	defer second.Terminate()
+	if second.processInstanceID == firstID {
+		t.Fatalf("new app reused processInstanceID %q", firstID)
+	}
+	if second.nwdafCtx.NfId != firstNFID {
+		t.Fatalf(
+			"stable nfInstanceId changed: first=%q second=%q",
+			firstNFID,
+			second.nwdafCtx.NfId,
+		)
+	}
 }
 
 func TestBackendMonitorsRunIndependentlyAndStopWithAppContext(t *testing.T) {

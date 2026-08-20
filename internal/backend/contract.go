@@ -30,6 +30,7 @@ type HealthResponse struct {
 
 type NwdafContextResponse struct {
 	NFInstanceID            string                  `json:"nfInstanceId"`
+	ProcessInstanceID       string                  `json:"processInstanceId"`
 	APIRoot                 string                  `json:"apiRoot"`
 	InternalAPIRoot         string                  `json:"internalApiRoot"`
 	MLAnalyticsCapabilities []MLAnalyticsCapability `json:"mlAnalyticsCapabilities,omitempty"`
