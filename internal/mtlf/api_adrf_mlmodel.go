@@ -114,7 +114,7 @@ func (s *Server) RetrieveAdrfMLModelRecord(c *gin.Context) {
 func adrfMLModelTarget(c *gin.Context) (string, bool) {
 	target := strings.TrimRight(strings.TrimSpace(c.GetHeader("Target-Api-Root")), "/")
 	parsed, err := url.Parse(target)
-	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" ||
+	if err != nil || parsed.Scheme != "http" && parsed.Scheme != targetHTTPSScheme ||
 		parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" ||
 		parsed.Fragment != "" || parsed.Path != "" {
 		util.GinProblemJson(c, malformedRequestProblem("Target-Api-Root must be an HTTP(S) origin"))

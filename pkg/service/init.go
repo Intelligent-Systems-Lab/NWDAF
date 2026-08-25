@@ -171,7 +171,12 @@ func NewApp(ctx context.Context, cfg *factory.Config) (*NwdafApp, error) {
 	if cfg.NrfRegistrationEnabled() {
 		discoveryProxy = nwdaf.consumer
 	}
-	mtlfProcessor := mtlfprocessor.New(nwdaf.processor, discoveryProxy, nwdaf.consumer)
+	mtlfProcessor := mtlfprocessor.New(
+		nwdaf.processor,
+		discoveryProxy,
+		nwdaf.consumer,
+		nwdaf.consumer,
+	)
 	nwdaf.mtlfServer, err = mtlf.NewServer(
 		cfg,
 		mtlfProcessor,

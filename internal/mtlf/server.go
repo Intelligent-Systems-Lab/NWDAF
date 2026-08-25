@@ -70,6 +70,9 @@ func NewServer(cfg *factory.Config, processor any, processInstanceID string) (*S
 	routes = append(routes, s.adrfRetrievalRoutes()...)
 	routes = append(routes, s.adrfMLModelRoutes()...)
 	routes = append(routes, s.nfDiscoveryRoutes()...)
+	routes = append(routes, s.udmCollectionRoutes()...)
+	routes = append(routes, s.smfEventExposureRoutes()...)
+	routes = append(routes, s.adrfStorageRoutes()...)
 	routes = append(routes, s.mtlfMLModelRoutes()...)
 	applyRoutes(s.router.Group(""), routes)
 

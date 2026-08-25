@@ -15,9 +15,12 @@ import (
 )
 
 var (
-	ErrAdrfRetrievalUnavailable   = errors.New("ADRF retrieval proxy is unavailable")
-	ErrAdrfRetrievalRouteNotFound = errors.New("ADRF retrieval route was not found")
-	ErrNFDiscoveryUnavailable     = errors.New("NF discovery proxy is unavailable")
+	ErrAdrfRetrievalUnavailable    = errors.New("ADRF retrieval proxy is unavailable")
+	ErrAdrfRetrievalRouteNotFound  = errors.New("ADRF retrieval route was not found")
+	ErrNFDiscoveryUnavailable      = errors.New("NF discovery proxy is unavailable")
+	ErrSmfEventExposureUnavailable = errors.New("SMF Event Exposure proxy is unavailable")
+	ErrUdmCollectionUnavailable    = errors.New("UDM collection proxy is unavailable")
+	ErrAdrfStorageUnavailable      = errors.New("ADRF storage proxy is unavailable")
 )
 
 type mlModelGateway interface {
@@ -78,6 +81,16 @@ type adrfRetrievalProxy interface {
 	RetrieveAdrfMLModelRecord(context.Context, string, string, []int64) (*consumer.StandardAdrfResponse, error)
 }
 
+type collectionProxy interface {
+	CreateSmfEventExposure(context.Context, string, []byte) (*consumer.StandardSmfResponse, error)
+	ReadSmfEventExposure(context.Context, string, string) (*consumer.StandardSmfResponse, error)
+	ReplaceSmfEventExposure(context.Context, string, string, []byte) (*consumer.StandardSmfResponse, error)
+	DeleteSmfEventExposure(context.Context, string, string) (*consumer.StandardSmfResponse, error)
+	GetUdmGroupIdentifiers(context.Context, string, string, bool) (*consumer.StandardUdmResponse, error)
+	GetUdmSmfRegistration(context.Context, string, string, *models.Snssai, string) (*consumer.StandardUdmResponse, error)
+	StoreAdrfDataRecord(context.Context, string, []byte) (*consumer.StandardAdrfResponse, error)
+}
+
 type adrfRetrievalRoute struct {
 	targetAPIBaseURI string
 	resourceLocation string
@@ -87,6 +100,7 @@ type Processor struct {
 	mlModel     mlModelGateway
 	nfDiscovery nfDiscoveryProxy
 	adrf        adrfRetrievalProxy
+	collection  collectionProxy
 
 	adrfMu     sync.RWMutex
 	adrfRoutes map[string]adrfRetrievalRoute
@@ -96,13 +110,100 @@ func New(
 	mlModel mlModelGateway,
 	nfDiscovery nfDiscoveryProxy,
 	adrf adrfRetrievalProxy,
+	collection ...collectionProxy,
 ) *Processor {
+	var collectionPeer collectionProxy
+	if len(collection) > 0 {
+		collectionPeer = collection[0]
+	}
 	return &Processor{
 		mlModel:     mlModel,
 		nfDiscovery: nfDiscovery,
 		adrf:        adrf,
+		collection:  collectionPeer,
 		adrfRoutes:  make(map[string]adrfRetrievalRoute),
 	}
+}
+
+func (p *Processor) CreateSmfEventExposure(
+	ctx context.Context,
+	targetAPIBaseURI string,
+	body []byte,
+) (*consumer.StandardSmfResponse, error) {
+	if p.collection == nil {
+		return nil, ErrSmfEventExposureUnavailable
+	}
+	return p.collection.CreateSmfEventExposure(ctx, targetAPIBaseURI, body)
+}
+
+func (p *Processor) ReadSmfEventExposure(
+	ctx context.Context,
+	targetAPIBaseURI string,
+	subscriptionID string,
+) (*consumer.StandardSmfResponse, error) {
+	if p.collection == nil {
+		return nil, ErrSmfEventExposureUnavailable
+	}
+	return p.collection.ReadSmfEventExposure(ctx, targetAPIBaseURI, subscriptionID)
+}
+
+func (p *Processor) ReplaceSmfEventExposure(
+	ctx context.Context,
+	targetAPIBaseURI string,
+	subscriptionID string,
+	body []byte,
+) (*consumer.StandardSmfResponse, error) {
+	if p.collection == nil {
+		return nil, ErrSmfEventExposureUnavailable
+	}
+	return p.collection.ReplaceSmfEventExposure(ctx, targetAPIBaseURI, subscriptionID, body)
+}
+
+func (p *Processor) DeleteSmfEventExposure(
+	ctx context.Context,
+	targetAPIBaseURI string,
+	subscriptionID string,
+) (*consumer.StandardSmfResponse, error) {
+	if p.collection == nil {
+		return nil, ErrSmfEventExposureUnavailable
+	}
+	return p.collection.DeleteSmfEventExposure(ctx, targetAPIBaseURI, subscriptionID)
+}
+
+func (p *Processor) GetUdmGroupIdentifiers(
+	ctx context.Context,
+	targetAPIBaseURI string,
+	intGroupID string,
+	ueIDInd bool,
+) (*consumer.StandardUdmResponse, error) {
+	if p.collection == nil {
+		return nil, ErrUdmCollectionUnavailable
+	}
+	return p.collection.GetUdmGroupIdentifiers(ctx, targetAPIBaseURI, intGroupID, ueIDInd)
+}
+
+func (p *Processor) GetUdmSmfRegistration(
+	ctx context.Context,
+	targetAPIBaseURI string,
+	ueID string,
+	singleNssai *models.Snssai,
+	dnn string,
+) (*consumer.StandardUdmResponse, error) {
+	if p.collection == nil {
+		return nil, ErrUdmCollectionUnavailable
+	}
+	return p.collection.GetUdmSmfRegistration(ctx, targetAPIBaseURI, ueID, singleNssai, dnn)
+}
+
+func (p *Processor) StoreAdrfDataRecord(
+	ctx context.Context,
+	targetAPIBaseURI string,
+	body []byte,
+) (*consumer.StandardAdrfResponse, error) {
+	if p.collection == nil {
+		return nil, ErrAdrfStorageUnavailable
+	}
+	return p.collection.StoreAdrfDataRecord(ctx, targetAPIBaseURI, body)
 }
 
 func (p *Processor) HandleMLModelProvisionNotification(

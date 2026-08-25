@@ -82,6 +82,9 @@ func TestStandardSmfProxyPreservesBodyLocationAndCleanupOrdering(t *testing.T) {
 	if err != nil || created.StatusCode != http.StatusCreated || created.Location == "" {
 		t.Fatalf("create response=%+v err=%v", created, err)
 	}
+	if created.ProvisionalResource {
+		t.Fatal("successful create must not remain marked provisional")
+	}
 	route, found := app.ctx.GetSmfPeerResourceRoute(server.URL, "smf-sub-a")
 	if !found || route.ResourceLocation != server.URL+SmfEventExposurePath+"/smf-sub-a" ||
 		route.CorrelationID != "corr-a" {
@@ -307,8 +310,12 @@ func TestStandardSmfProxyCompensatesMalformedCreateRepresentation(t *testing.T) 
 	body := []byte(`{"nfId":"nwdaf-a","notifId":"corr-a","notifUri":"http://py/callback",` +
 		`"eventSubs":[{"event":"UPF_EVENT"}]}`)
 
-	if _, err := client.CreateSmfEventExposure(context.Background(), server.URL, body); err == nil {
+	created, err := client.CreateSmfEventExposure(context.Background(), server.URL, body)
+	if err == nil {
 		t.Fatal("malformed SMF representation should fail")
+	}
+	if created == nil || !created.ProvisionalResource {
+		t.Fatalf("malformed create response = %+v, want provisional identity", created)
 	}
 	if deleteCalls.Load() != 1 {
 		t.Fatalf("compensating DELETE calls = %d, want 1", deleteCalls.Load())
@@ -339,8 +346,12 @@ func TestStandardSmfProxyRetainsPendingRouteWhenCreateCompensationFails(t *testi
 	body := []byte(`{"nfId":"nwdaf-a","notifId":"corr-pending","notifUri":"http://py/callback",` +
 		`"eventSubs":[{"event":"UPF_EVENT"}]}`)
 
-	if _, err := client.CreateSmfEventExposure(context.Background(), server.URL, body); err == nil {
+	created, err := client.CreateSmfEventExposure(context.Background(), server.URL, body)
+	if err == nil {
 		t.Fatal("malformed SMF representation should fail")
+	}
+	if created == nil || !created.ProvisionalResource {
+		t.Fatalf("malformed create response = %+v, want provisional identity", created)
 	}
 	route, found := app.ctx.GetSmfPeerResourceRoute(server.URL, "peer-pending")
 	if !found || !route.PendingCleanup || route.CorrelationID != "corr-pending" {

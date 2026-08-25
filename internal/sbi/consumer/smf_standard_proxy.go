@@ -20,10 +20,11 @@ import (
 const maxSmfStandardBodyBytes = 4 * 1024 * 1024
 
 type StandardSmfResponse struct {
-	StatusCode  int
-	Location    string
-	ContentType string
-	Body        []byte
+	StatusCode          int
+	Location            string
+	ContentType         string
+	Body                []byte
+	ProvisionalResource bool
 }
 
 type StandardSmfError struct {
@@ -173,6 +174,7 @@ func (c *Consumer) CreateSmfEventExposure(
 		}
 		return response, errors.New("could not record provisional SMF peer resource route")
 	}
+	response.ProvisionalResource = true
 	if !isJSONMediaType(response.ContentType) {
 		c.compensateOrRetainSmfPeerResource(requestCtx, provisionalRoute, "invalid response media type")
 		return response, errors.New("malformed SMF create response: Content-Type must be application/json")
@@ -192,11 +194,11 @@ func (c *Consumer) CreateSmfEventExposure(
 	}
 	if subscriptionID == "" || subscriptionID == "." || subscriptionID == "/" {
 		c.compensateOrRetainSmfPeerResource(requestCtx, provisionalRoute, "missing subscription ID")
-		return nil, errors.New("malformed SMF create response: subscription ID is missing")
+		return response, errors.New("malformed SMF create response: subscription ID is missing")
 	}
 	if subscriptionID != peerSubscriptionID {
 		c.compensateOrRetainSmfPeerResource(requestCtx, provisionalRoute, "conflicting subscription ID")
-		return nil, errors.New("malformed SMF create response: Location and representation subscription IDs differ")
+		return response, errors.New("malformed SMF create response: Location and representation subscription IDs differ")
 	}
 	requestedSubscription.SubId = subscriptionID
 	acceptedSubscriptionJSON, mergeErr := mergeSmfSubscriptionRepresentation(
@@ -206,7 +208,7 @@ func (c *Consumer) CreateSmfEventExposure(
 	)
 	if mergeErr != nil {
 		c.compensateOrRetainSmfPeerResource(requestCtx, provisionalRoute, "representation merge failure")
-		return nil, mergeErr
+		return response, mergeErr
 	}
 	var acceptedSubscription models.NsmfEventExposure
 	if decodeErr := json.Unmarshal(acceptedSubscriptionJSON, &acceptedSubscription); decodeErr != nil {
@@ -222,6 +224,7 @@ func (c *Consumer) CreateSmfEventExposure(
 		return response, errors.New("could not record SMF peer resource route")
 	}
 	response.Location = resolvedLocation
+	response.ProvisionalResource = false
 	return response, nil
 }
 
