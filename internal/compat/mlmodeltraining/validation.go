@@ -14,6 +14,9 @@ import (
 const notificationMethodOnEventDetection = "ON_EVENT_DETECTION"
 
 func ParseNwdafMLModelTrainSubsc(body []byte) (*NwdafMLModelTrainSubsc, error) {
+	if err := validateCandidateRawSubscription(body, false); err != nil {
+		return nil, err
+	}
 	var value NwdafMLModelTrainSubsc
 	if err := decodeObject(body, &value); err != nil {
 		return nil, err
@@ -21,14 +24,38 @@ func ParseNwdafMLModelTrainSubsc(body []byte) (*NwdafMLModelTrainSubsc, error) {
 	if err := validateSubscriptionShape(&value); err != nil {
 		return nil, err
 	}
+	if err := validateTopology(value.FLTopology, "x-flTopology"); err != nil {
+		return nil, err
+	}
+	if value.ImmediateReport != nil {
+		if err := validateTopologyReport(
+			value.ImmediateReport.FLTopologyReport,
+			"immReport.x-flTopologyReport",
+		); err != nil {
+			return nil, err
+		}
+		if err := validateRetainedResultAt(value.ImmediateReport, "immReport"); err != nil {
+			return nil, err
+		}
+	}
 	return &value, nil
 }
 
 func ParseNwdafMLModelTrainSubscPatch(body []byte) (*NwdafMLModelTrainSubscPatch, error) {
+	if err := validateCandidateRawSubscription(body, true); err != nil {
+		return nil, err
+	}
 	var value NwdafMLModelTrainSubscPatch
 	if err := decodeObject(body, &value); err != nil {
 		return nil, err
 	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	_, value.flTopologyPresent = raw["x-flTopology"]
+	_, value.retainedResultRequestPresent = raw["x-retainedResultReq"]
+	value.rawBody = append(json.RawMessage(nil), body...)
 	if value.NotificationURI != nil {
 		if err := validateHTTPURI(*value.NotificationURI); err != nil {
 			return nil, fmt.Errorf("notifUri: %w", err)
@@ -53,11 +80,20 @@ func ParseNwdafMLModelTrainSubscPatch(body []byte) (*NwdafMLModelTrainSubscPatch
 }
 
 func ParseNwdafMLModelTrainNotif(body []byte) (*NwdafMLModelTrainNotif, error) {
+	if err := validateCandidateRawNotification(body); err != nil {
+		return nil, err
+	}
 	var value NwdafMLModelTrainNotif
 	if err := decodeObject(body, &value); err != nil {
 		return nil, err
 	}
 	if err := validateNotificationShape(&value); err != nil {
+		return nil, err
+	}
+	if err := validateTopologyReport(value.FLTopologyReport, "x-flTopologyReport"); err != nil {
+		return nil, err
+	}
+	if err := validateRetainedResultAt(&value, ""); err != nil {
 		return nil, err
 	}
 	return &value, nil
@@ -70,49 +106,49 @@ func ApplySubscriptionPatch(
 	if current == nil || patch == nil {
 		return nil, errors.New("current subscription and patch are required")
 	}
-	body, err := json.Marshal(current)
+	currentBody, err := json.Marshal(current)
 	if err != nil {
 		return nil, err
 	}
-	var effective NwdafMLModelTrainSubsc
-	if unmarshalErr := json.Unmarshal(body, &effective); unmarshalErr != nil {
-		return nil, unmarshalErr
+	if len(patch.rawBody) == 0 {
+		return nil, errors.New("parsed patch body is required")
 	}
-	if patch.NotificationURI != nil {
-		effective.NotificationURI = *patch.NotificationURI
-	}
-	if patch.EventRequest != nil {
-		effective.EventRequest = patch.EventRequest
-	}
-	if patch.MLModelInfos != nil {
-		effective.MLModelInfos = patch.MLModelInfos
-	}
-	if patch.MLModelTrainingInfos != nil {
-		effective.MLModelTrainingInfos = patch.MLModelTrainingInfos
-	}
-	if patch.MLPreparationFlag != nil {
-		effective.MLPreparationFlag = patch.MLPreparationFlag
-	}
-	if patch.MLAccuracyCheckFlag != nil {
-		effective.MLAccuracyCheckFlag = patch.MLAccuracyCheckFlag
-	}
-	if patch.MLTrainingReportInfo != nil {
-		effective.MLTrainingReportInfo = patch.MLTrainingReportInfo
-	}
-	if patch.RoundIndicator != nil {
-		effective.RoundIndicator = patch.RoundIndicator
-	}
-	if patch.TargetReportingUE != nil {
-		effective.TargetReportingUE = patch.TargetReportingUE
-	}
-	if patch.SkipFLIndicator != nil {
-		effective.SkipFLIndicator = patch.SkipFLIndicator
-	}
-	effectiveBody, err := json.Marshal(effective)
+	effectiveBody, err := applyJSONMergePatch(currentBody, patch.rawBody)
 	if err != nil {
 		return nil, err
 	}
 	return ParseNwdafMLModelTrainSubsc(effectiveBody)
+}
+
+func applyJSONMergePatch(current []byte, patch []byte) ([]byte, error) {
+	var currentValue any
+	if err := json.Unmarshal(current, &currentValue); err != nil {
+		return nil, err
+	}
+	var patchValue any
+	if err := json.Unmarshal(patch, &patchValue); err != nil {
+		return nil, err
+	}
+	return json.Marshal(mergeJSONValue(currentValue, patchValue))
+}
+
+func mergeJSONValue(current any, patch any) any {
+	patchObject, patchIsObject := patch.(map[string]any)
+	if !patchIsObject {
+		return patch
+	}
+	currentObject, currentIsObject := current.(map[string]any)
+	if !currentIsObject {
+		currentObject = make(map[string]any)
+	}
+	for key, patchMember := range patchObject {
+		if patchMember == nil {
+			delete(currentObject, key)
+			continue
+		}
+		currentObject[key] = mergeJSONValue(currentObject[key], patchMember)
+	}
+	return currentObject
 }
 
 func ValidateFLSubscription(
@@ -121,6 +157,9 @@ func ValidateFLSubscription(
 ) error {
 	if value == nil {
 		return errors.New("subscription is required")
+	}
+	if RequiresCandidateSubscriptionCorrelation(value) && strings.TrimSpace(value.MLCorrelationID) == "" {
+		return candidateInvalid("mlCorreId", "is required for hierarchical FL operations")
 	}
 	violations := make([]InvalidParameter, 0)
 	if strings.TrimSpace(value.MLCorrelationID) == "" {
@@ -196,6 +235,12 @@ func ValidateFLPatch(
 	if value == nil {
 		return errors.New("patch is required")
 	}
+	if RequiresCandidatePatchCorrelation(value) &&
+		(existing == nil || strings.TrimSpace(existing.MLCorrelationID) == "") {
+		return candidateInvalid(
+			"mlCorreId", "the existing resource must identify a hierarchical FL procedure",
+		)
+	}
 	if existing == nil || strings.TrimSpace(existing.MLCorrelationID) == "" {
 		return errors.New("existing training resource identity is required")
 	}
@@ -237,7 +282,7 @@ func ValidateFLNotification(
 			Reason:    "must match the existing resource",
 		})
 	}
-	if existing.ExpectedRoundIndicator != nil {
+	if existing.ExpectedRoundIndicator != nil && value.RetainedResultStatus == "" {
 		if value.RoundIndicator == nil ||
 			*value.RoundIndicator != *existing.ExpectedRoundIndicator {
 			violations = append(violations, InvalidParameter{
@@ -246,6 +291,11 @@ func ValidateFLNotification(
 			})
 		}
 	}
+	if validationErr := ValidateCandidateNotificationParticipant(
+		value, existing.BoundParticipantNFInstanceID,
+	); validationErr != nil {
+		return validationErr
+	}
 	if len(violations) > 0 {
 		return &RequirementsError{Violations: violations}
 	}
@@ -253,6 +303,9 @@ func ValidateFLNotification(
 }
 
 func validateSubscriptionShape(value *NwdafMLModelTrainSubsc) error {
+	if _, valid := parseSupportedFeatures(value.SupportedFeatures); !valid {
+		return errors.New("suppFeats must be a hexadecimal bitmask")
+	}
 	if len(value.MLEventSubscriptions) == 0 {
 		return errors.New("mLEventSubscs must contain at least one item")
 	}
@@ -314,9 +367,13 @@ func validateNotificationShape(value *NwdafMLModelTrainNotif) error {
 	hasDelay := value.DelayEventNotification != nil
 	hasModels := len(value.MLModelInfos) > 0
 	hasTermination := value.TerminationRequest != ""
-	if !hasDelay && !hasModels && !hasTermination {
+	hasCandidate := HasCandidateNotificationFields(value)
+	if hasCandidate && strings.TrimSpace(value.MLCorrelationID) == "" {
+		return candidateInvalid("mlCorreId", "is required for hierarchical FL notifications")
+	}
+	if !hasDelay && !hasModels && !hasTermination && !hasCandidate {
 		return errors.New(
-			"at least one of delayEventNotif, mLModelInfos or termTrainReq is required",
+			"at least one detailed notification field is required",
 		)
 	}
 	if hasDelay && (hasModels || hasTermination) {

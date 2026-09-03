@@ -59,12 +59,16 @@ type mtlfMLModelBackendStub struct {
 	deletedRegistration     string
 	trainingBody            []byte
 	trainingNotification    []byte
+	trainingCreateResponse  *backend.StandardResponse
+	trainingCreateError     error
 	trainingResponse        *backend.StandardResponse
 	trainingError           error
+	trainingPatchFunc       func(context.Context, string, []byte) (*backend.StandardResponse, error)
 	trainingReplaceResponse *backend.StandardResponse
 	trainingReplaceError    error
 	trainingDeleteResponse  *backend.StandardResponse
 	trainingDeleteError     error
+	deletedTrainingBackend  string
 }
 
 func (s *mtlfMLModelBackendStub) CreateMLModelProvisionSubscription(
@@ -153,6 +157,9 @@ func (s *mtlfMLModelBackendStub) CreateMLModelTrainingSubscription(
 	_ context.Context, body []byte,
 ) (*backend.StandardResponse, error) {
 	s.trainingBody = append([]byte(nil), body...)
+	if s.trainingCreateResponse != nil || s.trainingCreateError != nil {
+		return s.trainingCreateResponse, s.trainingCreateError
+	}
 	return &backend.StandardResponse{
 		StatusCode: http.StatusCreated,
 		Location: "http://mtlf.internal/internal/v1/ml-model-training/subscriptions/" +
@@ -173,9 +180,12 @@ func (s *mtlfMLModelBackendStub) ReplaceMLModelTrainingSubscription(
 }
 
 func (s *mtlfMLModelBackendStub) PatchMLModelTrainingSubscription(
-	_ context.Context, _ string, body []byte,
+	ctx context.Context, id string, body []byte,
 ) (*backend.StandardResponse, error) {
 	s.trainingBody = append([]byte(nil), body...)
+	if s.trainingPatchFunc != nil {
+		return s.trainingPatchFunc(ctx, id, body)
+	}
 	if s.trainingResponse != nil || s.trainingError != nil {
 		return s.trainingResponse, s.trainingError
 	}
@@ -183,8 +193,9 @@ func (s *mtlfMLModelBackendStub) PatchMLModelTrainingSubscription(
 }
 
 func (s *mtlfMLModelBackendStub) DeleteMLModelTrainingSubscription(
-	_ context.Context, _ string,
+	_ context.Context, id string,
 ) (*backend.StandardResponse, error) {
+	s.deletedTrainingBackend = id
 	if s.trainingDeleteResponse != nil || s.trainingDeleteError != nil {
 		return s.trainingDeleteResponse, s.trainingDeleteError
 	}
@@ -218,6 +229,11 @@ type mlModelPeerConsumerStub struct {
 	deletedRegistration      string
 	deletedMonitor           string
 	deletedTraining          []string
+	trainingBody             []byte
+	trainingCreateResponse   *backend.StandardResponse
+	trainingCreateError      error
+	trainingReplaceBody      []byte
+	trainingPatchBody        []byte
 	provisionResponse        *backend.StandardResponse
 	provisionError           error
 	provisionReplaceResponse *backend.StandardResponse
@@ -271,6 +287,10 @@ func (a *isolatedMLModelTestApp) Context() *nwdaf_context.NWDAFContext {
 func (s *mlModelPeerConsumerStub) CreatePeerMLModelTraining(
 	_ context.Context, _ backend.SelectedTarget, body []byte,
 ) (*backend.StandardResponse, error) {
+	s.trainingBody = append([]byte(nil), body...)
+	if s.trainingCreateResponse != nil || s.trainingCreateError != nil {
+		return s.trainingCreateResponse, s.trainingCreateError
+	}
 	return &backend.StandardResponse{
 		StatusCode:   http.StatusCreated,
 		Location:     "/nnwdaf-mlmodeltraining/v1/subscriptions/" + testProvisionID,
@@ -281,8 +301,9 @@ func (s *mlModelPeerConsumerStub) CreatePeerMLModelTraining(
 }
 
 func (s *mlModelPeerConsumerStub) ReplacePeerMLModelTraining(
-	_ context.Context, _ string, _ []byte,
+	_ context.Context, _ string, body []byte,
 ) (*backend.StandardResponse, error) {
+	s.trainingReplaceBody = append([]byte(nil), body...)
 	if s.trainingReplaceResponse != nil || s.trainingReplaceError != nil {
 		return s.trainingReplaceResponse, s.trainingReplaceError
 	}
@@ -290,8 +311,9 @@ func (s *mlModelPeerConsumerStub) ReplacePeerMLModelTraining(
 }
 
 func (s *mlModelPeerConsumerStub) PatchPeerMLModelTraining(
-	_ context.Context, _ string, _ []byte,
+	_ context.Context, _ string, body []byte,
 ) (*backend.StandardResponse, error) {
+	s.trainingPatchBody = append([]byte(nil), body...)
 	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
 }
 

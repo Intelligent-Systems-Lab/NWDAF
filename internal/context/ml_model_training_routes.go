@@ -5,16 +5,20 @@ import (
 )
 
 type MLModelTrainingSubscriptionRoute struct {
-	SubscriptionID             string
-	PeerRoute                  MLModelPeerRoute
-	AcceptedRepresentation     json.RawMessage
-	BackendRepresentation      json.RawMessage
-	Initiator                  MLModelRouteParty
-	Destination                MLModelRouteParty
-	DestinationNotificationURI string
-	NotificationCorrelationID  string
-	MLCorrelationID            string
-	ExpectedRoundIndicator     *int64
+	SubscriptionID                  string
+	PeerRoute                       MLModelPeerRoute
+	AcceptedRepresentation          json.RawMessage
+	BackendRepresentation           json.RawMessage
+	Initiator                       MLModelRouteParty
+	Destination                     MLModelRouteParty
+	DestinationNotificationURI      string
+	NotificationCorrelationID       string
+	MLCorrelationID                 string
+	ExpectedRoundIndicator          *int64
+	OfferedSupportedFeatures        string
+	NegotiatedSupportedFeatures     string
+	HierarchicalFLFeatureNegotiated bool
+	BoundParticipantNFInstanceID    string
 }
 
 func (c *NWDAFContext) AddMLModelTrainingSubscriptionRoute(

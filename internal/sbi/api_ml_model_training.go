@@ -40,10 +40,10 @@ func (s *Server) getMLModelTrainingRoutes() []Route {
 }
 
 func (s *Server) HandleCreateMLModelTraining(c *gin.Context) {
-	body, ok := s.readMLModelBodyWithMediaType(c, "application/json", func(body []byte) error {
+	body, ok := s.readMLModelBodyWithMediaTypeAndProblem(c, "application/json", func(body []byte) error {
 		_, err := wire.ParseNwdafMLModelTrainSubsc(body)
 		return err
-	})
+	}, mlModelTrainingRequestProblem)
 	if !ok {
 		return
 	}
@@ -57,10 +57,10 @@ func (s *Server) HandleCreateMLModelTraining(c *gin.Context) {
 }
 
 func (s *Server) HandleReplaceMLModelTraining(c *gin.Context) {
-	body, ok := s.readMLModelBodyWithMediaType(c, "application/json", func(body []byte) error {
+	body, ok := s.readMLModelBodyWithMediaTypeAndProblem(c, "application/json", func(body []byte) error {
 		_, err := wire.ParseNwdafMLModelTrainSubsc(body)
 		return err
-	})
+	}, mlModelTrainingRequestProblem)
 	if !ok {
 		return
 	}
@@ -76,11 +76,11 @@ func (s *Server) HandleReplaceMLModelTraining(c *gin.Context) {
 }
 
 func (s *Server) HandlePatchMLModelTraining(c *gin.Context) {
-	body, ok := s.readMLModelBodyWithMediaType(
+	body, ok := s.readMLModelBodyWithMediaTypeAndProblem(
 		c, "application/merge-patch+json", func(body []byte) error {
 			_, err := wire.ParseNwdafMLModelTrainSubscPatch(body)
 			return err
-		},
+		}, mlModelTrainingRequestProblem,
 	)
 	if !ok {
 		return
@@ -94,6 +94,13 @@ func (s *Server) HandlePatchMLModelTraining(c *gin.Context) {
 		c.Request.Context(), c.Param("subscriptionId"), body,
 	)
 	writeMLModelResponse(c, response, problem)
+}
+
+func mlModelTrainingRequestProblem(err error) *models.ProblemDetails {
+	if problem, ok := wire.ProblemDetailsForValidation(err); ok {
+		return problem
+	}
+	return nil
 }
 
 func (s *Server) HandleDeleteMLModelTraining(c *gin.Context) {

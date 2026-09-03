@@ -45,9 +45,18 @@ func (p *Processor) handleCreateLocalMLModelTraining(
 ) (*backend.StandardResponse, *models.ProblemDetails) {
 	value, err := wire.ParseNwdafMLModelTrainSubsc(body)
 	if err != nil {
-		return nil, malformedMLModelProblem(err)
+		return nil, mlModelTrainingValidationProblem(err)
 	}
 	if validationErr := wire.ValidateFLSubscription(value, nil); validationErr != nil {
+		return nil, mlModelTrainingValidationProblem(validationErr)
+	}
+	nwdafContext := p.nwdaf.Context()
+	if nwdafContext == nil {
+		return nil, mlModelInternalProblem("NWDAF context is unavailable")
+	}
+	if validationErr := wire.ValidateCandidateSubscriptionReceiver(
+		value, nwdafContext.NfId,
+	); validationErr != nil {
 		return nil, mlModelTrainingValidationProblem(validationErr)
 	}
 	generationLease1, admitted1 := acquireBackend(p.mtlfMLModelBackend, p.mtlfAvailability)
@@ -77,11 +86,11 @@ func (p *Processor) handleCreateLocalMLModelTraining(
 		LifecycleState:    nwdaf_context.MLModelRouteCreating,
 		ProcessGeneration: p.backendGeneration(p.mtlfAvailability),
 	}
+	reserved.BoundParticipantNFInstanceID = nwdafContext.NfId
 	p.mlModelMu.Lock()
 	reserved.PeerRoute.OperationRevision = p.nextMLModelOperationRevisionLocked()
 	revision := reserved.PeerRoute.OperationRevision
-	nwdafContext := p.nwdaf.Context()
-	added := nwdafContext != nil && nwdafContext.AddMLModelTrainingSubscriptionRoute(reserved)
+	added := nwdafContext.AddMLModelTrainingSubscriptionRoute(reserved)
 	p.mlModelMu.Unlock()
 	if !added {
 		return nil, mlModelInternalProblem(
@@ -108,8 +117,22 @@ func (p *Processor) handleCreateLocalMLModelTraining(
 		p.removeCreatingTrainingRoute(localRouteID, revision)
 		return nil, mlModelBadGatewayProblem("MTLF backend returned an invalid training representation")
 	}
-	backendValue.NotificationURI = value.NotificationURI
-	externalBody, err := json.Marshal(backendValue)
+	if validationErr := validateTrainingCreateResponse(
+		backendValue, value, nwdafContext.NfId,
+	); validationErr != nil {
+		p.cleanupLocalTrainingResource(ctx, backendResourceID)
+		p.removeCreatingTrainingRoute(localRouteID, revision)
+		return nil, mlModelBadGatewayProblem(validationErr.Error())
+	}
+	backendAcceptedBody, err := json.Marshal(backendValue)
+	if err != nil {
+		p.cleanupLocalTrainingResource(ctx, backendResourceID)
+		p.removeCreatingTrainingRoute(localRouteID, revision)
+		return nil, mlModelInternalProblem("could not encode ML Model Training representation")
+	}
+	externalValue := *backendValue
+	externalValue.NotificationURI = value.NotificationURI
+	externalBody, err := json.Marshal(&externalValue)
 	if err != nil {
 		p.cleanupLocalTrainingResource(ctx, backendResourceID)
 		p.removeCreatingTrainingRoute(localRouteID, revision)
@@ -130,7 +153,8 @@ func (p *Processor) handleCreateLocalMLModelTraining(
 	route.PeerRoute.BackendResourceID = backendResourceID
 	restoreActiveMLModelRoute(&route.PeerRoute)
 	route.AcceptedRepresentation = externalBody
-	route.BackendRepresentation = backendBody
+	route.BackendRepresentation = backendAcceptedBody
+	setTrainingRouteFeatureState(&route, value.SupportedFeatures, backendValue.SupportedFeatures)
 	if !nwdafContext.UpdateMLModelTrainingSubscriptionRoute(route) {
 		p.mlModelMu.Unlock()
 		p.cleanupLocalTrainingResource(ctx, backendResourceID)
@@ -157,9 +181,14 @@ func (p *Processor) handleCreateRemoteMLModelTraining(
 ) (*backend.StandardResponse, *models.ProblemDetails) {
 	value, err := wire.ParseNwdafMLModelTrainSubsc(body)
 	if err != nil {
-		return nil, malformedMLModelProblem(err)
+		return nil, mlModelTrainingValidationProblem(err)
 	}
 	if validationErr := wire.ValidateFLSubscription(value, nil); validationErr != nil {
+		return nil, mlModelTrainingValidationProblem(validationErr)
+	}
+	if validationErr := wire.ValidateCandidateSubscriptionReceiver(
+		value, target.NFInstanceID,
+	); validationErr != nil {
 		return nil, mlModelTrainingValidationProblem(validationErr)
 	}
 	if p.mlModelPeerConsumer == nil {
@@ -183,6 +212,7 @@ func (p *Processor) handleCreateRemoteMLModelTraining(
 		LifecycleState:    nwdaf_context.MLModelRouteCreating,
 		ProcessGeneration: p.backendGeneration(p.mtlfAvailability),
 	}
+	reserved.BoundParticipantNFInstanceID = target.NFInstanceID
 	nwdafContext := p.nwdaf.Context()
 	p.mlModelMu.Lock()
 	reserved.PeerRoute.OperationRevision = p.nextMLModelOperationRevisionLocked()
@@ -209,8 +239,18 @@ func (p *Processor) handleCreateRemoteMLModelTraining(
 		p.finishFailedPeerTrainingCreate(ctx, localRouteID, revision, response)
 		return nil, mlModelBadGatewayProblem("peer returned an invalid training representation")
 	}
-	peerValue.NotificationURI = value.NotificationURI
-	backendView, err := json.Marshal(peerValue)
+	if validationErr := validateTrainingCreateResponse(peerValue, value, target.NFInstanceID); validationErr != nil {
+		p.finishFailedPeerTrainingCreate(ctx, localRouteID, revision, response)
+		return nil, mlModelBadGatewayProblem(validationErr.Error())
+	}
+	peerAcceptedBody, err := json.Marshal(peerValue)
+	if err != nil {
+		p.finishFailedPeerTrainingCreate(ctx, localRouteID, revision, response)
+		return nil, mlModelInternalProblem("could not encode peer ML Model Training representation")
+	}
+	backendValue := *peerValue
+	backendValue.NotificationURI = value.NotificationURI
+	backendView, err := json.Marshal(&backendValue)
 	if err != nil {
 		p.finishFailedPeerTrainingCreate(ctx, localRouteID, revision, response)
 		return nil, mlModelInternalProblem("could not encode peer ML Model Training representation")
@@ -229,7 +269,8 @@ func (p *Processor) handleCreateRemoteMLModelTraining(
 	route.PeerRoute.PeerLocation = peerLocation
 	restoreActiveMLModelRoute(&route.PeerRoute)
 	route.AcceptedRepresentation = backendView
-	route.BackendRepresentation = backendView
+	route.BackendRepresentation = peerAcceptedBody
+	setTrainingRouteFeatureState(&route, value.SupportedFeatures, peerValue.SupportedFeatures)
 	if !nwdafContext.UpdateMLModelTrainingSubscriptionRoute(route) {
 		p.mlModelMu.Unlock()
 		p.finishFailedPeerTrainingCreate(ctx, localRouteID, revision, response)
@@ -263,7 +304,7 @@ func (p *Processor) HandleReplaceMLModelTraining(
 ) (*backend.StandardResponse, *models.ProblemDetails) {
 	value, err := wire.ParseNwdafMLModelTrainSubsc(body)
 	if err != nil {
-		return nil, malformedMLModelProblem(err)
+		return nil, mlModelTrainingValidationProblem(err)
 	}
 	p.mlModelMu.Lock()
 	nwdafContext := p.nwdaf.Context()
@@ -275,6 +316,18 @@ func (p *Processor) HandleReplaceMLModelTraining(
 	if !found {
 		p.mlModelMu.Unlock()
 		return nil, mlModelResourceNotFoundProblem("ML Model Training subscription", subscriptionID)
+	}
+	if problem := candidateTrainingOperationProblem(
+		route, wire.HasCandidateSubscriptionFields(value),
+	); problem != nil {
+		p.mlModelMu.Unlock()
+		return nil, problem
+	}
+	if validationErr := wire.ValidateCandidateSubscriptionReceiver(
+		value, route.BoundParticipantNFInstanceID,
+	); validationErr != nil {
+		p.mlModelMu.Unlock()
+		return nil, mlModelTrainingValidationProblem(validationErr)
 	}
 	if validationErr := wire.ValidateFLSubscription(value, trainingIdentity(route)); validationErr != nil {
 		p.mlModelMu.Unlock()
@@ -338,15 +391,33 @@ func (p *Processor) HandleReplaceMLModelTraining(
 		p.finishTrainingMutationFailure(subscriptionID, revision, false)
 		return nil, mlModelBadGatewayProblem("training destination returned an invalid replace response")
 	}
-	externalBody := append(json.RawMessage(nil), body...)
-	backendBody := append(json.RawMessage(nil), routedBody...)
+	wire.StripCandidateOperations(value)
+	value.SupportedFeatures = route.NegotiatedSupportedFeatures
+	externalValue := value
+	externalBody, err := json.Marshal(externalValue)
+	if err != nil {
+		p.finishTrainingMutationFailure(subscriptionID, revision, false)
+		return nil, mlModelInternalProblem("could not encode ML Model Training representation")
+	}
+	backendValue := *value
+	backendValue.NotificationURI = trainingRouteCallbackURI(p, route)
+	backendBody, err := json.Marshal(&backendValue)
+	if err != nil {
+		p.finishTrainingMutationFailure(subscriptionID, revision, false)
+		return nil, mlModelInternalProblem("could not encode routed ML Model Training representation")
+	}
 	if response.StatusCode == http.StatusOK {
 		responseValue, parseErr := wire.ParseNwdafMLModelTrainSubsc(response.Body)
 		if parseErr != nil {
 			p.finishTrainingMutationFailure(subscriptionID, revision, false)
 			return nil, mlModelBadGatewayProblem("training destination returned an invalid representation")
 		}
+		if validationErr := validateTrainingMutationResponse(responseValue, value, route); validationErr != nil {
+			p.finishTrainingMutationFailure(subscriptionID, revision, false)
+			return nil, mlModelBadGatewayProblem(validationErr.Error())
+		}
 		responseValue.NotificationURI = value.NotificationURI
+		externalValue = responseValue
 		externalBody, err = json.Marshal(responseValue)
 		if err != nil {
 			p.finishTrainingMutationFailure(subscriptionID, revision, false)
@@ -365,7 +436,7 @@ func (p *Processor) HandleReplaceMLModelTraining(
 		return nil, mlModelUnavailableProblem()
 	}
 	restoreActiveMLModelRoute(&current.PeerRoute)
-	updateTrainingRouteRepresentation(&current, value, externalBody, backendBody)
+	updateTrainingRouteRepresentation(&current, externalValue, externalBody, backendBody)
 	if response.PermanentRedirectURI != "" {
 		current.PeerRoute.PeerLocation = response.PermanentRedirectURI
 	}
@@ -398,7 +469,7 @@ func (p *Processor) HandlePatchMLModelTraining(
 ) (*backend.StandardResponse, *models.ProblemDetails) {
 	patch, err := wire.ParseNwdafMLModelTrainSubscPatch(body)
 	if err != nil {
-		return nil, malformedMLModelProblem(err)
+		return nil, mlModelTrainingValidationProblem(err)
 	}
 	p.mlModelMu.Lock()
 	nwdafContext := p.nwdaf.Context()
@@ -410,6 +481,10 @@ func (p *Processor) HandlePatchMLModelTraining(
 	if !found {
 		p.mlModelMu.Unlock()
 		return nil, mlModelResourceNotFoundProblem("ML Model Training subscription", subscriptionID)
+	}
+	if problem := candidateTrainingOperationProblem(route, wire.HasCandidatePatchFields(patch)); problem != nil {
+		p.mlModelMu.Unlock()
+		return nil, problem
 	}
 	current, err := wire.ParseNwdafMLModelTrainSubsc(route.AcceptedRepresentation)
 	if err != nil {
@@ -423,7 +498,7 @@ func (p *Processor) HandlePatchMLModelTraining(
 	effective, err := wire.ApplySubscriptionPatch(current, patch)
 	if err != nil {
 		p.mlModelMu.Unlock()
-		return nil, malformedMLModelProblem(err)
+		return nil, mlModelTrainingValidationProblem(err)
 	}
 	if validationErr := wire.ValidateFLSubscription(
 		effective, trainingIdentity(route),
@@ -431,6 +506,14 @@ func (p *Processor) HandlePatchMLModelTraining(
 		p.mlModelMu.Unlock()
 		return nil, mlModelTrainingValidationProblem(validationErr)
 	}
+	if validationErr := wire.ValidateCandidateSubscriptionReceiver(
+		effective, route.BoundParticipantNFInstanceID,
+	); validationErr != nil {
+		p.mlModelMu.Unlock()
+		return nil, mlModelTrainingValidationProblem(validationErr)
+	}
+	wire.StripCandidateOperations(effective)
+	effective.SupportedFeatures = route.NegotiatedSupportedFeatures
 	routedPatch := append([]byte(nil), body...)
 	if patch.NotificationURI != nil {
 		routedPatch, err = replaceTrainingNotificationURI(body, trainingRouteCallbackURI(p, route))
@@ -512,6 +595,10 @@ func (p *Processor) HandlePatchMLModelTraining(
 			return nil, mlModelBadGatewayProblem(
 				"training destination returned an invalid representation",
 			)
+		}
+		if validationErr := validateTrainingMutationResponse(responseValue, effective, route); validationErr != nil {
+			p.finishTrainingMutationFailure(subscriptionID, revision, false)
+			return nil, mlModelBadGatewayProblem(validationErr.Error())
 		}
 		responseValue.NotificationURI = effective.NotificationURI
 		externalValue = responseValue
@@ -690,7 +777,7 @@ func (p *Processor) HandleMLModelTrainingNotification(
 ) (*backend.StandardResponse, *models.ProblemDetails) {
 	notification, err := wire.ParseNwdafMLModelTrainNotif(body)
 	if err != nil {
-		return nil, malformedMLModelProblem(err)
+		return nil, mlModelTrainingValidationProblem(err)
 	}
 	p.mlModelMu.Lock()
 	nwdafContext := p.nwdaf.Context()
@@ -722,6 +809,12 @@ func (p *Processor) HandleMLModelTrainingNotification(
 	if !mlModelRouteAcceptsCallback(route.PeerRoute) {
 		p.mlModelMu.Unlock()
 		return nil, mlModelUnavailableProblem()
+	}
+	if problem := candidateTrainingOperationProblem(
+		route, wire.HasCandidateNotificationFields(notification),
+	); problem != nil {
+		p.mlModelMu.Unlock()
+		return nil, problem
 	}
 	if validationErr := wire.ValidateFLNotification(
 		notification, trainingIdentity(route),
@@ -780,6 +873,7 @@ func trainingRoute(
 		NotificationCorrelationID:  value.NotificationCorrelationID,
 		MLCorrelationID:            value.MLCorrelationID,
 		ExpectedRoundIndicator:     expectedTrainingRound(value),
+		OfferedSupportedFeatures:   value.SupportedFeatures,
 	}
 }
 
@@ -819,7 +913,122 @@ func trainingIdentity(
 		SubscriptionID: route.SubscriptionID, MLCorrelationID: route.MLCorrelationID,
 		NotificationCorrelationID: route.NotificationCorrelationID,
 		ExpectedRoundIndicator:    route.ExpectedRoundIndicator, NotificationMethod: method,
+		BoundParticipantNFInstanceID: route.BoundParticipantNFInstanceID,
 	}
+}
+
+func validateTrainingCreateResponse(
+	response *wire.NwdafMLModelTrainSubsc,
+	request *wire.NwdafMLModelTrainSubsc,
+	expectedReceiverNFInstanceID string,
+) error {
+	if response == nil || request == nil {
+		return errors.New("training create response is missing its representation")
+	}
+	if wire.ContainsCandidateOperations(response) {
+		return errors.New("training create response contains a write-only candidate instruction")
+	}
+	identity := trainingIdentityFromValue(request)
+	identity.BoundParticipantNFInstanceID = expectedReceiverNFInstanceID
+	if err := wire.ValidateFLSubscription(response, identity); err != nil {
+		return err
+	}
+	if err := wire.ValidateCandidateSubscriptionReceiver(
+		response, expectedReceiverNFInstanceID,
+	); err != nil {
+		return err
+	}
+	if !wire.SupportedFeaturesAreSubset(request.SupportedFeatures, response.SupportedFeatures) {
+		return errors.New("training create response negotiated unsupported features")
+	}
+	if wire.HasCandidateNotificationFields(response.ImmediateReport) {
+		if err := wire.ValidateFLNotification(response.ImmediateReport, identity); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateTrainingMutationResponse(
+	response *wire.NwdafMLModelTrainSubsc,
+	expected *wire.NwdafMLModelTrainSubsc,
+	route nwdaf_context.MLModelTrainingSubscriptionRoute,
+) error {
+	if response == nil || expected == nil {
+		return errors.New("training mutation response is missing its representation")
+	}
+	if wire.ContainsCandidateOperations(response) {
+		return errors.New("training mutation response contains a write-only candidate instruction")
+	}
+	identity := trainingIdentityFromValue(expected)
+	identity.BoundParticipantNFInstanceID = route.BoundParticipantNFInstanceID
+	if err := wire.ValidateFLSubscription(response, identity); err != nil {
+		return err
+	}
+	if err := wire.ValidateCandidateSubscriptionReceiver(
+		response, route.BoundParticipantNFInstanceID,
+	); err != nil {
+		return err
+	}
+	if !wire.SupportedFeaturesAreSubset(
+		route.OfferedSupportedFeatures, response.SupportedFeatures,
+	) || !wire.SupportedFeaturesEqual(
+		route.NegotiatedSupportedFeatures, response.SupportedFeatures,
+	) {
+		return errors.New("training mutation response changed negotiated features")
+	}
+	if wire.HasCandidateNotificationFields(response.ImmediateReport) {
+		if err := wire.ValidateFLNotification(response.ImmediateReport, identity); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func trainingIdentityFromValue(value *wire.NwdafMLModelTrainSubsc) *wire.TrainingResourceIdentity {
+	if value == nil {
+		return nil
+	}
+	var method *string
+	if value.EventRequest != nil {
+		method = value.EventRequest.NotificationMethod
+	}
+	return &wire.TrainingResourceIdentity{
+		MLCorrelationID:           value.MLCorrelationID,
+		NotificationCorrelationID: value.NotificationCorrelationID,
+		ExpectedRoundIndicator:    expectedTrainingRound(value),
+		NotificationMethod:        method,
+	}
+}
+
+func setTrainingRouteFeatureState(
+	route *nwdaf_context.MLModelTrainingSubscriptionRoute,
+	offered string,
+	negotiated string,
+) {
+	if route == nil {
+		return
+	}
+	route.OfferedSupportedFeatures = offered
+	route.NegotiatedSupportedFeatures = negotiated
+	route.HierarchicalFLFeatureNegotiated = wire.SupportedFeaturesInclude(
+		negotiated, wire.HierarchicalFLOrchestrationFeature,
+	)
+}
+
+func candidateTrainingOperationProblem(
+	route nwdaf_context.MLModelTrainingSubscriptionRoute,
+	hasCandidateFields bool,
+) *models.ProblemDetails {
+	if !hasCandidateFields || route.HierarchicalFLFeatureNegotiated {
+		return nil
+	}
+	return mlModelTrainingValidationProblem(&wire.RequirementsError{
+		Violations: []wire.InvalidParameter{{
+			Parameter: "suppFeats",
+			Reason:    "HierarchicalFLOrch was not negotiated for this resource",
+		}},
+	})
 }
 
 func trainingRouteCallbackURI(
@@ -846,20 +1055,8 @@ func replaceTrainingNotificationURI(body []byte, uri string) ([]byte, error) {
 }
 
 func mlModelTrainingValidationProblem(err error) *models.ProblemDetails {
-	var requirements *wire.RequirementsError
-	if errors.As(err, &requirements) {
-		invalidParams := make([]models.InvalidParam, 0, len(requirements.Violations))
-		for _, violation := range requirements.Violations {
-			invalidParams = append(invalidParams, models.InvalidParam{
-				Param:  violation.Parameter,
-				Reason: violation.Reason,
-			})
-		}
-		return &models.ProblemDetails{
-			Status: http.StatusForbidden, Title: http.StatusText(http.StatusForbidden),
-			Cause: wire.CauseMLModelTrainingRequirementsNotMet, Detail: err.Error(),
-			InvalidParams: invalidParams,
-		}
+	if problem, ok := wire.ProblemDetailsForValidation(err); ok {
+		return problem
 	}
 	return malformedMLModelProblem(err)
 }

@@ -54,10 +54,10 @@ func (s *Server) getMLModelCallbackRoutes() []Route {
 }
 
 func (s *Server) HandleMLModelTrainingCallback(c *gin.Context) {
-	body, ok := s.readMLModelBody(c, func(body []byte) error {
+	body, ok := s.readMLModelBodyWithMediaTypeAndProblem(c, "application/json", func(body []byte) error {
 		_, err := trainingwire.ParseNwdafMLModelTrainNotif(body)
 		return err
-	})
+	}, mlModelTrainingRequestProblem)
 	if !ok {
 		return
 	}

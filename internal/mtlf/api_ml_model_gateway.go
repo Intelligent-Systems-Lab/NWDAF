@@ -121,10 +121,10 @@ func (s *Server) mtlfMLModelRoutes() []Route {
 }
 
 func (s *Server) HandleCreateMLModelTrainingFromBackend(c *gin.Context) {
-	body, ok := readMLModelGatewayBody(c, func(body []byte) error {
+	body, ok := readMLModelGatewayBodyWithMediaTypeAndProblem(c, standardJSONMediaType, func(body []byte) error {
 		_, err := trainingwire.ParseNwdafMLModelTrainSubsc(body)
 		return err
-	})
+	}, mlModelTrainingGatewayProblem)
 	if !ok {
 		return
 	}
@@ -147,10 +147,10 @@ func (s *Server) HandleCreateMLModelTrainingFromBackend(c *gin.Context) {
 }
 
 func (s *Server) HandleReplaceMLModelTrainingFromBackend(c *gin.Context) {
-	body, ok := readMLModelGatewayBody(c, func(body []byte) error {
+	body, ok := readMLModelGatewayBodyWithMediaTypeAndProblem(c, standardJSONMediaType, func(body []byte) error {
 		_, err := trainingwire.ParseNwdafMLModelTrainSubsc(body)
 		return err
-	})
+	}, mlModelTrainingGatewayProblem)
 	if !ok {
 		return
 	}
@@ -166,11 +166,11 @@ func (s *Server) HandleReplaceMLModelTrainingFromBackend(c *gin.Context) {
 }
 
 func (s *Server) HandlePatchMLModelTrainingFromBackend(c *gin.Context) {
-	body, ok := readMLModelGatewayBodyWithMediaType(
+	body, ok := readMLModelGatewayBodyWithMediaTypeAndProblem(
 		c, "application/merge-patch+json", func(body []byte) error {
 			_, err := trainingwire.ParseNwdafMLModelTrainSubscPatch(body)
 			return err
-		},
+		}, mlModelTrainingGatewayProblem,
 	)
 	if !ok {
 		return
@@ -199,10 +199,10 @@ func (s *Server) HandleDeleteMLModelTrainingFromBackend(c *gin.Context) {
 }
 
 func (s *Server) HandleMLModelTrainingNotification(c *gin.Context) {
-	body, ok := readMLModelGatewayBody(c, func(body []byte) error {
+	body, ok := readMLModelGatewayBodyWithMediaTypeAndProblem(c, standardJSONMediaType, func(body []byte) error {
 		_, err := trainingwire.ParseNwdafMLModelTrainNotif(body)
 		return err
-	})
+	}, mlModelTrainingGatewayProblem)
 	if !ok {
 		return
 	}
@@ -321,6 +321,15 @@ func readMLModelGatewayBodyWithMediaType(
 	mediaType string,
 	validate func([]byte) error,
 ) ([]byte, bool) {
+	return readMLModelGatewayBodyWithMediaTypeAndProblem(c, mediaType, validate, nil)
+}
+
+func readMLModelGatewayBodyWithMediaTypeAndProblem(
+	c *gin.Context,
+	mediaType string,
+	validate func([]byte) error,
+	validationProblem func(error) *models.ProblemDetails,
+) ([]byte, bool) {
 	body, problem := readStandardBody(
 		c,
 		backend.MaxStandardMLModelBodyBytes,
@@ -332,10 +341,23 @@ func readMLModelGatewayBodyWithMediaType(
 		return nil, false
 	}
 	if err := validate(body); err != nil {
+		if validationProblem != nil {
+			if validationDetails := validationProblem(err); validationDetails != nil {
+				util.GinProblemJson(c, validationDetails)
+				return nil, false
+			}
+		}
 		util.GinProblemJson(c, malformedRequestProblem(err.Error()))
 		return nil, false
 	}
 	return body, true
+}
+
+func mlModelTrainingGatewayProblem(err error) *models.ProblemDetails {
+	if problem, ok := trainingwire.ProblemDetailsForValidation(err); ok {
+		return problem
+	}
+	return nil
 }
 
 func writeMLModelGatewayResponse(

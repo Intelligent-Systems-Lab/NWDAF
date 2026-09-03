@@ -1,5 +1,6 @@
 // Package mlmodeltraining contains Release 18 Nnwdaf_MLModelTraining wire
-// models that are absent from the pinned free5GC OpenAPI dependency.
+// models that are absent from the pinned free5GC OpenAPI dependency, plus the
+// project candidate extensions declared in candidate.go.
 //
 // Source: 3GPP TS 29.520 V18.14.0,
 // TS29520_Nnwdaf_MLModelTraining.yaml.
@@ -29,19 +30,26 @@ type NwdafMLModelTrainSubsc struct {
 	RoundIndicator            *int64                            `json:"roundInd,omitempty"`
 	TargetReportingUE         *models.TargetUeInformation       `json:"tgtRepUe,omitempty"`
 	SkipFLIndicator           *bool                             `json:"skipFlInd,omitempty"`
+	FLTopology                *FlTopologyNode                   `json:"x-flTopology,omitempty"`
+	RetainedResultRequest     *bool                             `json:"x-retainedResultReq,omitempty"`
 }
 
 type NwdafMLModelTrainSubscPatch struct {
-	NotificationURI      *string                       `json:"notifUri,omitempty"`
-	EventRequest         *mlmodel.ReportingInformation `json:"eventReq,omitempty"`
-	MLModelInfos         []mlmodel.MLEventNotification `json:"mLModelInfos,omitempty"`
-	MLModelTrainingInfos []MLModelTrainInfo            `json:"mLModelTrainInfos,omitempty"`
-	MLPreparationFlag    *bool                         `json:"mLPreFlag,omitempty"`
-	MLAccuracyCheckFlag  *bool                         `json:"mLAccChkFlg,omitempty"`
-	MLTrainingReportInfo *MLTrainReportInfo            `json:"mLTrainRepInfo,omitempty"`
-	RoundIndicator       *int64                        `json:"roundInd,omitempty"`
-	TargetReportingUE    *models.TargetUeInformation   `json:"tgtRepUe,omitempty"`
-	SkipFLIndicator      *bool                         `json:"skipFlInd,omitempty"`
+	NotificationURI              *string                       `json:"notifUri,omitempty"`
+	EventRequest                 *mlmodel.ReportingInformation `json:"eventReq,omitempty"`
+	MLModelInfos                 []mlmodel.MLEventNotification `json:"mLModelInfos,omitempty"`
+	MLModelTrainingInfos         []MLModelTrainInfo            `json:"mLModelTrainInfos,omitempty"`
+	MLPreparationFlag            *bool                         `json:"mLPreFlag,omitempty"`
+	MLAccuracyCheckFlag          *bool                         `json:"mLAccChkFlg,omitempty"`
+	MLTrainingReportInfo         *MLTrainReportInfo            `json:"mLTrainRepInfo,omitempty"`
+	RoundIndicator               *int64                        `json:"roundInd,omitempty"`
+	TargetReportingUE            *models.TargetUeInformation   `json:"tgtRepUe,omitempty"`
+	SkipFLIndicator              *bool                         `json:"skipFlInd,omitempty"`
+	FLTopology                   *FlTopologyNode               `json:"x-flTopology,omitempty"`
+	RetainedResultRequest        *bool                         `json:"x-retainedResultReq,omitempty"`
+	flTopologyPresent            bool
+	retainedResultRequestPresent bool
+	rawBody                      json.RawMessage
 }
 
 type NwdafMLModelTrainNotif struct {
@@ -52,6 +60,8 @@ type NwdafMLModelTrainNotif struct {
 	RoundIndicator            *int64                        `json:"roundInd,omitempty"`
 	StatusReport              *StatusReportInfo             `json:"statusReport,omitempty"`
 	TerminationRequest        TermTrainCause                `json:"termTrainReq,omitempty"`
+	FLTopologyReport          *FlTopologyReport             `json:"x-flTopologyReport,omitempty"`
+	RetainedResultStatus      string                        `json:"x-retainedResultStatus,omitempty"`
 }
 
 type MLModelTrainInfo struct {
@@ -137,11 +147,12 @@ const (
 )
 
 type TrainingResourceIdentity struct {
-	SubscriptionID            string
-	MLCorrelationID           string
-	NotificationCorrelationID string
-	ExpectedRoundIndicator    *int64
-	NotificationMethod        *string
+	SubscriptionID               string
+	MLCorrelationID              string
+	NotificationCorrelationID    string
+	ExpectedRoundIndicator       *int64
+	NotificationMethod           *string
+	BoundParticipantNFInstanceID string
 }
 
 type InvalidParameter struct {
@@ -151,6 +162,14 @@ type InvalidParameter struct {
 
 type RequirementsError struct {
 	Violations []InvalidParameter
+}
+
+type InvalidMessageError struct {
+	Violations []InvalidParameter
+}
+
+func (e *InvalidMessageError) Error() string {
+	return "invalid hierarchical FL message"
 }
 
 func (e *RequirementsError) Error() string {

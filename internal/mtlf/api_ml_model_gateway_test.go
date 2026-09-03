@@ -2,6 +2,7 @@ package mtlf
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -56,6 +57,53 @@ func (s *mlModelGatewayStub) HandleDeleteMLModelMonitorSubscriptionFromBackend(
 	subscriptionID string,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
 	s.subscriptionID = subscriptionID
+	return s.response, s.problem
+}
+
+func (s *mlModelGatewayStub) HandleCreateMLModelTrainingFromBackend(
+	_ context.Context,
+	body []byte,
+	_ *backend.SelectedTarget,
+) (*backend.StandardResponse, *models.ProblemDetails) {
+	s.body = append([]byte(nil), body...)
+	return s.response, s.problem
+}
+
+func (s *mlModelGatewayStub) HandleReplaceMLModelTrainingFromBackend(
+	_ context.Context,
+	subscriptionID string,
+	body []byte,
+) (*backend.StandardResponse, *models.ProblemDetails) {
+	s.subscriptionID = subscriptionID
+	s.body = append([]byte(nil), body...)
+	return s.response, s.problem
+}
+
+func (s *mlModelGatewayStub) HandlePatchMLModelTrainingFromBackend(
+	_ context.Context,
+	subscriptionID string,
+	body []byte,
+) (*backend.StandardResponse, *models.ProblemDetails) {
+	s.subscriptionID = subscriptionID
+	s.body = append([]byte(nil), body...)
+	return s.response, s.problem
+}
+
+func (s *mlModelGatewayStub) HandleDeleteMLModelTrainingFromBackend(
+	_ context.Context,
+	subscriptionID string,
+) (*backend.StandardResponse, *models.ProblemDetails) {
+	s.subscriptionID = subscriptionID
+	return s.response, s.problem
+}
+
+func (s *mlModelGatewayStub) HandleMLModelTrainingNotification(
+	_ context.Context,
+	subscriptionID string,
+	body []byte,
+) (*backend.StandardResponse, *models.ProblemDetails) {
+	s.subscriptionID = subscriptionID
+	s.body = append([]byte(nil), body...)
 	return s.response, s.problem
 }
 
@@ -184,4 +232,108 @@ func TestMTLFRouteOwnershipExcludesAnLFOriginatedOperations(t *testing.T) {
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("MTLF edge accepted AnLF-originated operation: status=%d", recorder.Code)
 	}
+}
+
+func TestMLModelTrainingGatewayPreservesCandidateBodyAndErrors(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	valid := `{
+		"mLEventSubscs":[{
+			"mLEvent":"UE_COMMUNICATION",
+			"mLEventFilter":{},
+			"modelInterInfo":"bundle-v1"
+		}],
+		"notifUri":"http://backend.example/training-callback",
+		"notifCorreId":"candidate-client-a",
+		"suppFeats":"4",
+		"mlCorreId":"hierarchical-fl-001",
+		"mLPreFlag":true,
+		"mLModelTrainInfos":[{
+			"dataAvReq":{"inpEvents":[{"upfEvent":"USER_DATA_USAGE_TRENDS"}]},
+			"timeAvReq":"PT5M"
+		}],
+		"x-flTopology":{
+			"nfInstanceId":"10000000-0000-4000-8000-000000000001"
+		}
+	}`
+	stub := &mlModelGatewayStub{response: &backend.StandardResponse{
+		StatusCode:  http.StatusCreated,
+		Location:    "http://go.internal/internal/v1/ml-model-training/subscriptions/sub-1",
+		ContentType: "application/json",
+		Body:        []byte(valid),
+	}}
+	recorder, ginContext := newMLModelTrainingGatewayContext(
+		t, http.MethodPost, "application/json", valid,
+	)
+	(&Server{processor: stub}).HandleCreateMLModelTrainingFromBackend(ginContext)
+	ginContext.Writer.WriteHeaderNow()
+	if recorder.Code != http.StatusCreated || string(stub.body) != valid ||
+		!strings.Contains(recorder.Body.String(), "x-flTopology") {
+		t.Fatalf("status=%d forwarded=%s body=%s", recorder.Code, stub.body, recorder.Body.String())
+	}
+
+	invalid := `{"x-flTopology":{"policy":{"unknown":true}}}`
+	stub.body = nil
+	recorder, ginContext = newMLModelTrainingGatewayContext(
+		t, http.MethodPatch, "application/merge-patch+json", invalid,
+	)
+	ginContext.Params = gin.Params{{Key: "subscriptionId", Value: "sub-1"}}
+	(&Server{processor: stub}).HandlePatchMLModelTrainingFromBackend(ginContext)
+	ginContext.Writer.WriteHeaderNow()
+	if recorder.Code != http.StatusBadRequest || len(stub.body) != 0 {
+		t.Fatalf("status=%d forwarded=%s body=%s", recorder.Code, stub.body, recorder.Body.String())
+	}
+	var problem models.ProblemDetails
+	if err := json.Unmarshal(recorder.Body.Bytes(), &problem); err != nil {
+		t.Fatal(err)
+	}
+	if len(problem.InvalidParams) != 1 ||
+		problem.InvalidParams[0].Param != "x-flTopology.policy.unknown" {
+		t.Fatalf("problem = %+v", problem)
+	}
+
+	invalidNotify := `{
+		"notifCorreId":"candidate-client-a",
+		"mlCorreId":"hierarchical-fl-001",
+		"x-flTopologyReport":{
+			"nfInstanceId":"10000000-0000-4000-8000-000000000001",
+			"children":[{
+				"nfInstanceId":"10000000-0000-4000-8000-000000000101",
+				"status":"FAILED",
+				"statusTimestamp":"2026-09-02T06:29:10Z"
+			}]
+		}
+	}`
+	stub.body = nil
+	recorder, ginContext = newMLModelTrainingGatewayContext(
+		t, http.MethodPost, "application/json", invalidNotify,
+	)
+	(&Server{processor: stub}).HandleMLModelTrainingNotification(ginContext)
+	ginContext.Writer.WriteHeaderNow()
+	if recorder.Code != http.StatusBadRequest || len(stub.body) != 0 {
+		t.Fatalf("notify status=%d forwarded=%s body=%s", recorder.Code, stub.body, recorder.Body.String())
+	}
+	problem = models.ProblemDetails{}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &problem); err != nil {
+		t.Fatal(err)
+	}
+	if len(problem.InvalidParams) != 1 ||
+		problem.InvalidParams[0].Param != "x-flTopologyReport.children[0].statusCause" {
+		t.Fatalf("notify problem = %+v", problem)
+	}
+}
+
+func newMLModelTrainingGatewayContext(
+	t *testing.T,
+	method string,
+	mediaType string,
+	body string,
+) (*httptest.ResponseRecorder, *gin.Context) {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	ginContext, _ := gin.CreateTestContext(recorder)
+	ginContext.Request = httptest.NewRequestWithContext(
+		t.Context(), method, "/internal/v1/ml-model-training/subscriptions", strings.NewReader(body),
+	)
+	ginContext.Request.Header.Set("Content-Type", mediaType)
+	return recorder, ginContext
 }

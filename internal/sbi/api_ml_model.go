@@ -209,6 +209,15 @@ func (s *Server) readMLModelBodyWithMediaType(
 	expectedMediaType string,
 	validate func([]byte) error,
 ) ([]byte, bool) {
+	return s.readMLModelBodyWithMediaTypeAndProblem(c, expectedMediaType, validate, nil)
+}
+
+func (s *Server) readMLModelBodyWithMediaTypeAndProblem(
+	c *gin.Context,
+	expectedMediaType string,
+	validate func([]byte) error,
+	validationProblem func(error) *models.ProblemDetails,
+) ([]byte, bool) {
 	mediaType, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
 	if err != nil || mediaType != expectedMediaType {
 		util.GinProblemJson(c, &models.ProblemDetails{
@@ -240,6 +249,12 @@ func (s *Server) readMLModelBodyWithMediaType(
 		return nil, false
 	}
 	if validateErr := validate(body); validateErr != nil {
+		if validationProblem != nil {
+			if problem := validationProblem(validateErr); problem != nil {
+				util.GinProblemJson(c, problem)
+				return nil, false
+			}
+		}
 		util.GinProblemJson(c, openapi.ProblemDetailsMalformedReqSyntax(validateErr.Error()))
 		return nil, false
 	}
