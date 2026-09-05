@@ -140,6 +140,31 @@ func (c *Consumer) RetrieveAdrfMLModelRecord(
 		ExecuteStandardMLModelRetrievalRequest(ctx, storeTransID, modelUniqueIDs)
 }
 
+func (c *Consumer) UpdateAdrfMLModelRecord(
+	ctx context.Context,
+	targetAPIBaseURI string,
+	storeTransID string,
+	body []byte,
+) (*StandardAdrfResponse, error) {
+	if targetAPIBaseURI == "" {
+		return nil, errors.New("ADRF target API root is required")
+	}
+	return c.adrfClientForTarget(targetAPIBaseURI).
+		ExecuteStandardMLModelUpdateRequest(ctx, storeTransID, body)
+}
+
+func (c *Consumer) DeleteAdrfMLModelRecord(
+	ctx context.Context,
+	targetAPIBaseURI string,
+	storeTransID string,
+) (*StandardAdrfResponse, error) {
+	if targetAPIBaseURI == "" {
+		return nil, errors.New("ADRF target API root is required")
+	}
+	return c.adrfClientForTarget(targetAPIBaseURI).
+		ExecuteStandardMLModelDeleteRequest(ctx, storeTransID)
+}
+
 func (c *Consumer) CreateAdrfRetrievalSubscription(
 	ctx context.Context,
 	targetAPIBaseURI string,

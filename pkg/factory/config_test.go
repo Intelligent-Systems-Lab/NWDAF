@@ -132,6 +132,26 @@ configuration:
 			wantErr: `supportedAnalytics[0]`,
 		},
 		{
+			name: "experimental image training analytics profile",
+			yaml: `
+configuration:
+  nrfUri: http://127.0.0.10:8000
+  nwdafInfo:
+    mlAnalyticsList:
+      - mlAnalyticsIds: [X_IMAGE_CLASSIFICATION]
+        mlModelInterInfo:
+          vendorList: ["001122"]
+`,
+			checkConfig: func(t *testing.T, cfg *factory.Config) {
+				t.Helper()
+				entries := cfg.GetNwdafInfo().MLAnalyticsList
+				if len(entries) != 1 || len(entries[0].MLAnalyticsIDs) != 1 ||
+					string(entries[0].MLAnalyticsIDs[0]) != factory.NwdafExperimentalEventImageClass {
+					t.Fatalf("ML analytics entries = %#v", entries)
+				}
+			},
+		},
+		{
 			name: "https sbi requires tls paths",
 			yaml: `
 configuration:

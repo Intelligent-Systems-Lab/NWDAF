@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"github.com/free5gc/nwdaf/internal/sbi/consumer"
 )
 
+const testAdrfMLModelTarget = "http://adrf.example"
+
 type adrfRetrievalStub struct {
 	createResponse *consumer.StandardAdrfResponse
 	createErr      error
@@ -16,6 +19,9 @@ type adrfRetrievalStub struct {
 	deleteErr      error
 	deleteTarget   string
 	deleteLocation string
+	mlModelTarget  string
+	storeTransID   string
+	mlModelBody    []byte
 }
 
 func (s *adrfRetrievalStub) CreateAdrfRetrievalSubscription(
@@ -51,6 +57,74 @@ func (s *adrfRetrievalStub) RetrieveAdrfMLModelRecord(
 	[]int64,
 ) (*consumer.StandardAdrfResponse, error) {
 	return nil, nil
+}
+
+func (s *adrfRetrievalStub) UpdateAdrfMLModelRecord(
+	_ context.Context,
+	target string,
+	storeTransID string,
+	body []byte,
+) (*consumer.StandardAdrfResponse, error) {
+	s.mlModelTarget = target
+	s.storeTransID = storeTransID
+	s.mlModelBody = append([]byte(nil), body...)
+	return s.createResponse, s.createErr
+}
+
+func (s *adrfRetrievalStub) DeleteAdrfMLModelRecord(
+	_ context.Context,
+	target string,
+	storeTransID string,
+) (*consumer.StandardAdrfResponse, error) {
+	s.mlModelTarget = target
+	s.storeTransID = storeTransID
+	return s.deleteResponse, s.deleteErr
+}
+
+func TestAdrfMLModelMutationDelegatesToConsumer(t *testing.T) {
+	body := []byte(`{"nfInstanceId":"root-a","mlModelInfo":[]}`)
+	stub := &adrfRetrievalStub{
+		createResponse: &consumer.StandardAdrfResponse{StatusCode: http.StatusNoContent},
+		deleteResponse: &consumer.StandardAdrfResponse{StatusCode: http.StatusNoContent},
+	}
+	processor := New(nil, nil, stub)
+
+	response, err := processor.UpdateAdrfMLModelRecord(
+		context.Background(),
+		testAdrfMLModelTarget,
+		"round-record-a",
+		body,
+	)
+	if err != nil || response == nil ||
+		stub.mlModelTarget != testAdrfMLModelTarget ||
+		stub.storeTransID != "round-record-a" ||
+		!bytes.Equal(stub.mlModelBody, body) {
+		t.Fatalf(
+			"response=%+v error=%v target=%q storeTransId=%q body=%s",
+			response,
+			err,
+			stub.mlModelTarget,
+			stub.storeTransID,
+			string(stub.mlModelBody),
+		)
+	}
+
+	response, err = processor.DeleteAdrfMLModelRecord(
+		context.Background(),
+		testAdrfMLModelTarget,
+		"round-record-a",
+	)
+	if err != nil || response == nil ||
+		stub.mlModelTarget != testAdrfMLModelTarget ||
+		stub.storeTransID != "round-record-a" {
+		t.Fatalf(
+			"response=%+v error=%v target=%q storeTransId=%q",
+			response,
+			err,
+			stub.mlModelTarget,
+			stub.storeTransID,
+		)
+	}
 }
 
 func TestAdrfRetrievalLifecycleUsesCapturedLocation(t *testing.T) {

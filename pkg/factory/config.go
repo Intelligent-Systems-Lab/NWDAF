@@ -35,6 +35,7 @@ const (
 	NwdafMLModelMonitorResURIPrefix   = "/nnwdaf-mlmodelmonitor/v1"
 	NwdafMLModelTrainingResURIPrefix  = "/nnwdaf-mlmodeltraining/v1"
 	NwdafSupportedEventUEComm         = "UE_COMMUNICATION"
+	NwdafExperimentalEventImageClass  = "X_IMAGE_CLASSIFICATION"
 	NwdafMLModelMonitorServiceName    = "nnwdaf-mlmodelmonitor"
 	NwdafMLModelTrainingServiceName   = "nnwdaf-mlmodeltraining"
 )
@@ -698,7 +699,8 @@ func (c *MLAnalyticsInfoConfig) normalizeAndValidate() error {
 		errs = append(errs, errors.New("mlAnalyticsIds must contain at least one entry"))
 	}
 	for index, event := range c.MLAnalyticsIDs {
-		if event != models.NwdafEvent_UE_COMMUNICATION {
+		if event != models.NwdafEvent_UE_COMMUNICATION &&
+			string(event) != NwdafExperimentalEventImageClass {
 			errs = append(errs, fmt.Errorf(
 				"mlAnalyticsIds[%d] %q is not supported by the current runtime",
 				index,

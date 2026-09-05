@@ -22,6 +22,7 @@ const (
 	serviceADRFData          = "nadrf-datamanagement"
 	serviceADRFModel         = "nadrf-mlmodelmanagement"
 	queryMLAnalyticsInfoList = "ml-analytics-info-list"
+	experimentalImageEvent   = "X_IMAGE_CLASSIFICATION"
 )
 
 var (
@@ -185,7 +186,8 @@ func parseNwdafEvents(raw string) ([]models.NwdafEvent, error) {
 	result := []models.NwdafEvent{}
 	for _, item := range strings.Split(raw, ",") {
 		event := models.NwdafEvent(strings.TrimSpace(item))
-		if event != models.NwdafEvent_UE_COMMUNICATION {
+		if event != models.NwdafEvent_UE_COMMUNICATION &&
+			string(event) != experimentalImageEvent {
 			return nil, fmt.Errorf("nwdaf-event-list contains unsupported value %q", event)
 		}
 		if _, exists := seen[event]; exists {
@@ -217,7 +219,8 @@ func validateMLAnalyticsInfo(info compatnrf.MLAnalyticsInfo) error {
 		return fmt.Errorf("mlAnalyticsIds must contain at least one entry")
 	}
 	for _, event := range info.MLAnalyticsIDs {
-		if event != models.NwdafEvent_UE_COMMUNICATION {
+		if event != models.NwdafEvent_UE_COMMUNICATION &&
+			string(event) != experimentalImageEvent {
 			return fmt.Errorf("mlAnalyticsIds contains unsupported value %q", event)
 		}
 	}

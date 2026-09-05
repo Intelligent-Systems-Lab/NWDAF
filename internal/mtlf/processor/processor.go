@@ -79,6 +79,8 @@ type adrfRetrievalProxy interface {
 	DeleteAdrfRetrievalSubscription(context.Context, string, string) (*consumer.StandardAdrfResponse, error)
 	StoreAdrfMLModelRecord(context.Context, string, []byte) (*consumer.StandardAdrfResponse, error)
 	RetrieveAdrfMLModelRecord(context.Context, string, string, []int64) (*consumer.StandardAdrfResponse, error)
+	UpdateAdrfMLModelRecord(context.Context, string, string, []byte) (*consumer.StandardAdrfResponse, error)
+	DeleteAdrfMLModelRecord(context.Context, string, string) (*consumer.StandardAdrfResponse, error)
 }
 
 type collectionProxy interface {
@@ -345,6 +347,34 @@ func (p *Processor) RetrieveAdrfMLModelRecord(
 		storeTransID,
 		modelUniqueIDs,
 	)
+}
+
+func (p *Processor) UpdateAdrfMLModelRecord(
+	ctx context.Context,
+	targetAPIBaseURI string,
+	storeTransID string,
+	body []byte,
+) (*consumer.StandardAdrfResponse, error) {
+	if p.adrf == nil {
+		return nil, ErrAdrfRetrievalUnavailable
+	}
+	return p.adrf.UpdateAdrfMLModelRecord(
+		ctx,
+		targetAPIBaseURI,
+		storeTransID,
+		body,
+	)
+}
+
+func (p *Processor) DeleteAdrfMLModelRecord(
+	ctx context.Context,
+	targetAPIBaseURI string,
+	storeTransID string,
+) (*consumer.StandardAdrfResponse, error) {
+	if p.adrf == nil {
+		return nil, ErrAdrfRetrievalUnavailable
+	}
+	return p.adrf.DeleteAdrfMLModelRecord(ctx, targetAPIBaseURI, storeTransID)
 }
 
 func (p *Processor) CreateAdrfRetrievalSubscription(

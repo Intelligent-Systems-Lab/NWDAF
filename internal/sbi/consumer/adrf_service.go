@@ -171,6 +171,85 @@ func (c *AdrfClient) ExecuteStandardMLModelRetrievalRequest(
 	return response, nil
 }
 
+func (c *AdrfClient) ExecuteStandardMLModelUpdateRequest(
+	ctx context.Context,
+	storeTransID string,
+	body []byte,
+) (*StandardAdrfResponse, error) {
+	storeTransID = strings.TrimSpace(storeTransID)
+	if storeTransID == "" {
+		return nil, fmt.Errorf("storeTransId is required")
+	}
+	requestURL := strings.TrimRight(c.endpoint, "/") + AdrfMLModelStoreRecordsPath +
+		"/" + url.PathEscape(storeTransID)
+	response, err := c.executeStandardMLModelRequest(
+		ctx,
+		http.MethodPut,
+		requestURL,
+		body,
+	)
+	if err != nil {
+		return response, err
+	}
+	switch response.StatusCode {
+	case http.StatusOK:
+		if !isJSONMediaType(response.ContentType) || len(response.Body) == 0 {
+			return nil, fmt.Errorf("malformed ADRF ML model update response")
+		}
+		var record NadrfMLModelStoreRecord
+		if unmarshalErr := json.Unmarshal(response.Body, &record); unmarshalErr != nil ||
+			!validMLModelStoreRecord(record, false) {
+			return nil, fmt.Errorf("malformed ADRF ML model update representation")
+		}
+	case http.StatusNoContent:
+		if len(response.Body) != 0 {
+			return nil, fmt.Errorf("malformed ADRF ML model update no-content response")
+		}
+	default:
+		return response, unexpectedAdrfStatus(response)
+	}
+	return response, nil
+}
+
+func (c *AdrfClient) ExecuteStandardMLModelDeleteRequest(
+	ctx context.Context,
+	storeTransID string,
+) (*StandardAdrfResponse, error) {
+	storeTransID = strings.TrimSpace(storeTransID)
+	if storeTransID == "" {
+		return nil, fmt.Errorf("storeTransId is required")
+	}
+	requestURL := strings.TrimRight(c.endpoint, "/") + AdrfMLModelStoreRecordsPath +
+		"/" + url.PathEscape(storeTransID)
+	response, err := c.executeStandardMLModelRequest(
+		ctx,
+		http.MethodDelete,
+		requestURL,
+		nil,
+	)
+	if err != nil {
+		return response, err
+	}
+	switch response.StatusCode {
+	case http.StatusOK:
+		if !isJSONMediaType(response.ContentType) || len(response.Body) == 0 {
+			return nil, fmt.Errorf("malformed ADRF ML model delete response")
+		}
+		var results []adrfcompat.MLModelDeleteResult
+		if unmarshalErr := json.Unmarshal(response.Body, &results); unmarshalErr != nil ||
+			!validMLModelDeleteResults(results) {
+			return nil, fmt.Errorf("malformed ADRF ML model delete representation")
+		}
+	case http.StatusNoContent:
+		if len(response.Body) != 0 {
+			return nil, fmt.Errorf("malformed ADRF ML model delete no-content response")
+		}
+	default:
+		return response, unexpectedAdrfStatus(response)
+	}
+	return response, nil
+}
+
 func (c *AdrfClient) executeStandardMLModelRequest(
 	ctx context.Context,
 	method string,
@@ -251,6 +330,19 @@ func validMLModelStoreRecord(record NadrfMLModelStoreRecord, requireResult bool)
 			record.ModelStoreResult.ModelUniqueID != nil &&
 			*record.ModelStoreResult.ModelUniqueID == *info.ModelUniqueID &&
 			record.ModelStoreResult.StoreResult == "ML_MODEL_FILE_STORED_IN_ADRF"
+	}
+	return true
+}
+
+func validMLModelDeleteResults(results []adrfcompat.MLModelDeleteResult) bool {
+	if len(results) == 0 {
+		return false
+	}
+	for _, result := range results {
+		if result.ModelUniqueID == nil || *result.ModelUniqueID < 0 ||
+			strings.TrimSpace(result.DeleteResult) == "" {
+			return false
+		}
 	}
 	return true
 }

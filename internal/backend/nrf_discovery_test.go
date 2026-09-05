@@ -66,6 +66,26 @@ func TestParseNFDiscoveryQueryFLClientAndADRF(t *testing.T) {
 	}
 }
 
+func TestParseNFDiscoveryQueryAcceptsExperimentalImageTrainingEvent(t *testing.T) {
+	t.Parallel()
+
+	query, problem := ParseNFDiscoveryQuery(url.Values{
+		"target-nf-type": {"NWDAF"},
+		"service-names":  {"nnwdaf-mlmodeltraining"},
+		"ml-analytics-info-list": {`[{
+			"mlAnalyticsIds":["X_IMAGE_CLASSIFICATION"],
+			"mlModelInterInfo":{"vendorList":["001122"]},
+			"flCapabilityType":"FL_CLIENT"
+		}]`},
+	})
+
+	if problem != nil || len(query.MLAnalyticsInfoList) != 1 ||
+		len(query.MLAnalyticsInfoList[0].MLAnalyticsIDs) != 1 ||
+		string(query.MLAnalyticsInfoList[0].MLAnalyticsIDs[0]) != experimentalImageEvent {
+		t.Fatalf("ParseNFDiscoveryQuery() query=%#v problem=%+v", query, problem)
+	}
+}
+
 func TestParseNFDiscoveryQueryRejectsForgedRequesterAndUnsupportedCombinations(t *testing.T) {
 	t.Parallel()
 

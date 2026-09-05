@@ -3,6 +3,7 @@ package consumer
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -128,5 +129,206 @@ func TestAdrfClientExecuteStandardRetrievalLifecycle(t *testing.T) {
 	}
 	if response.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete response = %+v", response)
+	}
+}
+
+func TestAdrfClientExecuteStandardMLModelRecordMutationLifecycle(t *testing.T) {
+	client := newInterceptedAdrfClient(t)
+	storeTransID := "round-record-a"
+	recordPath := AdrfMLModelStoreRecordsPath + "/" + storeTransID
+	body := []byte(`{
+		"nfInstanceId":"11111111-1111-4111-8111-111111111111",
+		"mlModelInfo":[{
+			"modelUniqueId":42,
+			"mlFileAddr":{"mLModelUrl":"http://root.example/models/round-a"},
+			"mlStorageSize":128,
+			"allowConsumerList":[{"nfInstanceId":"22222222-2222-4222-8222-222222222222"}]
+		}]
+	}`)
+
+	gock.New(testAdrfEndpoint).
+		Put(recordPath).
+		MatchHeader("Content-Type", "application/json").
+		BodyString(string(body)).
+		Reply(http.StatusOK).
+		SetHeader("Content-Type", "application/json").
+		BodyString(string(body))
+
+	response, err := client.ExecuteStandardMLModelUpdateRequest(
+		context.Background(),
+		storeTransID,
+		body,
+	)
+	if err != nil {
+		t.Fatalf("ExecuteStandardMLModelUpdateRequest() error = %v", err)
+	}
+	if response.StatusCode != http.StatusOK || !bytes.Equal(response.Body, body) {
+		t.Fatalf("update response = %+v", response)
+	}
+
+	gock.New(testAdrfEndpoint).
+		Delete(recordPath).
+		Reply(http.StatusNoContent)
+	response, err = client.ExecuteStandardMLModelDeleteRequest(
+		context.Background(),
+		storeTransID,
+	)
+	if err != nil {
+		t.Fatalf("ExecuteStandardMLModelDeleteRequest() error = %v", err)
+	}
+	if response.StatusCode != http.StatusNoContent || len(response.Body) != 0 {
+		t.Fatalf("delete response = %+v", response)
+	}
+}
+
+func TestAdrfClientExecuteStandardMLModelRecordMutationAcceptsDeclaredRepresentations(t *testing.T) {
+	client := newInterceptedAdrfClient(t)
+	storeTransID := "round-record-a"
+	recordPath := AdrfMLModelStoreRecordsPath + "/" + storeTransID
+	body := []byte(`{
+		"nfInstanceId":"11111111-1111-4111-8111-111111111111",
+		"mlModelInfo":[{
+			"modelUniqueId":42,
+			"mlFileAddr":{"mLModelUrl":"http://root.example/models/round-a"},
+			"mlStorageSize":128
+		}]
+	}`)
+
+	gock.New(testAdrfEndpoint).
+		Put(recordPath).
+		BodyString(string(body)).
+		Reply(http.StatusNoContent)
+	response, err := client.ExecuteStandardMLModelUpdateRequest(
+		context.Background(),
+		storeTransID,
+		body,
+	)
+	if err != nil || response.StatusCode != http.StatusNoContent || len(response.Body) != 0 {
+		t.Fatalf("update response=%+v error=%v", response, err)
+	}
+
+	deleteBody := []byte(`[{"modelUniqueId":42,"deleteResult":"ML_MODEL_DELETED"}]`)
+	gock.New(testAdrfEndpoint).
+		Delete(recordPath).
+		Reply(http.StatusOK).
+		SetHeader("Content-Type", "application/json").
+		BodyString(string(deleteBody))
+	response, err = client.ExecuteStandardMLModelDeleteRequest(
+		context.Background(),
+		storeTransID,
+	)
+	if err != nil || response.StatusCode != http.StatusOK || !bytes.Equal(response.Body, deleteBody) {
+		t.Fatalf("delete response=%+v error=%v", response, err)
+	}
+}
+
+func TestAdrfClientExecuteStandardMLModelRecordMutationRejectsMalformedSuccess(t *testing.T) {
+	record := map[string]any{
+		"nfInstanceId": "11111111-1111-4111-8111-111111111111",
+		"mlModelInfo": []any{map[string]any{
+			"modelUniqueId": int64(42),
+			"mlFileAddr":    map[string]any{"mLModelUrl": "http://root.example/models/round-a"},
+			"mlStorageSize": int64(128),
+		}},
+	}
+	validBody, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name        string
+		method      string
+		status      int
+		contentType string
+		body        string
+	}{
+		{name: "update 200 missing content type", method: http.MethodPut, status: http.StatusOK, body: string(validBody)},
+		{
+			name: "update 200 malformed record", method: http.MethodPut,
+			status: http.StatusOK, contentType: "application/json", body: `{}`,
+		},
+		{name: "update 204 with body", method: http.MethodPut, status: http.StatusNoContent, body: `{}`},
+		{name: "delete 200 missing content type", method: http.MethodDelete, status: http.StatusOK, body: `[]`},
+		{
+			name: "delete 200 empty result", method: http.MethodDelete,
+			status: http.StatusOK, contentType: "application/json", body: `[]`,
+		},
+		{
+			name: "delete 200 malformed result", method: http.MethodDelete,
+			status: http.StatusOK, contentType: "application/json", body: `[{}]`,
+		},
+		{name: "delete 204 with body", method: http.MethodDelete, status: http.StatusNoContent, body: `{}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := newInterceptedAdrfClient(t)
+			request := gock.New(testAdrfEndpoint)
+			if test.method == http.MethodPut {
+				request.Put(AdrfMLModelStoreRecordsPath + "/round-record-a").BodyString(string(validBody))
+			} else {
+				request.Delete(AdrfMLModelStoreRecordsPath + "/round-record-a")
+			}
+			reply := request.Reply(test.status)
+			if test.contentType != "" {
+				reply.SetHeader("Content-Type", test.contentType)
+			}
+			reply.BodyString(test.body)
+
+			var response *StandardAdrfResponse
+			var callErr error
+			if test.method == http.MethodPut {
+				response, callErr = client.ExecuteStandardMLModelUpdateRequest(
+					context.Background(),
+					"round-record-a",
+					validBody,
+				)
+			} else {
+				response, callErr = client.ExecuteStandardMLModelDeleteRequest(
+					context.Background(),
+					"round-record-a",
+				)
+			}
+			if callErr == nil || response != nil {
+				t.Fatalf("response=%+v err=%v, want malformed success", response, callErr)
+			}
+		})
+	}
+}
+
+func TestAdrfClientExecuteStandardMLModelRecordMutationPreservesProblemDetails(t *testing.T) {
+	client := newInterceptedAdrfClient(t)
+	problem := `{"status":404,"cause":"RESOURCE_NOT_FOUND"}`
+	gock.New(testAdrfEndpoint).
+		Delete(AdrfMLModelStoreRecordsPath+"/missing-record").
+		Reply(http.StatusNotFound).
+		SetHeader("Content-Type", "application/problem+json").
+		BodyString(problem)
+
+	response, err := client.ExecuteStandardMLModelDeleteRequest(
+		context.Background(),
+		"missing-record",
+	)
+	standardErr, ok := err.(*StandardAdrfError)
+	if response == nil || !ok || response.StatusCode != http.StatusNotFound ||
+		standardErr.ProblemDetails.Cause != "RESOURCE_NOT_FOUND" {
+		t.Fatalf("response=%+v err=%#v", response, err)
+	}
+}
+
+func TestAdrfClientExecuteStandardMLModelRecordMutationRejectsMissingTransactionID(t *testing.T) {
+	client := newInterceptedAdrfClient(t)
+	if response, err := client.ExecuteStandardMLModelUpdateRequest(
+		context.Background(),
+		" ",
+		[]byte(`{}`),
+	); err == nil || response != nil {
+		t.Fatalf("update response=%+v error=%v", response, err)
+	}
+	if response, err := client.ExecuteStandardMLModelDeleteRequest(
+		context.Background(),
+		" ",
+	); err == nil || response != nil {
+		t.Fatalf("delete response=%+v error=%v", response, err)
 	}
 }

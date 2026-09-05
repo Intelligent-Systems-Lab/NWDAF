@@ -71,6 +71,11 @@ type ModelStoreResult struct {
 	StoreResult   string `json:"storeResult"`
 }
 
+type MLModelDeleteResult struct {
+	ModelUniqueID *int64 `json:"modelUniqueId"`
+	DeleteResult  string `json:"deleteResult"`
+}
+
 type MLModelStoreRecord struct {
 	NFInstanceID     string            `json:"nfInstanceId,omitempty"`
 	NFSetID          string            `json:"nfSetId,omitempty"`

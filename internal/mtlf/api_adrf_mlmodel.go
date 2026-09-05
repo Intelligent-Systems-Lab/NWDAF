@@ -25,6 +25,17 @@ type adrfMLModelProcessor interface {
 		string,
 		[]int64,
 	) (*consumer.StandardAdrfResponse, error)
+	UpdateAdrfMLModelRecord(
+		context.Context,
+		string,
+		string,
+		[]byte,
+	) (*consumer.StandardAdrfResponse, error)
+	DeleteAdrfMLModelRecord(
+		context.Context,
+		string,
+		string,
+	) (*consumer.StandardAdrfResponse, error)
 }
 
 func (s *Server) adrfMLModelRoutes() []Route {
@@ -40,6 +51,18 @@ func (s *Server) adrfMLModelRoutes() []Route {
 			Method:  http.MethodGet,
 			Pattern: "/internal/v1/adrf-mlmodelmanagement/mlmodel-store-records",
 			APIFunc: s.RetrieveAdrfMLModelRecord,
+		},
+		{
+			Name:    "UpdateAdrfMLModelRecord",
+			Method:  http.MethodPut,
+			Pattern: "/internal/v1/adrf-mlmodelmanagement/mlmodel-store-records/:storeTransId",
+			APIFunc: s.UpdateAdrfMLModelRecord,
+		},
+		{
+			Name:    "DeleteAdrfMLModelRecord",
+			Method:  http.MethodDelete,
+			Pattern: "/internal/v1/adrf-mlmodelmanagement/mlmodel-store-records/:storeTransId",
+			APIFunc: s.DeleteAdrfMLModelRecord,
 		},
 	}
 }
@@ -109,6 +132,74 @@ func (s *Server) RetrieveAdrfMLModelRecord(c *gin.Context) {
 		modelIDs,
 	)
 	writeAdrfMLModelResponse(c, response, err)
+}
+
+func (s *Server) UpdateAdrfMLModelRecord(c *gin.Context) {
+	storeTransID, ok := adrfMLModelStoreTransactionID(c)
+	if !ok {
+		return
+	}
+	body, problem := readStandardJSONBody(
+		c,
+		maxAdrfControlBodyBytes,
+		"ADRF ML model update body exceeds limit",
+	)
+	if problem != nil {
+		util.GinProblemJson(c, problem)
+		return
+	}
+	var record adrfcompat.MLModelStoreRecord
+	if err := json.Unmarshal(body, &record); err != nil || !validMLModelStoreRequest(record) {
+		util.GinProblemJson(c, malformedRequestProblem("invalid NadrfMLModelStoreRecord"))
+		return
+	}
+	target, ok := adrfMLModelTarget(c)
+	if !ok {
+		return
+	}
+	processor, ok := s.processor.(adrfMLModelProcessor)
+	if !ok {
+		util.GinProblemJson(c, adrfRetrievalUnavailableProblem())
+		return
+	}
+	response, err := processor.UpdateAdrfMLModelRecord(
+		c.Request.Context(),
+		target,
+		storeTransID,
+		body,
+	)
+	writeAdrfMLModelResponse(c, response, err)
+}
+
+func (s *Server) DeleteAdrfMLModelRecord(c *gin.Context) {
+	storeTransID, ok := adrfMLModelStoreTransactionID(c)
+	if !ok {
+		return
+	}
+	target, ok := adrfMLModelTarget(c)
+	if !ok {
+		return
+	}
+	processor, ok := s.processor.(adrfMLModelProcessor)
+	if !ok {
+		util.GinProblemJson(c, adrfRetrievalUnavailableProblem())
+		return
+	}
+	response, err := processor.DeleteAdrfMLModelRecord(
+		c.Request.Context(),
+		target,
+		storeTransID,
+	)
+	writeAdrfMLModelResponse(c, response, err)
+}
+
+func adrfMLModelStoreTransactionID(c *gin.Context) (string, bool) {
+	storeTransID := strings.TrimSpace(c.Param("storeTransId"))
+	if storeTransID == "" {
+		util.GinProblemJson(c, malformedRequestProblem("storeTransId is required"))
+		return "", false
+	}
+	return storeTransID, true
 }
 
 func adrfMLModelTarget(c *gin.Context) (string, bool) {
