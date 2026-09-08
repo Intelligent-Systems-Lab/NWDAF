@@ -29,6 +29,7 @@ const (
 	MLModelRouteActive         MLModelRouteLifecycle = "ACTIVE"
 	MLModelRouteReplacing      MLModelRouteLifecycle = "REPLACING"
 	MLModelRouteDeleting       MLModelRouteLifecycle = "DELETING"
+	MLModelRouteTerminating    MLModelRouteLifecycle = "TERMINATING"
 	MLModelRoutePendingCleanup MLModelRouteLifecycle = "PENDING_CLEANUP"
 )
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,8 +15,251 @@ import (
 
 	"github.com/free5gc/nwdaf/internal/backend"
 	wire "github.com/free5gc/nwdaf/internal/compat/mlmodeltraining"
+	nwdaf_context "github.com/free5gc/nwdaf/internal/context"
 	"github.com/free5gc/openapi/models"
 )
+
+type mlModelTrainingRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f mlModelTrainingRoundTripper) RoundTrip(
+	request *http.Request,
+) (*http.Response, error) {
+	return f(request)
+}
+
+func TestBackendTerminationNotificationWaitsForConsumerDelete(t *testing.T) {
+	callback := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		request *http.Request,
+	) {
+		if request.Method != http.MethodPost {
+			t.Fatalf("callback method = %s, want POST", request.Method)
+		}
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer callback.Close()
+
+	processor, ctx, mtlfBackend, _, availability, _ := newMLModelProcessorTestSubject()
+	processor.SetMLModelHTTPClient(callback.Client())
+	route := nwdaf_context.MLModelTrainingSubscriptionRoute{
+		SubscriptionID:             "old-public-resource",
+		NotificationCorrelationID:  "old-notification-correlation",
+		MLCorrelationID:            "hierarchy-procedure",
+		Destination:                nwdaf_context.MLModelRoutePartyExternal,
+		DestinationNotificationURI: callback.URL,
+		PeerRoute: nwdaf_context.MLModelPeerRoute{
+			Direction:         nwdaf_context.MLModelRouteDirectionInbound,
+			BackendResourceID: "old-backend-resource",
+			LifecycleState:    nwdaf_context.MLModelRouteActive,
+			ProcessGeneration: availability.generation,
+		},
+	}
+	if !ctx.AddMLModelTrainingSubscriptionRoute(route) {
+		t.Fatal("could not add old inbound route")
+	}
+
+	response, problem := processor.HandleMLModelTrainingNotification(
+		t.Context(), "", []byte(`{
+			"notifCorreId":"old-notification-correlation",
+			"mlCorreId":"hierarchy-procedure",
+			"termTrainReq":"NOT_AVAILABLE_ML_TRAIN"
+		}`),
+	)
+	if problem != nil || response == nil || response.StatusCode != http.StatusNoContent {
+		t.Fatalf("termination response=%+v problem=%+v", response, problem)
+	}
+	terminating, found := ctx.GetMLModelTrainingSubscriptionRoute(route.SubscriptionID)
+	if !found || terminating.PeerRoute.LifecycleState != nwdaf_context.MLModelRouteLifecycle("TERMINATING") {
+		t.Fatalf("terminating route=%+v found=%t", terminating, found)
+	}
+	if mtlfBackend.deletedTrainingBackend != "" {
+		t.Fatalf("backend was deleted before consumer DELETE: %q", mtlfBackend.deletedTrainingBackend)
+	}
+
+	deleteResponse, deleteProblem := processor.HandleDeleteMLModelTraining(
+		t.Context(), route.SubscriptionID,
+	)
+	if deleteProblem != nil || deleteResponse == nil ||
+		deleteResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete response=%+v problem=%+v", deleteResponse, deleteProblem)
+	}
+	if mtlfBackend.deletedTrainingBackend != "old-backend-resource" {
+		t.Fatalf("deleted backend resource = %q", mtlfBackend.deletedTrainingBackend)
+	}
+	if _, found = ctx.GetMLModelTrainingSubscriptionRoute(route.SubscriptionID); found {
+		t.Fatal("terminal route remains after consumer DELETE")
+	}
+}
+
+func TestBackendTerminationNotificationPeerFailureReturnsAndTombstonesRoute(t *testing.T) {
+	callback := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		_ *http.Request,
+	) {
+		writer.Header().Set("Content-Type", "application/problem+json")
+		writer.WriteHeader(http.StatusServiceUnavailable)
+		if _, err := writer.Write([]byte(`{
+			"status":503,
+			"title":"Service Unavailable",
+			"cause":"SERVICE_NOT_AVAILABLE"
+		}`)); err != nil {
+			return
+		}
+	}))
+	defer callback.Close()
+
+	processor, ctx, mtlfBackend, _, availability, _ := newMLModelProcessorTestSubject()
+	processor.SetMLModelHTTPClient(callback.Client())
+	route := nwdaf_context.MLModelTrainingSubscriptionRoute{
+		SubscriptionID:             "old-public-resource",
+		NotificationCorrelationID:  "old-notification-correlation",
+		MLCorrelationID:            "hierarchy-procedure",
+		Destination:                nwdaf_context.MLModelRoutePartyExternal,
+		DestinationNotificationURI: callback.URL,
+		PeerRoute: nwdaf_context.MLModelPeerRoute{
+			Direction:         nwdaf_context.MLModelRouteDirectionInbound,
+			BackendResourceID: "old-backend-resource",
+			LifecycleState:    nwdaf_context.MLModelRouteActive,
+			ProcessGeneration: availability.generation,
+		},
+	}
+	if !ctx.AddMLModelTrainingSubscriptionRoute(route) {
+		t.Fatal("could not add old inbound route")
+	}
+
+	response, problem := processor.HandleMLModelTrainingNotification(
+		t.Context(), "", []byte(`{
+			"notifCorreId":"old-notification-correlation",
+			"mlCorreId":"hierarchy-procedure",
+			"termTrainReq":"NOT_AVAILABLE_ML_TRAIN"
+		}`),
+	)
+	if response != nil || problem == nil || problem.Status != http.StatusServiceUnavailable {
+		t.Fatalf("termination response=%+v problem=%+v", response, problem)
+	}
+	if _, found := ctx.GetMLModelTrainingSubscriptionRoute(route.SubscriptionID); found {
+		t.Fatal("failed-delivery route remains")
+	}
+	if _, found := ctx.GetMLModelDeletionRecord(
+		nwdaf_context.MLModelResourceTrainingSubscription,
+		route.SubscriptionID,
+	); !found {
+		t.Fatal("failed-delivery route was not tombstoned")
+	}
+	if mtlfBackend.deletedTrainingBackend != "" {
+		t.Fatalf("Go deleted backend after peer failure: %q", mtlfBackend.deletedTrainingBackend)
+	}
+
+	lateDeleteResponse, lateDeleteProblem := processor.HandleDeleteMLModelTraining(
+		t.Context(), route.SubscriptionID,
+	)
+	if lateDeleteProblem != nil || lateDeleteResponse == nil ||
+		lateDeleteResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("late delete response=%+v problem=%+v", lateDeleteResponse, lateDeleteProblem)
+	}
+	if mtlfBackend.deletedTrainingBackend != "" {
+		t.Fatalf("late delete reached backend: %q", mtlfBackend.deletedTrainingBackend)
+	}
+
+	duplicateDeleteResponse, duplicateDeleteProblem := processor.HandleDeleteMLModelTraining(
+		t.Context(), route.SubscriptionID,
+	)
+	if duplicateDeleteResponse != nil || duplicateDeleteProblem == nil ||
+		duplicateDeleteProblem.Status != http.StatusNotFound {
+		t.Fatalf(
+			"duplicate delete response=%+v problem=%+v",
+			duplicateDeleteResponse,
+			duplicateDeleteProblem,
+		)
+	}
+	if mtlfBackend.deletedTrainingBackend != "" {
+		t.Fatalf("duplicate delete reached backend: %q", mtlfBackend.deletedTrainingBackend)
+	}
+}
+
+func TestBackendTerminationNotificationTransportFailureTombstonesRoute(t *testing.T) {
+	processor, ctx, mtlfBackend, _, availability, _ := newMLModelProcessorTestSubject()
+	processor.SetMLModelHTTPClient(&http.Client{Transport: mlModelTrainingRoundTripper(
+		func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("peer is unreachable")
+		},
+	)})
+	route := nwdaf_context.MLModelTrainingSubscriptionRoute{
+		SubscriptionID:             "old-public-resource",
+		NotificationCorrelationID:  "old-notification-correlation",
+		MLCorrelationID:            "hierarchy-procedure",
+		Destination:                nwdaf_context.MLModelRoutePartyExternal,
+		DestinationNotificationURI: "http://old-branch.example/notification",
+		PeerRoute: nwdaf_context.MLModelPeerRoute{
+			Direction:         nwdaf_context.MLModelRouteDirectionInbound,
+			BackendResourceID: "old-backend-resource",
+			LifecycleState:    nwdaf_context.MLModelRouteActive,
+			ProcessGeneration: availability.generation,
+		},
+	}
+	if !ctx.AddMLModelTrainingSubscriptionRoute(route) {
+		t.Fatal("could not add old inbound route")
+	}
+
+	response, problem := processor.HandleMLModelTrainingNotification(
+		t.Context(), "", []byte(`{
+			"notifCorreId":"old-notification-correlation",
+			"mlCorreId":"hierarchy-procedure",
+			"termTrainReq":"NOT_AVAILABLE_ML_TRAIN"
+		}`),
+	)
+	if response != nil || problem == nil || problem.Status != http.StatusBadGateway {
+		t.Fatalf("termination response=%+v problem=%+v", response, problem)
+	}
+	if _, found := ctx.GetMLModelTrainingSubscriptionRoute(route.SubscriptionID); found {
+		t.Fatal("transport-failed route remains")
+	}
+	if _, found := ctx.GetMLModelDeletionRecord(
+		nwdaf_context.MLModelResourceTrainingSubscription,
+		route.SubscriptionID,
+	); !found {
+		t.Fatal("transport-failed route was not tombstoned")
+	}
+	if mtlfBackend.deletedTrainingBackend != "" {
+		t.Fatalf("Go deleted backend after peer transport failure: %q", mtlfBackend.deletedTrainingBackend)
+	}
+}
+
+func TestTerminationGraceCleanupDeletesBackendResource(t *testing.T) {
+	processor, ctx, mtlfBackend, _, availability, _ := newMLModelProcessorTestSubject()
+	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	route := nwdaf_context.MLModelTrainingSubscriptionRoute{
+		SubscriptionID:            "old-public-resource",
+		NotificationCorrelationID: "old-notification-correlation",
+		MLCorrelationID:           "hierarchy-procedure",
+		Destination:               nwdaf_context.MLModelRoutePartyExternal,
+		PeerRoute: nwdaf_context.MLModelPeerRoute{
+			Direction:         nwdaf_context.MLModelRouteDirectionInbound,
+			BackendResourceID: "old-backend-resource",
+			LifecycleState:    nwdaf_context.MLModelRouteLifecycle("TERMINATING"),
+			ProcessGeneration: availability.generation,
+			NextCleanupAt:     now.Add(-time.Second),
+		},
+	}
+	if !ctx.AddMLModelTrainingSubscriptionRoute(route) {
+		t.Fatal("could not add terminating inbound route")
+	}
+
+	processor.ReconcilePendingMLModelPeerCleanup(t.Context(), now)
+
+	if mtlfBackend.deletedTrainingBackend != "old-backend-resource" {
+		t.Fatalf("deleted backend resource = %q", mtlfBackend.deletedTrainingBackend)
+	}
+	if _, found := ctx.GetMLModelTrainingSubscriptionRoute(route.SubscriptionID); found {
+		t.Fatal("expired terminating route remains")
+	}
+	if _, found := ctx.GetMLModelDeletionRecord(
+		nwdaf_context.MLModelResourceTrainingSubscription,
+		route.SubscriptionID,
+	); !found {
+		t.Fatal("expired terminating route was not tombstoned")
+	}
+}
 
 func candidateTrainingBody(receiverID string) []byte {
 	return []byte(fmt.Sprintf(`{

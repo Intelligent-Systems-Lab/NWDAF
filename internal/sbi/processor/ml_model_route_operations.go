@@ -15,7 +15,29 @@ func (p *Processor) beginMLModelRouteOperationLocked(
 	route *nwdaf_context.MLModelPeerRoute,
 	state nwdaf_context.MLModelRouteLifecycle,
 ) (uint64, *models.ProblemDetails) {
-	if route == nil || route.LifecycleState != nwdaf_context.MLModelRouteActive {
+	return p.beginMLModelRouteOperationFromLocked(
+		route,
+		state,
+		nwdaf_context.MLModelRouteActive,
+	)
+}
+
+func (p *Processor) beginMLModelRouteOperationFromLocked(
+	route *nwdaf_context.MLModelPeerRoute,
+	state nwdaf_context.MLModelRouteLifecycle,
+	allowedStates ...nwdaf_context.MLModelRouteLifecycle,
+) (uint64, *models.ProblemDetails) {
+	if route == nil {
+		return 0, mlModelUnavailableProblem()
+	}
+	allowed := false
+	for _, candidate := range allowedStates {
+		if route.LifecycleState == candidate {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
 		return 0, mlModelUnavailableProblem()
 	}
 	route.OperationRevision = p.nextMLModelOperationRevisionLocked()

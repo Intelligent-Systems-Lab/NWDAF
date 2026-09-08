@@ -18,7 +18,10 @@ import (
 	"github.com/free5gc/openapi/models"
 )
 
-const mlModelTrainingCallbackPath = "/internal/v1/ml-model-training/notifications"
+const (
+	mlModelTrainingCallbackPath            = "/internal/v1/ml-model-training/notifications"
+	mlModelTrainingTerminationCleanupGrace = 30 * time.Second
+)
 
 func (p *Processor) HandleCreateMLModelTraining(
 	ctx context.Context,
@@ -674,9 +677,12 @@ func (p *Processor) HandleDeleteMLModelTraining(
 		p.mlModelMu.Unlock()
 		return nil, mlModelResourceNotFoundProblem("ML Model Training subscription", subscriptionID)
 	}
-	revision, problem := p.beginMLModelRouteOperationLocked(
+	previousLifecycle := route.PeerRoute.LifecycleState
+	revision, problem := p.beginMLModelRouteOperationFromLocked(
 		&route.PeerRoute,
 		nwdaf_context.MLModelRouteDeleting,
+		nwdaf_context.MLModelRouteActive,
+		nwdaf_context.MLModelRouteTerminating,
 	)
 	if problem != nil {
 		p.mlModelMu.Unlock()
@@ -690,7 +696,7 @@ func (p *Processor) HandleDeleteMLModelTraining(
 	var generationLease *backend.GenerationLease
 	if isPeer {
 		if p.mlModelPeerConsumer == nil {
-			restoreActiveMLModelRoute(&route.PeerRoute)
+			route.PeerRoute.LifecycleState = previousLifecycle
 			nwdafContext.UpdateMLModelTrainingSubscriptionRoute(route)
 			p.mlModelMu.Unlock()
 			return nil, mlModelUnavailableProblem()
@@ -699,7 +705,7 @@ func (p *Processor) HandleDeleteMLModelTraining(
 		var admitted bool
 		generationLease, admitted = acquireBackend(p.mtlfMLModelBackend, p.mtlfAvailability)
 		if !admitted {
-			restoreActiveMLModelRoute(&route.PeerRoute)
+			route.PeerRoute.LifecycleState = previousLifecycle
 			nwdafContext.UpdateMLModelTrainingSubscriptionRoute(route)
 			p.mlModelMu.Unlock()
 			return nil, mlModelUnavailableProblem()
@@ -750,7 +756,7 @@ func (p *Processor) HandleDeleteMLModelTraining(
 	if terminal {
 		nwdafContext.DeleteMLModelTrainingSubscriptionRoute(subscriptionID)
 	} else {
-		restoreActiveMLModelRoute(&current.PeerRoute)
+		current.PeerRoute.LifecycleState = previousLifecycle
 		nwdafContext.UpdateMLModelTrainingSubscriptionRoute(current)
 	}
 	p.mlModelMu.Unlock()
@@ -822,6 +828,26 @@ func (p *Processor) HandleMLModelTrainingNotification(
 		p.mlModelMu.Unlock()
 		return nil, mlModelTrainingValidationProblem(validationErr)
 	}
+	terminalInboundRoute := strings.TrimSpace(localRouteID) == "" &&
+		notification.TerminationRequest != "" &&
+		route.PeerRoute.Direction == nwdaf_context.MLModelRouteDirectionInbound &&
+		route.Destination == nwdaf_context.MLModelRoutePartyExternal
+	var terminalRevision uint64
+	if terminalInboundRoute {
+		terminalRevision = p.nextMLModelOperationRevisionLocked()
+		route.PeerRoute.OperationRevision = terminalRevision
+		route.PeerRoute.LifecycleState = nwdaf_context.MLModelRouteTerminating
+		route.PeerRoute.CleanupAttempts = 0
+		route.PeerRoute.NextCleanupAt = time.Now().Add(
+			mlModelTrainingTerminationCleanupGrace,
+		)
+		if !nwdafContext.UpdateMLModelTrainingSubscriptionRoute(route) {
+			p.mlModelMu.Unlock()
+			return nil, mlModelInternalProblem(
+				"could not mark ML Model Training route as terminating",
+			)
+		}
+	}
 	var generationLease *backend.GenerationLease
 	if route.Destination == nwdaf_context.MLModelRoutePartyMTLFBackend {
 		var admitted bool
@@ -853,9 +879,47 @@ func (p *Processor) HandleMLModelTrainingNotification(
 		},
 	)
 	if deliveryErr != nil {
+		if terminalInboundRoute {
+			p.finishFailedInboundTrainingTermination(route, terminalRevision)
+		}
 		return nil, p.mlModelCallbackProblem(deliveryErr)
 	}
 	return response, nil
+}
+
+func (p *Processor) finishFailedInboundTrainingTermination(
+	route nwdaf_context.MLModelTrainingSubscriptionRoute,
+	revision uint64,
+) {
+	p.mlModelMu.Lock()
+	defer p.mlModelMu.Unlock()
+	nwdafContext := p.nwdaf.Context()
+	if nwdafContext == nil {
+		return
+	}
+	current, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(route.SubscriptionID)
+	if !found || !mlModelRouteOperationCurrent(
+		current.PeerRoute,
+		nwdaf_context.MLModelRouteTerminating,
+		revision,
+	) {
+		return
+	}
+	nwdafContext.DeleteMLModelTrainingSubscriptionRoute(route.SubscriptionID)
+	nwdafContext.TombstoneMLModelResource(
+		nwdaf_context.MLModelDeletionRecord{
+			ResourceID:        route.SubscriptionID,
+			ProcessGeneration: route.PeerRoute.ProcessGeneration,
+			CleanupAttempted:  false,
+		},
+		nwdaf_context.MLModelResourceTrainingSubscription,
+	)
+	logger.ProcLog.Infof(
+		"Retired terminating inbound ML Model Training route after callback delivery failure "+
+			"subscription_id=%s backend_resource_id=%s",
+		route.SubscriptionID,
+		route.PeerRoute.BackendResourceID,
+	)
 }
 
 func trainingRoute(

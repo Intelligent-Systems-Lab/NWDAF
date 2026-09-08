@@ -606,18 +606,20 @@ func (p *Processor) ReconcilePendingMLModelPeerCleanup(
 	requestContext context.Context,
 	now time.Time,
 ) {
-	if p.mlModelPeerConsumer == nil || p.nwdaf == nil || p.nwdaf.Context() == nil {
+	if p.nwdaf == nil || p.nwdaf.Context() == nil {
 		return
 	}
 	nwdafContext := p.nwdaf.Context()
-	for _, route := range nwdafContext.GetAllMLModelProvisionSubscriptionRoutes() {
-		p.reconcilePendingProvisionCleanup(requestContext, route.SubscriptionID, now)
-	}
-	for _, route := range nwdafContext.GetAllMLModelMonitorRegistrationRoutes() {
-		p.reconcilePendingRegistrationCleanup(requestContext, route.RegistrationID, now)
-	}
-	for _, route := range nwdafContext.GetAllMLModelMonitorSubscriptionRoutes() {
-		p.reconcilePendingMonitorCleanup(requestContext, route.SubscriptionID, now)
+	if p.mlModelPeerConsumer != nil {
+		for _, route := range nwdafContext.GetAllMLModelProvisionSubscriptionRoutes() {
+			p.reconcilePendingProvisionCleanup(requestContext, route.SubscriptionID, now)
+		}
+		for _, route := range nwdafContext.GetAllMLModelMonitorRegistrationRoutes() {
+			p.reconcilePendingRegistrationCleanup(requestContext, route.RegistrationID, now)
+		}
+		for _, route := range nwdafContext.GetAllMLModelMonitorSubscriptionRoutes() {
+			p.reconcilePendingMonitorCleanup(requestContext, route.SubscriptionID, now)
+		}
 	}
 	for _, route := range nwdafContext.GetAllMLModelTrainingSubscriptionRoutes() {
 		p.reconcilePendingTrainingCleanup(requestContext, route.SubscriptionID, now)
@@ -749,7 +751,10 @@ func (p *Processor) reconcilePendingTrainingCleanup(
 	nwdafContext := p.nwdaf.Context()
 	p.mlModelMu.Lock()
 	route, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(id)
-	if !found || !peerCleanupDue(route.PeerRoute, now) {
+	inboundTermination := found && inboundTrainingTerminationCleanupDue(route.PeerRoute, now)
+	peerCleanup := found && peerCleanupDue(route.PeerRoute, now)
+	if !found || (!inboundTermination && !peerCleanup) ||
+		(peerCleanup && p.mlModelPeerConsumer == nil) {
 		p.mlModelMu.Unlock()
 		return
 	}
@@ -757,10 +762,33 @@ func (p *Processor) reconcilePendingTrainingCleanup(
 	nwdafContext.UpdateMLModelTrainingSubscriptionRoute(route)
 	p.mlModelMu.Unlock()
 
-	response, err := p.mlModelPeerConsumer.DeletePeerMLModelTraining(
-		ctx,
-		route.PeerRoute.PeerLocation,
-	)
+	var response *backend.StandardResponse
+	var err error
+	if inboundTermination {
+		currentGeneration := p.backendGeneration(p.mtlfAvailability)
+		if route.PeerRoute.ProcessGeneration != "" && currentGeneration != "" &&
+			route.PeerRoute.ProcessGeneration != currentGeneration {
+			response = &backend.StandardResponse{StatusCode: http.StatusNotFound}
+		} else {
+			lease, admitted := acquireBackend(p.mtlfMLModelBackend, p.mtlfAvailability)
+			if admitted {
+				if lease != nil {
+					defer lease.Release()
+				}
+				response, err = p.mtlfMLModelBackend.DeleteMLModelTrainingSubscription(
+					ctx,
+					route.PeerRoute.BackendResourceID,
+				)
+			} else {
+				err = errors.New("MTLF backend is unavailable")
+			}
+		}
+	} else {
+		response, err = p.mlModelPeerConsumer.DeletePeerMLModelTraining(
+			ctx,
+			route.PeerRoute.PeerLocation,
+		)
+	}
 	p.mlModelMu.Lock()
 	current, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(id)
 	if found && mlModelRouteOperationCurrent(
@@ -770,14 +798,48 @@ func (p *Processor) reconcilePendingTrainingCleanup(
 	) {
 		if cleanupResponseAccepted(response, err) {
 			nwdafContext.DeleteMLModelTrainingSubscriptionRoute(id)
+			if inboundTermination {
+				nwdafContext.TombstoneMLModelResource(
+					nwdaf_context.MLModelDeletionRecord{
+						ResourceID:        route.SubscriptionID,
+						ProcessGeneration: route.PeerRoute.ProcessGeneration,
+						CleanupAttempted:  true,
+					},
+					nwdaf_context.MLModelResourceTrainingSubscription,
+				)
+				logger.ProcLog.Infof(
+					"Cleaned terminating inbound ML Model Training resource "+
+						"subscription_id=%s backend_resource_id=%s",
+					route.SubscriptionID,
+					route.PeerRoute.BackendResourceID,
+				)
+			}
 		} else {
-			current.PeerRoute.LifecycleState = nwdaf_context.MLModelRoutePendingCleanup
+			if inboundTermination {
+				current.PeerRoute.LifecycleState = nwdaf_context.MLModelRouteTerminating
+			} else {
+				current.PeerRoute.LifecycleState = nwdaf_context.MLModelRoutePendingCleanup
+			}
 			scheduleNextPeerCleanup(&current.PeerRoute, now)
 			nwdafContext.UpdateMLModelTrainingSubscriptionRoute(current)
-			logPeerCleanupFailure("retry peer training cleanup", response, err)
+			operation := "retry peer training cleanup"
+			if inboundTermination {
+				operation = "cleanup terminating inbound training resource"
+			}
+			logPeerCleanupFailure(operation, response, err)
 		}
 	}
 	p.mlModelMu.Unlock()
+}
+
+func inboundTrainingTerminationCleanupDue(
+	route nwdaf_context.MLModelPeerRoute,
+	now time.Time,
+) bool {
+	return route.LifecycleState == nwdaf_context.MLModelRouteTerminating &&
+		route.Direction == nwdaf_context.MLModelRouteDirectionInbound &&
+		route.BackendResourceID != "" &&
+		(route.NextCleanupAt.IsZero() || !now.Before(route.NextCleanupAt))
 }
 
 func (p *Processor) claimPendingCleanupLocked(route *nwdaf_context.MLModelPeerRoute) uint64 {
