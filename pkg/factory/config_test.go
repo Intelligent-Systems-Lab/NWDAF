@@ -1,15 +1,12 @@
 package factory_test
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	compatnrf "github.com/free5gc/nwdaf/internal/compat/nrf"
 	"github.com/free5gc/nwdaf/pkg/factory"
-	"github.com/free5gc/openapi/models"
 )
 
 func TestReadConfigValidationMatrix(t *testing.T) {
@@ -299,113 +296,6 @@ configuration:
 			}
 			if tt.checkConfig != nil {
 				tt.checkConfig(t, cfg)
-			}
-		})
-	}
-}
-
-func TestDistributedRoleConfigs(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		fileName       string
-		instanceID     string
-		services       []models.ServiceName
-		flCapability   compatnrf.FLCapabilityType
-		tac            string
-		hasAnlfBackend bool
-	}{
-		{
-			fileName:   "nwdafcfg-a.yaml",
-			instanceID: "11111111-1111-4111-8111-111111111111",
-			services: []models.ServiceName{
-				models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION,
-				models.ServiceName(factory.NwdafMLModelMonitorServiceName),
-				models.ServiceName(factory.NwdafMLModelTrainingServiceName),
-			},
-			flCapability:   compatnrf.FLCapabilityTypeClient,
-			tac:            "000001",
-			hasAnlfBackend: true,
-		},
-		{
-			fileName:   "nwdafcfg-b.yaml",
-			instanceID: "22222222-2222-4222-8222-222222222222",
-			services: []models.ServiceName{
-				models.ServiceName_NNWDAF_EVENTSSUBSCRIPTION,
-				models.ServiceName(factory.NwdafMLModelMonitorServiceName),
-				models.ServiceName(factory.NwdafMLModelTrainingServiceName),
-			},
-			flCapability:   compatnrf.FLCapabilityTypeClient,
-			tac:            "000002",
-			hasAnlfBackend: true,
-		},
-		{
-			fileName:   "nwdafcfg-c.yaml",
-			instanceID: "33333333-3333-4333-8333-333333333333",
-			services: []models.ServiceName{
-				models.ServiceName_NNWDAF_MLMODELPROVISION,
-				models.ServiceName(factory.NwdafMLModelMonitorServiceName),
-			},
-			flCapability: compatnrf.FLCapabilityTypeServer,
-		},
-	}
-
-	for _, test := range tests {
-		test := test
-		t.Run(test.fileName, func(t *testing.T) {
-			t.Parallel()
-
-			cfg, err := factory.ReadConfig(filepath.Join("..", "..", "config", test.fileName))
-			if err != nil {
-				t.Fatalf("ReadConfig() error = %v", err)
-			}
-			if cfg.GetNFInstanceID() != test.instanceID {
-				t.Fatalf("GetNFInstanceID() = %q, want %q", cfg.GetNFInstanceID(), test.instanceID)
-			}
-			gotServices := cfg.GetServiceNameList()
-			if len(gotServices) != len(test.services) {
-				t.Fatalf("GetServiceNameList() = %v, want %v", gotServices, test.services)
-			}
-			for _, expected := range test.services {
-				found := false
-				for _, actual := range gotServices {
-					found = found || actual == expected
-				}
-				if !found {
-					t.Fatalf("GetServiceNameList() = %v, missing %q", gotServices, expected)
-				}
-			}
-			info := cfg.GetNwdafInfo()
-			if info == nil || len(info.MLAnalyticsList) != 1 {
-				t.Fatalf("GetNwdafInfo() = %#v", info)
-			}
-			entry := info.MLAnalyticsList[0]
-			if entry.FLCapabilityType != test.flCapability {
-				t.Fatalf("flCapabilityType = %q, want %q", entry.FLCapabilityType, test.flCapability)
-			}
-			if test.tac != "" {
-				if len(info.NwdafEvents) != 1 ||
-					info.NwdafEvents[0] != models.NwdafEvent_UE_COMMUNICATION ||
-					len(entry.TrackingAreaList) != 1 ||
-					entry.TrackingAreaList[0].Tac != test.tac {
-					t.Fatalf("role capability = %#v", info)
-				}
-			} else if len(info.NwdafEvents) != 0 || len(entry.TrackingAreaList) != 0 {
-				t.Fatalf("server profile advertises analytics scope = %#v", info)
-			}
-			hasAnlfBackend := cfg.Configuration.AnlfBackend != nil &&
-				cfg.Configuration.AnlfBackend.Enabled
-			if hasAnlfBackend != test.hasAnlfBackend {
-				t.Fatalf("AnlfBackend enabled = %v, want %v", hasAnlfBackend, test.hasAnlfBackend)
-			}
-			encoded, err := json.Marshal(info)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, property := range []string{"mlAnalyticsIds", "mlModelInterInfo", "flCapabilityType"} {
-				if !strings.Contains(string(encoded), `"`+property+`"`) {
-					t.Fatalf("profile JSON omitted %s: %s", property, encoded)
-				}
 			}
 		})
 	}

@@ -9,7 +9,7 @@ build:
 	go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/
 
 run: build
-	./$(BUILD_DIR)/$(BINARY_NAME) --config config/nwdafcfg.yaml
+	./$(BUILD_DIR)/$(BINARY_NAME) --config "$(CONFIG)"
 
 clean:
 	@echo "Cleaning..."
@@ -29,4 +29,3 @@ lint-fix:
 	golangci-lint run --fix ./...
 
 .DEFAULT_GOAL := build
-

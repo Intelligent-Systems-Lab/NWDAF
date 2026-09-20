@@ -22,7 +22,6 @@ import (
 )
 
 const (
-	NwdafDefaultConfigPath            = "./config/nwdafcfg.yaml"
 	NwdafSbiDefaultScheme             = "http"
 	NwdafSbiTLSScheme                 = "https"
 	NwdafSbiDefaultIPv4               = "127.0.0.1"
@@ -995,8 +994,8 @@ func isAdvertisableIPv4(value string) bool {
 }
 
 func ReadConfig(cfgPath string) (*Config, error) {
-	if cfgPath == "" {
-		cfgPath = NwdafDefaultConfigPath
+	if strings.TrimSpace(cfgPath) == "" {
+		return nil, errors.New("config file path is required")
 	}
 
 	cfg := &Config{}
@@ -1019,7 +1018,6 @@ func ReadConfig(cfgPath string) (*Config, error) {
 	}
 	if _, err = cfg.Validate(); err != nil {
 		logger.CfgLog.Errorf("Config validate error: %v", err)
-		logger.CfgLog.Errorf("[-- PLEASE REFER TO SAMPLE CONFIG FILE COMMENTS --]")
 		return nil, err
 	}
 
