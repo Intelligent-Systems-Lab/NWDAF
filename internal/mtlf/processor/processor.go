@@ -52,15 +52,18 @@ type mlModelGateway interface {
 	HandleReplaceMLModelTrainingFromBackend(
 		context.Context,
 		string,
+		string,
 		[]byte,
 	) (*backend.StandardResponse, *models.ProblemDetails)
 	HandlePatchMLModelTrainingFromBackend(
 		context.Context,
 		string,
+		string,
 		[]byte,
 	) (*backend.StandardResponse, *models.ProblemDetails)
 	HandleDeleteMLModelTrainingFromBackend(
 		context.Context,
+		string,
 		string,
 	) (*backend.StandardResponse, *models.ProblemDetails)
 	HandleMLModelTrainingNotification(
@@ -260,34 +263,37 @@ func (p *Processor) HandleCreateMLModelTrainingFromBackend(
 
 func (p *Processor) HandleReplaceMLModelTrainingFromBackend(
 	ctx context.Context,
+	targetNFInstanceID string,
 	subscriptionID string,
 	body []byte,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
 	if p.mlModel == nil {
 		return nil, nil
 	}
-	return p.mlModel.HandleReplaceMLModelTrainingFromBackend(ctx, subscriptionID, body)
+	return p.mlModel.HandleReplaceMLModelTrainingFromBackend(ctx, targetNFInstanceID, subscriptionID, body)
 }
 
 func (p *Processor) HandlePatchMLModelTrainingFromBackend(
 	ctx context.Context,
+	targetNFInstanceID string,
 	subscriptionID string,
 	body []byte,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
 	if p.mlModel == nil {
 		return nil, nil
 	}
-	return p.mlModel.HandlePatchMLModelTrainingFromBackend(ctx, subscriptionID, body)
+	return p.mlModel.HandlePatchMLModelTrainingFromBackend(ctx, targetNFInstanceID, subscriptionID, body)
 }
 
 func (p *Processor) HandleDeleteMLModelTrainingFromBackend(
 	ctx context.Context,
+	targetNFInstanceID string,
 	subscriptionID string,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
 	if p.mlModel == nil {
 		return nil, nil
 	}
-	return p.mlModel.HandleDeleteMLModelTrainingFromBackend(ctx, subscriptionID)
+	return p.mlModel.HandleDeleteMLModelTrainingFromBackend(ctx, targetNFInstanceID, subscriptionID)
 }
 
 func (p *Processor) HandleMLModelTrainingNotification(

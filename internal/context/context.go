@@ -52,7 +52,8 @@ func InitWithNFInstanceID(nfInstanceID string) {
 		mlModelProvisionRoutes:            make(map[string]MLModelProvisionSubscriptionRoute),
 		mlModelRegistrationRoutes:         make(map[string]MLModelMonitorRegistrationRoute),
 		mlModelMonitorRoutes:              make(map[string]MLModelMonitorSubscriptionRoute),
-		mlModelTrainingRoutes:             make(map[string]MLModelTrainingSubscriptionRoute),
+		mlModelTrainingRoutes:             make(map[MLModelTrainingResourceKey]MLModelTrainingSubscriptionRoute),
+		mlModelTrainingPendingRoutes:      make(map[string]MLModelTrainingSubscriptionRoute),
 		mlModelDeletionRecords:            make(map[MLModelResourceKind]map[string]MLModelDeletionRecord),
 	}
 	logger.CtxLog.Infof("NWDAF Context initialized with NfId: %s", nwdafContext.NfId)
@@ -79,17 +80,18 @@ type NWDAFContext struct {
 	oauth2Required                    bool
 	heartBeatTimer                    int32
 
-	mu                        sync.RWMutex
-	analyticsRoutes           map[string]AnalyticsSubscriptionRoute
-	analyticsTombstones       map[string]struct{}
-	smfPeerMu                 sync.RWMutex
-	smfPeerRoutes             map[string]SmfPeerResourceRoute
-	mlModelRouteMu            sync.RWMutex
-	mlModelProvisionRoutes    map[string]MLModelProvisionSubscriptionRoute
-	mlModelRegistrationRoutes map[string]MLModelMonitorRegistrationRoute
-	mlModelMonitorRoutes      map[string]MLModelMonitorSubscriptionRoute
-	mlModelTrainingRoutes     map[string]MLModelTrainingSubscriptionRoute
-	mlModelDeletionRecords    map[MLModelResourceKind]map[string]MLModelDeletionRecord
+	mu                           sync.RWMutex
+	analyticsRoutes              map[string]AnalyticsSubscriptionRoute
+	analyticsTombstones          map[string]struct{}
+	smfPeerMu                    sync.RWMutex
+	smfPeerRoutes                map[string]SmfPeerResourceRoute
+	mlModelRouteMu               sync.RWMutex
+	mlModelProvisionRoutes       map[string]MLModelProvisionSubscriptionRoute
+	mlModelRegistrationRoutes    map[string]MLModelMonitorRegistrationRoute
+	mlModelMonitorRoutes         map[string]MLModelMonitorSubscriptionRoute
+	mlModelTrainingRoutes        map[MLModelTrainingResourceKey]MLModelTrainingSubscriptionRoute
+	mlModelTrainingPendingRoutes map[string]MLModelTrainingSubscriptionRoute
+	mlModelDeletionRecords       map[MLModelResourceKind]map[string]MLModelDeletionRecord
 }
 
 type SmfPeerResourceRoute struct {

@@ -43,13 +43,13 @@ func TestBackendTerminationNotificationWaitsForConsumerDelete(t *testing.T) {
 	processor.SetMLModelHTTPClient(callback.Client())
 	route := nwdaf_context.MLModelTrainingSubscriptionRoute{
 		SubscriptionID:             "old-public-resource",
+		OwnerNFInstanceID:          ctx.NfId,
 		NotificationCorrelationID:  "old-notification-correlation",
 		MLCorrelationID:            "hierarchy-procedure",
 		Destination:                nwdaf_context.MLModelRoutePartyExternal,
 		DestinationNotificationURI: callback.URL,
 		PeerRoute: nwdaf_context.MLModelPeerRoute{
 			Direction:         nwdaf_context.MLModelRouteDirectionInbound,
-			BackendResourceID: "old-backend-resource",
 			LifecycleState:    nwdaf_context.MLModelRouteActive,
 			ProcessGeneration: availability.generation,
 		},
@@ -68,7 +68,7 @@ func TestBackendTerminationNotificationWaitsForConsumerDelete(t *testing.T) {
 	if problem != nil || response == nil || response.StatusCode != http.StatusNoContent {
 		t.Fatalf("termination response=%+v problem=%+v", response, problem)
 	}
-	terminating, found := ctx.GetMLModelTrainingSubscriptionRoute(route.SubscriptionID)
+	terminating, found := ctx.GetMLModelTrainingSubscriptionRoute(route.ResourceKey())
 	if !found || terminating.PeerRoute.LifecycleState != nwdaf_context.MLModelRouteLifecycle("TERMINATING") {
 		t.Fatalf("terminating route=%+v found=%t", terminating, found)
 	}
@@ -83,10 +83,10 @@ func TestBackendTerminationNotificationWaitsForConsumerDelete(t *testing.T) {
 		deleteResponse.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete response=%+v problem=%+v", deleteResponse, deleteProblem)
 	}
-	if mtlfBackend.deletedTrainingBackend != "old-backend-resource" {
+	if mtlfBackend.deletedTrainingBackend != route.SubscriptionID {
 		t.Fatalf("deleted backend resource = %q", mtlfBackend.deletedTrainingBackend)
 	}
-	if _, found = ctx.GetMLModelTrainingSubscriptionRoute(route.SubscriptionID); found {
+	if _, found = ctx.GetMLModelTrainingSubscriptionRoute(route.ResourceKey()); found {
 		t.Fatal("terminal route remains after consumer DELETE")
 	}
 }
@@ -112,13 +112,13 @@ func TestBackendTerminationNotificationPeerFailureReturnsAndTombstonesRoute(t *t
 	processor.SetMLModelHTTPClient(callback.Client())
 	route := nwdaf_context.MLModelTrainingSubscriptionRoute{
 		SubscriptionID:             "old-public-resource",
+		OwnerNFInstanceID:          ctx.NfId,
 		NotificationCorrelationID:  "old-notification-correlation",
 		MLCorrelationID:            "hierarchy-procedure",
 		Destination:                nwdaf_context.MLModelRoutePartyExternal,
 		DestinationNotificationURI: callback.URL,
 		PeerRoute: nwdaf_context.MLModelPeerRoute{
 			Direction:         nwdaf_context.MLModelRouteDirectionInbound,
-			BackendResourceID: "old-backend-resource",
 			LifecycleState:    nwdaf_context.MLModelRouteActive,
 			ProcessGeneration: availability.generation,
 		},
@@ -137,7 +137,7 @@ func TestBackendTerminationNotificationPeerFailureReturnsAndTombstonesRoute(t *t
 	if response != nil || problem == nil || problem.Status != http.StatusServiceUnavailable {
 		t.Fatalf("termination response=%+v problem=%+v", response, problem)
 	}
-	if _, found := ctx.GetMLModelTrainingSubscriptionRoute(route.SubscriptionID); found {
+	if _, found := ctx.GetMLModelTrainingSubscriptionRoute(route.ResourceKey()); found {
 		t.Fatal("failed-delivery route remains")
 	}
 	if _, found := ctx.GetMLModelDeletionRecord(
@@ -186,13 +186,13 @@ func TestBackendTerminationNotificationTransportFailureTombstonesRoute(t *testin
 	)})
 	route := nwdaf_context.MLModelTrainingSubscriptionRoute{
 		SubscriptionID:             "old-public-resource",
+		OwnerNFInstanceID:          ctx.NfId,
 		NotificationCorrelationID:  "old-notification-correlation",
 		MLCorrelationID:            "hierarchy-procedure",
 		Destination:                nwdaf_context.MLModelRoutePartyExternal,
 		DestinationNotificationURI: "http://old-branch.example/notification",
 		PeerRoute: nwdaf_context.MLModelPeerRoute{
 			Direction:         nwdaf_context.MLModelRouteDirectionInbound,
-			BackendResourceID: "old-backend-resource",
 			LifecycleState:    nwdaf_context.MLModelRouteActive,
 			ProcessGeneration: availability.generation,
 		},
@@ -211,7 +211,7 @@ func TestBackendTerminationNotificationTransportFailureTombstonesRoute(t *testin
 	if response != nil || problem == nil || problem.Status != http.StatusBadGateway {
 		t.Fatalf("termination response=%+v problem=%+v", response, problem)
 	}
-	if _, found := ctx.GetMLModelTrainingSubscriptionRoute(route.SubscriptionID); found {
+	if _, found := ctx.GetMLModelTrainingSubscriptionRoute(route.ResourceKey()); found {
 		t.Fatal("transport-failed route remains")
 	}
 	if _, found := ctx.GetMLModelDeletionRecord(
@@ -230,12 +230,12 @@ func TestTerminationGraceCleanupDeletesBackendResource(t *testing.T) {
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 	route := nwdaf_context.MLModelTrainingSubscriptionRoute{
 		SubscriptionID:            "old-public-resource",
+		OwnerNFInstanceID:         ctx.NfId,
 		NotificationCorrelationID: "old-notification-correlation",
 		MLCorrelationID:           "hierarchy-procedure",
 		Destination:               nwdaf_context.MLModelRoutePartyExternal,
 		PeerRoute: nwdaf_context.MLModelPeerRoute{
 			Direction:         nwdaf_context.MLModelRouteDirectionInbound,
-			BackendResourceID: "old-backend-resource",
 			LifecycleState:    nwdaf_context.MLModelRouteLifecycle("TERMINATING"),
 			ProcessGeneration: availability.generation,
 			NextCleanupAt:     now.Add(-time.Second),
@@ -247,10 +247,10 @@ func TestTerminationGraceCleanupDeletesBackendResource(t *testing.T) {
 
 	processor.ReconcilePendingMLModelPeerCleanup(t.Context(), now)
 
-	if mtlfBackend.deletedTrainingBackend != "old-backend-resource" {
+	if mtlfBackend.deletedTrainingBackend != route.SubscriptionID {
 		t.Fatalf("deleted backend resource = %q", mtlfBackend.deletedTrainingBackend)
 	}
-	if _, found := ctx.GetMLModelTrainingSubscriptionRoute(route.SubscriptionID); found {
+	if _, found := ctx.GetMLModelTrainingSubscriptionRoute(route.ResourceKey()); found {
 		t.Fatal("expired terminating route remains")
 	}
 	if _, found := ctx.GetMLModelDeletionRecord(
@@ -479,7 +479,7 @@ func TestMLModelTrainingPatchForwardsDestinationRepresentation(t *testing.T) {
 		strings.Contains(string(response.Body), "192.0.2.21") {
 		t.Fatalf("patch response = %+v", response)
 	}
-	updated, found := ctx.GetMLModelTrainingSubscriptionRoute(routes[0].SubscriptionID)
+	updated, found := ctx.GetMLModelTrainingSubscriptionRoute(routes[0].ResourceKey())
 	if !found ||
 		!strings.Contains(string(updated.AcceptedRepresentation), `"maxResTime":601`) ||
 		!strings.Contains(string(updated.BackendRepresentation), "192.0.2.21") {
@@ -785,7 +785,7 @@ func TestMLModelTrainingCandidatePatchMergesAndDoesNotPersistOperations(t *testi
 	if !bytes.Contains(mtlfBackend.trainingBody, []byte(`"x-retainedResultReq":true`)) {
 		t.Fatalf("operation was not visible to destination: %s", mtlfBackend.trainingBody)
 	}
-	updated, found := ctx.GetMLModelTrainingSubscriptionRoute(routes[0].SubscriptionID)
+	updated, found := ctx.GetMLModelTrainingSubscriptionRoute(routes[0].ResourceKey())
 	if !found || bytes.Contains(updated.AcceptedRepresentation, []byte("retainedResultReq")) ||
 		bytes.Contains(updated.BackendRepresentation, []byte("retainedResultReq")) ||
 		!bytes.Contains(updated.AcceptedRepresentation, []byte(`"children"`)) ||
@@ -832,7 +832,7 @@ func TestMLModelTrainingCandidatePatchAcceptsAuthoritative200Representation(t *t
 		!bytes.Contains(response.Body, []byte(`"minTrainNodes":2`)) {
 		t.Fatalf("response=%+v problem=%+v", response, problem)
 	}
-	updated, found := ctx.GetMLModelTrainingSubscriptionRoute(routes[0].SubscriptionID)
+	updated, found := ctx.GetMLModelTrainingSubscriptionRoute(routes[0].ResourceKey())
 	if !found || !bytes.Contains(updated.AcceptedRepresentation, []byte(`"minTrainNodes":2`)) ||
 		!bytes.Contains(updated.BackendRepresentation, []byte(`"minTrainNodes":2`)) ||
 		updated.NegotiatedSupportedFeatures != "4" {
@@ -928,7 +928,7 @@ func TestMLModelTrainingCandidatePutIsFullReplacement(t *testing.T) {
 	if problem != nil || response == nil || response.StatusCode != http.StatusNoContent {
 		t.Fatalf("replace response=%+v problem=%+v", response, problem)
 	}
-	updated, found := ctx.GetMLModelTrainingSubscriptionRoute(routes[0].SubscriptionID)
+	updated, found := ctx.GetMLModelTrainingSubscriptionRoute(routes[0].ResourceKey())
 	if !found || bytes.Contains(updated.AcceptedRepresentation, []byte("x-flTopology")) ||
 		bytes.Contains(updated.BackendRepresentation, []byte("x-flTopology")) ||
 		updated.NegotiatedSupportedFeatures != "4" {
@@ -965,7 +965,7 @@ func TestMLModelTrainingCandidatePutForwardsButDoesNotPersistOperation(t *testin
 	if !bytes.Contains(mtlfBackend.trainingBody, []byte(`"x-retainedResultReq":true`)) {
 		t.Fatalf("operation was not forwarded to the destination: %s", mtlfBackend.trainingBody)
 	}
-	updated, found := ctx.GetMLModelTrainingSubscriptionRoute(routes[0].SubscriptionID)
+	updated, found := ctx.GetMLModelTrainingSubscriptionRoute(routes[0].ResourceKey())
 	if !found ||
 		bytes.Contains(updated.AcceptedRepresentation, []byte("x-retainedResultReq")) ||
 		bytes.Contains(updated.BackendRepresentation, []byte("x-retainedResultReq")) {
@@ -1035,14 +1035,22 @@ func TestMLModelTrainingCandidatePutAcceptsAuthoritative200Representation(t *tes
 				mtlfBackend.trainingReplaceResponse = destinationResponse
 			}
 
-			response, problem := processor.HandleReplaceMLModelTraining(
-				context.Background(), routes[0].SubscriptionID, replacement,
-			)
+			var response *backend.StandardResponse
+			var problem *models.ProblemDetails
+			if remote {
+				response, problem = processor.HandleReplaceMLModelTrainingFromBackend(
+					context.Background(), target.NFInstanceID, routes[0].SubscriptionID, replacement,
+				)
+			} else {
+				response, problem = processor.HandleReplaceMLModelTraining(
+					context.Background(), routes[0].SubscriptionID, replacement,
+				)
+			}
 			if problem != nil || response == nil || response.StatusCode != http.StatusOK ||
 				!bytes.Contains(response.Body, []byte(`"minTrainNodes":1`)) {
 				t.Fatalf("response=%+v problem=%+v", response, problem)
 			}
-			updated, found := ctx.GetMLModelTrainingSubscriptionRoute(routes[0].SubscriptionID)
+			updated, found := ctx.GetMLModelTrainingSubscriptionRoute(routes[0].ResourceKey())
 			if !found ||
 				!bytes.Contains(updated.AcceptedRepresentation, []byte(`"minTrainNodes":1`)) ||
 				!bytes.Contains(updated.BackendRepresentation, []byte(`"minTrainNodes":1`)) ||
@@ -1085,7 +1093,7 @@ func TestMLModelTrainingInvalidCandidateMutationResponseRollsBack(t *testing.T) 
 	if response != nil || problem == nil || problem.Status != http.StatusBadGateway {
 		t.Fatalf("response=%+v problem=%+v", response, problem)
 	}
-	after, found := ctx.GetMLModelTrainingSubscriptionRoute(before.SubscriptionID)
+	after, found := ctx.GetMLModelTrainingSubscriptionRoute(before.ResourceKey())
 	if !found || after.PeerRoute.LifecycleState != before.PeerRoute.LifecycleState ||
 		!bytes.Equal(after.AcceptedRepresentation, before.AcceptedRepresentation) ||
 		!bytes.Equal(after.BackendRepresentation, before.BackendRepresentation) {
@@ -1117,7 +1125,7 @@ func TestMLModelTrainingCandidateDestinationFailureRollsBack(t *testing.T) {
 	if response != nil || problem == nil || problem.Status != http.StatusServiceUnavailable {
 		t.Fatalf("response=%+v problem=%+v", response, problem)
 	}
-	after, found := ctx.GetMLModelTrainingSubscriptionRoute(before.SubscriptionID)
+	after, found := ctx.GetMLModelTrainingSubscriptionRoute(before.ResourceKey())
 	if !found || after.PeerRoute.LifecycleState != before.PeerRoute.LifecycleState ||
 		after.PeerRoute.OperationRevision == before.PeerRoute.OperationRevision ||
 		!bytes.Equal(after.AcceptedRepresentation, before.AcceptedRepresentation) ||
@@ -1172,7 +1180,7 @@ func TestMLModelTrainingStaleCandidatePatchCannotOverwriteNewerRoute(t *testing.
 	}
 
 	processor.mlModelMu.Lock()
-	newer, found := ctx.GetMLModelTrainingSubscriptionRoute(before.SubscriptionID)
+	newer, found := ctx.GetMLModelTrainingSubscriptionRoute(before.ResourceKey())
 	if !found {
 		processor.mlModelMu.Unlock()
 		t.Fatal("candidate route disappeared while patch was in flight")
@@ -1195,7 +1203,7 @@ func TestMLModelTrainingStaleCandidatePatchCannotOverwriteNewerRoute(t *testing.
 	case <-time.After(time.Second):
 		t.Fatal("stale candidate patch did not complete")
 	}
-	after, found := ctx.GetMLModelTrainingSubscriptionRoute(before.SubscriptionID)
+	after, found := ctx.GetMLModelTrainingSubscriptionRoute(before.ResourceKey())
 	if !found || after.PeerRoute.OperationRevision != newer.PeerRoute.OperationRevision ||
 		!bytes.Equal(after.AcceptedRepresentation, newer.AcceptedRepresentation) ||
 		!bytes.Equal(after.BackendRepresentation, newer.BackendRepresentation) ||
@@ -1222,7 +1230,7 @@ func TestMLModelTrainingGenerationResetClearsCandidateState(t *testing.T) {
 	processor.ResetMLModelBackendGeneration(
 		context.Background(), backend.KindMTLF, mtlfAvailability.generation,
 	)
-	if _, found := ctx.GetMLModelTrainingSubscriptionRoute(routes[0].SubscriptionID); found {
+	if _, found := ctx.GetMLModelTrainingSubscriptionRoute(routes[0].ResourceKey()); found {
 		t.Fatal("candidate route survived backend generation reset")
 	}
 	response, problem := processor.HandlePatchMLModelTraining(
@@ -1255,7 +1263,7 @@ func TestMLModelTrainingCreateRejectsUnsupportedNegotiatedFeaturesAndCompensates
 	if response != nil || problem == nil || problem.Status != http.StatusBadGateway {
 		t.Fatalf("response=%+v problem=%+v", response, problem)
 	}
-	if mtlfBackend.deletedTrainingBackend != testProvisionID ||
+	if mtlfBackend.deletedTrainingBackend != mtlfBackend.trainingCreateID ||
 		len(ctx.GetAllMLModelTrainingSubscriptionRoutes()) != 0 {
 		t.Fatalf(
 			"compensation id=%q routes=%+v",
@@ -1290,7 +1298,7 @@ func TestMLModelTrainingCreateRejectsWriteOnlyInstructionInSuccess(t *testing.T)
 	if response != nil || problem == nil || problem.Status != http.StatusBadGateway {
 		t.Fatalf("response=%+v problem=%+v", response, problem)
 	}
-	if mtlfBackend.deletedTrainingBackend != testProvisionID ||
+	if mtlfBackend.deletedTrainingBackend != mtlfBackend.trainingCreateID ||
 		len(ctx.GetAllMLModelTrainingSubscriptionRoutes()) != 0 {
 		t.Fatalf(
 			"compensation id=%q routes=%+v",
@@ -1334,7 +1342,7 @@ func TestMLModelTrainingCreateRejectsImmediateReportFromWrongParticipant(t *test
 	if result != nil || problem == nil || problem.Status != http.StatusBadGateway {
 		t.Fatalf("result=%+v problem=%+v", result, problem)
 	}
-	if mtlfBackend.deletedTrainingBackend != testProvisionID ||
+	if mtlfBackend.deletedTrainingBackend != mtlfBackend.trainingCreateID ||
 		len(ctx.GetAllMLModelTrainingSubscriptionRoutes()) != 0 {
 		t.Fatalf(
 			"compensation id=%q routes=%+v",
@@ -1371,8 +1379,8 @@ func TestRemoteCandidateTrainingCreateAndNotifyUseBoundParticipant(t *testing.T)
 		t.Fatalf("route = %+v", routes)
 	}
 	patch := []byte(`{"x-flTopology":{"policy":{"minTrainNodes":1}}}`)
-	patchResponse, patchProblem := processor.HandlePatchMLModelTraining(
-		context.Background(), routes[0].SubscriptionID, patch,
+	patchResponse, patchProblem := processor.HandlePatchMLModelTrainingFromBackend(
+		context.Background(), target.NFInstanceID, routes[0].SubscriptionID, patch,
 	)
 	if patchProblem != nil || patchResponse == nil || patchResponse.StatusCode != http.StatusNoContent ||
 		!bytes.Equal(peer.trainingPatchBody, patch) {
@@ -1388,7 +1396,7 @@ func TestRemoteCandidateTrainingCreateAndNotifyUseBoundParticipant(t *testing.T)
 		"x-flTopologyReport":{"nfInstanceId":%q}
 	}`, target.NFInstanceID))
 	notifyResponse, notifyProblem := processor.HandleMLModelTrainingNotification(
-		context.Background(), routes[0].SubscriptionID, validNotify,
+		context.Background(), routes[0].CallbackRouteID, validNotify,
 	)
 	if notifyProblem != nil || notifyResponse == nil || notifyResponse.StatusCode != http.StatusNoContent ||
 		!bytes.Equal(mtlfBackend.trainingNotification, validNotify) {
@@ -1401,7 +1409,7 @@ func TestRemoteCandidateTrainingCreateAndNotifyUseBoundParticipant(t *testing.T)
 		[]byte("10000000-0000-4000-8000-000000000098"), 1,
 	)
 	notifyResponse, notifyProblem = processor.HandleMLModelTrainingNotification(
-		context.Background(), routes[0].SubscriptionID, invalidNotify,
+		context.Background(), routes[0].CallbackRouteID, invalidNotify,
 	)
 	if notifyResponse != nil || notifyProblem == nil || notifyProblem.Status != http.StatusBadRequest ||
 		len(mtlfBackend.trainingNotification) != 0 {
@@ -1409,6 +1417,136 @@ func TestRemoteCandidateTrainingCreateAndNotifyUseBoundParticipant(t *testing.T)
 			"invalid notify response=%+v problem=%+v body=%s",
 			notifyResponse, notifyProblem, mtlfBackend.trainingNotification,
 		)
+	}
+}
+
+func TestRemoteTrainingCallbackWaitsForResourceBinding(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, peerConsumer, availability := newMLModelProcessorTestSubject()
+	_ = anlfBackend
+	_ = peerConsumer
+	_ = availability
+	target := backend.SelectedTarget{
+		NFInstanceID: "10000000-0000-4000-8000-000000000099",
+		APIRoot:      "http://peer.example",
+	}
+	notification := []byte(fmt.Sprintf(`{
+		"notifCorreId":"candidate-client-a",
+		"mlCorreId":"hierarchical-fl-001",
+		"x-flTopologyReport":{"nfInstanceId":%q}
+	}`, target.NFInstanceID))
+	callbackID := ""
+	peer := &mlModelPeerConsumerStub{}
+	peer.trainingCreateHook = func() {
+		value, err := wire.ParseNwdafMLModelTrainSubsc(peer.trainingBody)
+		if err != nil {
+			t.Fatal(err)
+		}
+		callbackID = value.NotificationURI[strings.LastIndex(value.NotificationURI, "/")+1:]
+		_, problem := processor.HandleMLModelTrainingNotification(t.Context(), callbackID, notification)
+		if problem == nil || problem.Status != http.StatusServiceUnavailable {
+			t.Fatalf("early callback problem = %+v, want 503", problem)
+		}
+	}
+	processor.SetMLModelPeerConsumer(peer)
+	response, problem := processor.HandleCreateMLModelTrainingFromBackend(
+		t.Context(), candidateTrainingBody(target.NFInstanceID), &target,
+	)
+	if problem != nil || response == nil || callbackID == "" {
+		t.Fatalf("create response=%+v problem=%+v callbackID=%q", response, problem, callbackID)
+	}
+	routes := ctx.GetAllMLModelTrainingSubscriptionRoutes()
+	if len(routes) != 1 || routes[0].CallbackRouteID != callbackID {
+		t.Fatalf("active routes = %+v", routes)
+	}
+	delivered, problem := processor.HandleMLModelTrainingNotification(t.Context(), callbackID, notification)
+	if problem != nil || delivered == nil || delivered.StatusCode != http.StatusNoContent ||
+		!bytes.Equal(mtlfBackend.trainingNotification, notification) {
+		t.Fatalf("callback response=%+v problem=%+v", delivered, problem)
+	}
+}
+
+func TestRemoteTrainingScopesSamePeerResourceIDByNF(t *testing.T) {
+	processor, ctx, mtlfBackend, anlfBackend, peerConsumer, availability := newMLModelProcessorTestSubject()
+	_ = anlfBackend
+	_ = peerConsumer
+	_ = availability
+	const resourceID = "shared resource"
+	const escapedResourceID = "shared%20resource"
+	peer := &mlModelPeerConsumerStub{
+		trainingCreateFunc: func(target backend.SelectedTarget, body []byte) (*backend.StandardResponse, error) {
+			return &backend.StandardResponse{
+				StatusCode:   http.StatusCreated,
+				Location:     target.APIRoot + "/nnwdaf-mlmodeltraining/v1/subscriptions/" + escapedResourceID,
+				EffectiveURI: target.APIRoot + "/nnwdaf-mlmodeltraining/v1/subscriptions",
+				ContentType:  "application/json", Body: append([]byte(nil), body...),
+			}, nil
+		},
+	}
+	processor.SetMLModelPeerConsumer(peer)
+	targets := []backend.SelectedTarget{
+		{NFInstanceID: "10000000-0000-4000-8000-000000000091", APIRoot: "http://peer-a.example"},
+		{NFInstanceID: "10000000-0000-4000-8000-000000000092", APIRoot: "http://peer-b.example"},
+	}
+	for i, target := range targets {
+		body := candidateTrainingBody(target.NFInstanceID)
+		if i == 1 {
+			body = bytes.Replace(body, []byte("candidate-client-a"), []byte("candidate-client-b"), 1)
+		}
+		response, problem := processor.HandleCreateMLModelTrainingFromBackend(t.Context(), body, &target)
+		if problem != nil || response == nil || response.StatusCode != http.StatusCreated ||
+			!strings.Contains(response.Location, "/targets/"+target.NFInstanceID+"/subscriptions/"+escapedResourceID) {
+			t.Fatalf("create target=%s response=%+v problem=%+v", target.NFInstanceID, response, problem)
+		}
+	}
+	for _, target := range targets {
+		key := nwdaf_context.MLModelTrainingResourceKey{
+			Direction:         nwdaf_context.MLModelRouteDirectionOutbound,
+			OwnerNFInstanceID: target.NFInstanceID, SubscriptionID: resourceID,
+		}
+		route, found := ctx.GetMLModelTrainingSubscriptionRoute(key)
+		if !found || route.CallbackRouteID == "" {
+			t.Fatalf("route target=%s: %+v found=%t", target.NFInstanceID, route, found)
+		}
+		patch := []byte(`{"x-flTopology":{"policy":{"minTrainNodes":1}}}`)
+		response, problem := processor.HandlePatchMLModelTrainingFromBackend(
+			t.Context(), target.NFInstanceID, resourceID, patch,
+		)
+		if problem != nil || response == nil || response.StatusCode != http.StatusNoContent ||
+			peer.trainingPatchLocation != target.APIRoot+"/nnwdaf-mlmodeltraining/v1/subscriptions/"+escapedResourceID {
+			t.Fatalf("patch target=%s response=%+v problem=%+v location=%q",
+				target.NFInstanceID, response, problem, peer.trainingPatchLocation)
+		}
+		correlation := "candidate-client-a"
+		if target == targets[1] {
+			correlation = "candidate-client-b"
+		}
+		notification := []byte(fmt.Sprintf(`{
+			"notifCorreId":%q,"mlCorreId":"hierarchical-fl-001",
+			"x-flTopologyReport":{"nfInstanceId":%q}
+		}`, correlation, target.NFInstanceID))
+		response, problem = processor.HandleMLModelTrainingNotification(
+			t.Context(), route.CallbackRouteID, notification,
+		)
+		if problem != nil || response == nil || response.StatusCode != http.StatusNoContent ||
+			!bytes.Equal(mtlfBackend.trainingNotification, notification) {
+			t.Fatalf("notify target=%s response=%+v problem=%+v", target.NFInstanceID, response, problem)
+		}
+	}
+	first := targets[0]
+	response, problem := processor.HandleDeleteMLModelTrainingFromBackend(t.Context(), first.NFInstanceID, resourceID)
+	if problem != nil || response == nil || response.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete response=%+v problem=%+v", response, problem)
+	}
+	secondKey := nwdaf_context.MLModelTrainingResourceKey{
+		Direction:         nwdaf_context.MLModelRouteDirectionOutbound,
+		OwnerNFInstanceID: targets[1].NFInstanceID, SubscriptionID: resourceID,
+	}
+	if _, found := ctx.GetMLModelTrainingSubscriptionRoute(secondKey); !found {
+		t.Fatal("deleting first peer removed second peer route")
+	}
+	if len(peer.deletedTraining) != 1 || peer.deletedTraining[0] !=
+		first.APIRoot+"/nnwdaf-mlmodeltraining/v1/subscriptions/"+escapedResourceID {
+		t.Fatalf("deleted locations = %+v", peer.deletedTraining)
 	}
 }
 

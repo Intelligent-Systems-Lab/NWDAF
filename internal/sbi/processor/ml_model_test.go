@@ -58,6 +58,7 @@ type mtlfMLModelBackendStub struct {
 	deletedProvision        string
 	deletedRegistration     string
 	trainingBody            []byte
+	trainingCreateID        string
 	trainingNotification    []byte
 	trainingCreateResponse  *backend.StandardResponse
 	trainingCreateError     error
@@ -154,16 +155,26 @@ func (s *mtlfMLModelBackendStub) DeliverAdrfRetrievalNotification(
 }
 
 func (s *mtlfMLModelBackendStub) CreateMLModelTrainingSubscription(
-	_ context.Context, body []byte,
+	_ context.Context, body []byte, subscriptionID string,
 ) (*backend.StandardResponse, error) {
 	s.trainingBody = append([]byte(nil), body...)
+	s.trainingCreateID = subscriptionID
 	if s.trainingCreateResponse != nil || s.trainingCreateError != nil {
-		return s.trainingCreateResponse, s.trainingCreateError
+		if s.trainingCreateResponse == nil {
+			return nil, s.trainingCreateError
+		}
+		response := *s.trainingCreateResponse
+		if response.StatusCode == http.StatusCreated && strings.HasPrefix(
+			response.Location, "http://mtlf.internal/internal/v1/ml-model-training/subscriptions/",
+		) {
+			response.Location = "http://mtlf.internal/internal/v1/ml-model-training/subscriptions/" + subscriptionID
+		}
+		return &response, s.trainingCreateError
 	}
 	return &backend.StandardResponse{
 		StatusCode: http.StatusCreated,
 		Location: "http://mtlf.internal/internal/v1/ml-model-training/subscriptions/" +
-			testProvisionID,
+			subscriptionID,
 		ContentType: "application/json",
 		Body:        append([]byte(nil), body...),
 	}, nil
@@ -231,9 +242,12 @@ type mlModelPeerConsumerStub struct {
 	deletedTraining          []string
 	trainingBody             []byte
 	trainingCreateResponse   *backend.StandardResponse
+	trainingCreateHook       func()
+	trainingCreateFunc       func(backend.SelectedTarget, []byte) (*backend.StandardResponse, error)
 	trainingCreateError      error
 	trainingReplaceBody      []byte
 	trainingPatchBody        []byte
+	trainingPatchLocation    string
 	provisionResponse        *backend.StandardResponse
 	provisionError           error
 	provisionReplaceResponse *backend.StandardResponse
@@ -285,9 +299,15 @@ func (a *isolatedMLModelTestApp) Context() *nwdaf_context.NWDAFContext {
 }
 
 func (s *mlModelPeerConsumerStub) CreatePeerMLModelTraining(
-	_ context.Context, _ backend.SelectedTarget, body []byte,
+	_ context.Context, target backend.SelectedTarget, body []byte,
 ) (*backend.StandardResponse, error) {
 	s.trainingBody = append([]byte(nil), body...)
+	if s.trainingCreateFunc != nil {
+		return s.trainingCreateFunc(target, body)
+	}
+	if s.trainingCreateHook != nil {
+		s.trainingCreateHook()
+	}
 	if s.trainingCreateResponse != nil || s.trainingCreateError != nil {
 		return s.trainingCreateResponse, s.trainingCreateError
 	}
@@ -311,9 +331,10 @@ func (s *mlModelPeerConsumerStub) ReplacePeerMLModelTraining(
 }
 
 func (s *mlModelPeerConsumerStub) PatchPeerMLModelTraining(
-	_ context.Context, _ string, body []byte,
+	_ context.Context, location string, body []byte,
 ) (*backend.StandardResponse, error) {
 	s.trainingPatchBody = append([]byte(nil), body...)
+	s.trainingPatchLocation = location
 	return &backend.StandardResponse{StatusCode: http.StatusNoContent}, nil
 }
 
@@ -1856,10 +1877,11 @@ func TestDeleteTreatsMissingDestinationResourceAsCompleted(t *testing.T) {
 		_ = anlfAvailability
 		mtlfBackend.trainingDeleteError = missing()
 		ctx.AddMLModelTrainingSubscriptionRoute(nwdaf_context.MLModelTrainingSubscriptionRoute{
-			SubscriptionID: "training",
+			SubscriptionID:    "training",
+			OwnerNFInstanceID: ctx.NfId,
 			PeerRoute: nwdaf_context.MLModelPeerRoute{
-				BackendResourceID: "backend-training",
-				LifecycleState:    nwdaf_context.MLModelRouteActive,
+				Direction:      nwdaf_context.MLModelRouteDirectionInbound,
+				LifecycleState: nwdaf_context.MLModelRouteActive,
 			},
 			NotificationCorrelationID: "training-correlation",
 		})
@@ -2202,7 +2224,7 @@ func TestTrainingReplacePeerNotFoundRestoresCommittedRoute(t *testing.T) {
 	if response != nil || problem == nil || problem.Status != http.StatusNotFound {
 		t.Fatalf("replace response=%+v problem=%+v", response, problem)
 	}
-	current, found := ctx.GetMLModelTrainingSubscriptionRoute(route.SubscriptionID)
+	current, found := ctx.GetMLModelTrainingSubscriptionRoute(route.ResourceKey())
 	if !found || current.PeerRoute.LifecycleState != nwdaf_context.MLModelRouteActive ||
 		!bytes.Equal(current.AcceptedRepresentation, route.AcceptedRepresentation) {
 		t.Fatalf("training route not restored: %+v found=%v", current, found)

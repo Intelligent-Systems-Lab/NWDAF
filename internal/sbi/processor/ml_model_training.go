@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -89,7 +90,9 @@ func (p *Processor) handleCreateLocalMLModelTraining(
 		LifecycleState:    nwdaf_context.MLModelRouteCreating,
 		ProcessGeneration: p.backendGeneration(p.mtlfAvailability),
 	}
+	reserved.OwnerNFInstanceID = nwdafContext.NfId
 	reserved.BoundParticipantNFInstanceID = nwdafContext.NfId
+	localKey := reserved.ResourceKey()
 	p.mlModelMu.Lock()
 	reserved.PeerRoute.OperationRevision = p.nextMLModelOperationRevisionLocked()
 	revision := reserved.PeerRoute.OperationRevision
@@ -100,37 +103,39 @@ func (p *Processor) handleCreateLocalMLModelTraining(
 			"could not reserve ML Model Training route; notifCorreId must be unique",
 		)
 	}
-	response, err := p.mtlfMLModelBackend.CreateMLModelTrainingSubscription(ctx, backendBody)
+	response, err := p.mtlfMLModelBackend.CreateMLModelTrainingSubscription(ctx, backendBody, localRouteID)
 	if err != nil {
-		p.removeCreatingTrainingRoute(localRouteID, revision)
+		p.removeCreatingTrainingRoute(localKey, revision)
 		return nil, p.mlModelBackendProblem(err, p.mtlfAvailability)
 	}
 	if response == nil || response.StatusCode != http.StatusCreated {
-		p.removeCreatingTrainingRoute(localRouteID, revision)
+		p.removeCreatingTrainingRoute(localKey, revision)
 		return nil, mlModelBadGatewayProblem("MTLF backend returned an invalid training create response")
 	}
 	backendResourceID, err := backend.ResourceIDFromLocation(response.Location)
-	if err != nil {
-		p.removeCreatingTrainingRoute(localRouteID, revision)
-		return nil, mlModelBadGatewayProblem(err.Error())
+	if err != nil || backendResourceID != localRouteID ||
+		!strings.Contains(response.Location, "/internal/v1/ml-model-training/subscriptions/") {
+		p.cleanupLocalTrainingResource(ctx, localRouteID)
+		p.removeCreatingTrainingRoute(localKey, revision)
+		return nil, mlModelBadGatewayProblem("MTLF backend returned a mismatched training Location")
 	}
 	backendValue, err := wire.ParseNwdafMLModelTrainSubsc(response.Body)
 	if err != nil {
 		p.cleanupLocalTrainingResource(ctx, backendResourceID)
-		p.removeCreatingTrainingRoute(localRouteID, revision)
+		p.removeCreatingTrainingRoute(localKey, revision)
 		return nil, mlModelBadGatewayProblem("MTLF backend returned an invalid training representation")
 	}
 	if validationErr := validateTrainingCreateResponse(
 		backendValue, value, nwdafContext.NfId,
 	); validationErr != nil {
 		p.cleanupLocalTrainingResource(ctx, backendResourceID)
-		p.removeCreatingTrainingRoute(localRouteID, revision)
+		p.removeCreatingTrainingRoute(localKey, revision)
 		return nil, mlModelBadGatewayProblem(validationErr.Error())
 	}
 	backendAcceptedBody, err := json.Marshal(backendValue)
 	if err != nil {
 		p.cleanupLocalTrainingResource(ctx, backendResourceID)
-		p.removeCreatingTrainingRoute(localRouteID, revision)
+		p.removeCreatingTrainingRoute(localKey, revision)
 		return nil, mlModelInternalProblem("could not encode ML Model Training representation")
 	}
 	externalValue := *backendValue
@@ -138,11 +143,11 @@ func (p *Processor) handleCreateLocalMLModelTraining(
 	externalBody, err := json.Marshal(&externalValue)
 	if err != nil {
 		p.cleanupLocalTrainingResource(ctx, backendResourceID)
-		p.removeCreatingTrainingRoute(localRouteID, revision)
+		p.removeCreatingTrainingRoute(localKey, revision)
 		return nil, mlModelInternalProblem("could not encode ML Model Training representation")
 	}
 	p.mlModelMu.Lock()
-	route, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(localRouteID)
+	route, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(localKey)
 	if !found || !mlModelRouteOperationCurrent(
 		route.PeerRoute,
 		nwdaf_context.MLModelRouteCreating,
@@ -153,7 +158,6 @@ func (p *Processor) handleCreateLocalMLModelTraining(
 		return nil, mlModelUnavailableProblem()
 	}
 	route.PeerRoute.BackendLocation = response.Location
-	route.PeerRoute.BackendResourceID = backendResourceID
 	restoreActiveMLModelRoute(&route.PeerRoute)
 	route.AcceptedRepresentation = externalBody
 	route.BackendRepresentation = backendAcceptedBody
@@ -205,7 +209,7 @@ func (p *Processor) handleCreateRemoteMLModelTraining(
 		return nil, malformedMLModelProblem(err)
 	}
 	reserved := trainingRoute(
-		localRouteID, nil, nil, value,
+		"", nil, nil, value,
 		nwdaf_context.MLModelRoutePartyMTLFBackend,
 		nwdaf_context.MLModelRoutePartyMTLFBackend,
 	)
@@ -215,6 +219,8 @@ func (p *Processor) handleCreateRemoteMLModelTraining(
 		LifecycleState:    nwdaf_context.MLModelRouteCreating,
 		ProcessGeneration: p.backendGeneration(p.mtlfAvailability),
 	}
+	reserved.CallbackRouteID = localRouteID
+	reserved.OwnerNFInstanceID = target.NFInstanceID
 	reserved.BoundParticipantNFInstanceID = target.NFInstanceID
 	nwdafContext := p.nwdaf.Context()
 	p.mlModelMu.Lock()
@@ -233,6 +239,11 @@ func (p *Processor) handleCreateRemoteMLModelTraining(
 		return nil, p.mlModelPeerProblem(peerErr)
 	}
 	peerLocation, err := resolvedPeerLocation(response)
+	if err != nil {
+		p.finishFailedPeerTrainingCreate(ctx, localRouteID, revision, response)
+		return nil, mlModelBadGatewayProblem(err.Error())
+	}
+	peerResourceID, err := trainingResourceIDFromPeerLocation(peerLocation)
 	if err != nil {
 		p.finishFailedPeerTrainingCreate(ctx, localRouteID, revision, response)
 		return nil, mlModelBadGatewayProblem(err.Error())
@@ -259,7 +270,7 @@ func (p *Processor) handleCreateRemoteMLModelTraining(
 		return nil, mlModelInternalProblem("could not encode peer ML Model Training representation")
 	}
 	p.mlModelMu.Lock()
-	route, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(localRouteID)
+	route, found := nwdafContext.GetPendingMLModelTrainingRoute(localRouteID)
 	if !found || !mlModelRouteOperationCurrent(
 		route.PeerRoute,
 		nwdaf_context.MLModelRouteCreating,
@@ -270,11 +281,12 @@ func (p *Processor) handleCreateRemoteMLModelTraining(
 		return nil, mlModelUnavailableProblem()
 	}
 	route.PeerRoute.PeerLocation = peerLocation
+	route.SubscriptionID = peerResourceID
 	restoreActiveMLModelRoute(&route.PeerRoute)
 	route.AcceptedRepresentation = backendView
 	route.BackendRepresentation = peerAcceptedBody
 	setTrainingRouteFeatureState(&route, value.SupportedFeatures, peerValue.SupportedFeatures)
-	if !nwdafContext.UpdateMLModelTrainingSubscriptionRoute(route) {
+	if !nwdafContext.ActivatePendingMLModelTrainingRoute(localRouteID, route) {
 		p.mlModelMu.Unlock()
 		p.finishFailedPeerTrainingCreate(ctx, localRouteID, revision, response)
 		return nil, mlModelInternalProblem("could not record remote ML Model Training route")
@@ -282,11 +294,8 @@ func (p *Processor) handleCreateRemoteMLModelTraining(
 	p.mlModelMu.Unlock()
 	return &backend.StandardResponse{
 		StatusCode: http.StatusCreated,
-		Location: p.privateMLModelResourceLocation(
-			nwdaf_context.MLModelRoutePartyMTLFBackend,
-			"ml-model-training/subscriptions",
-			localRouteID,
-		),
+		Location: p.mtlfCallbackURI("/internal/v1/ml-model-training/targets/" +
+			url.PathEscape(target.NFInstanceID) + "/subscriptions/" + url.PathEscape(peerResourceID)),
 		ContentType: "application/json",
 		Body:        backendView,
 	}, nil
@@ -294,10 +303,11 @@ func (p *Processor) handleCreateRemoteMLModelTraining(
 
 func (p *Processor) HandleReplaceMLModelTrainingFromBackend(
 	ctx context.Context,
+	targetNFInstanceID string,
 	subscriptionID string,
 	body []byte,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
-	return p.HandleReplaceMLModelTraining(ctx, subscriptionID, body)
+	return p.handleReplaceMLModelTraining(ctx, p.trainingResourceKey(targetNFInstanceID, subscriptionID), body)
 }
 
 func (p *Processor) HandleReplaceMLModelTraining(
@@ -305,6 +315,15 @@ func (p *Processor) HandleReplaceMLModelTraining(
 	subscriptionID string,
 	body []byte,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
+	return p.handleReplaceMLModelTraining(ctx, p.trainingResourceKey("", subscriptionID), body)
+}
+
+func (p *Processor) handleReplaceMLModelTraining(
+	ctx context.Context,
+	key nwdaf_context.MLModelTrainingResourceKey,
+	body []byte,
+) (*backend.StandardResponse, *models.ProblemDetails) {
+	subscriptionID := key.SubscriptionID
 	value, err := wire.ParseNwdafMLModelTrainSubsc(body)
 	if err != nil {
 		return nil, mlModelTrainingValidationProblem(err)
@@ -315,7 +334,7 @@ func (p *Processor) HandleReplaceMLModelTraining(
 		p.mlModelMu.Unlock()
 		return nil, mlModelInternalProblem("NWDAF context is unavailable")
 	}
-	route, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(subscriptionID)
+	route, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(key)
 	if !found {
 		p.mlModelMu.Unlock()
 		return nil, mlModelResourceNotFoundProblem("ML Model Training subscription", subscriptionID)
@@ -383,15 +402,15 @@ func (p *Processor) HandleReplaceMLModelTraining(
 		)
 	} else {
 		response, err = p.mtlfMLModelBackend.ReplaceMLModelTrainingSubscription(
-			ctx, route.PeerRoute.BackendResourceID, routedBody,
+			ctx, route.SubscriptionID, routedBody,
 		)
 	}
 	if err != nil {
-		p.finishTrainingMutationFailure(subscriptionID, revision, false)
+		p.finishTrainingMutationFailure(key, revision, false)
 		return nil, p.trainingRouteProblem(err, route)
 	}
 	if response == nil || response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNoContent {
-		p.finishTrainingMutationFailure(subscriptionID, revision, false)
+		p.finishTrainingMutationFailure(key, revision, false)
 		return nil, mlModelBadGatewayProblem("training destination returned an invalid replace response")
 	}
 	wire.StripCandidateOperations(value)
@@ -399,37 +418,37 @@ func (p *Processor) HandleReplaceMLModelTraining(
 	externalValue := value
 	externalBody, err := json.Marshal(externalValue)
 	if err != nil {
-		p.finishTrainingMutationFailure(subscriptionID, revision, false)
+		p.finishTrainingMutationFailure(key, revision, false)
 		return nil, mlModelInternalProblem("could not encode ML Model Training representation")
 	}
 	backendValue := *value
 	backendValue.NotificationURI = trainingRouteCallbackURI(p, route)
 	backendBody, err := json.Marshal(&backendValue)
 	if err != nil {
-		p.finishTrainingMutationFailure(subscriptionID, revision, false)
+		p.finishTrainingMutationFailure(key, revision, false)
 		return nil, mlModelInternalProblem("could not encode routed ML Model Training representation")
 	}
 	if response.StatusCode == http.StatusOK {
 		responseValue, parseErr := wire.ParseNwdafMLModelTrainSubsc(response.Body)
 		if parseErr != nil {
-			p.finishTrainingMutationFailure(subscriptionID, revision, false)
+			p.finishTrainingMutationFailure(key, revision, false)
 			return nil, mlModelBadGatewayProblem("training destination returned an invalid representation")
 		}
 		if validationErr := validateTrainingMutationResponse(responseValue, value, route); validationErr != nil {
-			p.finishTrainingMutationFailure(subscriptionID, revision, false)
+			p.finishTrainingMutationFailure(key, revision, false)
 			return nil, mlModelBadGatewayProblem(validationErr.Error())
 		}
 		responseValue.NotificationURI = value.NotificationURI
 		externalValue = responseValue
 		externalBody, err = json.Marshal(responseValue)
 		if err != nil {
-			p.finishTrainingMutationFailure(subscriptionID, revision, false)
+			p.finishTrainingMutationFailure(key, revision, false)
 			return nil, mlModelInternalProblem("could not encode ML Model Training representation")
 		}
 		backendBody = append(json.RawMessage(nil), response.Body...)
 	}
 	p.mlModelMu.Lock()
-	current, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(subscriptionID)
+	current, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(key)
 	if !found || !mlModelRouteOperationCurrent(
 		current.PeerRoute,
 		nwdaf_context.MLModelRouteReplacing,
@@ -459,10 +478,11 @@ func (p *Processor) HandleReplaceMLModelTraining(
 
 func (p *Processor) HandlePatchMLModelTrainingFromBackend(
 	ctx context.Context,
+	targetNFInstanceID string,
 	subscriptionID string,
 	body []byte,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
-	return p.HandlePatchMLModelTraining(ctx, subscriptionID, body)
+	return p.handlePatchMLModelTraining(ctx, p.trainingResourceKey(targetNFInstanceID, subscriptionID), body)
 }
 
 func (p *Processor) HandlePatchMLModelTraining(
@@ -470,6 +490,15 @@ func (p *Processor) HandlePatchMLModelTraining(
 	subscriptionID string,
 	body []byte,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
+	return p.handlePatchMLModelTraining(ctx, p.trainingResourceKey("", subscriptionID), body)
+}
+
+func (p *Processor) handlePatchMLModelTraining(
+	ctx context.Context,
+	key nwdaf_context.MLModelTrainingResourceKey,
+	body []byte,
+) (*backend.StandardResponse, *models.ProblemDetails) {
+	subscriptionID := key.SubscriptionID
 	patch, err := wire.ParseNwdafMLModelTrainSubscPatch(body)
 	if err != nil {
 		return nil, mlModelTrainingValidationProblem(err)
@@ -480,7 +509,7 @@ func (p *Processor) HandlePatchMLModelTraining(
 		p.mlModelMu.Unlock()
 		return nil, mlModelInternalProblem("NWDAF context is unavailable")
 	}
-	route, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(subscriptionID)
+	route, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(key)
 	if !found {
 		p.mlModelMu.Unlock()
 		return nil, mlModelResourceNotFoundProblem("ML Model Training subscription", subscriptionID)
@@ -567,47 +596,47 @@ func (p *Processor) HandlePatchMLModelTraining(
 		)
 	} else {
 		response, err = p.mtlfMLModelBackend.PatchMLModelTrainingSubscription(
-			ctx, route.PeerRoute.BackendResourceID, routedPatch,
+			ctx, route.SubscriptionID, routedPatch,
 		)
 	}
 	if err != nil {
-		p.finishTrainingMutationFailure(subscriptionID, revision, false)
+		p.finishTrainingMutationFailure(key, revision, false)
 		return nil, p.trainingRouteProblem(err, route)
 	}
 	if response == nil || response.StatusCode != http.StatusOK && response.StatusCode != http.StatusNoContent {
-		p.finishTrainingMutationFailure(subscriptionID, revision, false)
+		p.finishTrainingMutationFailure(key, revision, false)
 		return nil, mlModelBadGatewayProblem("training destination returned an invalid patch response")
 	}
 	externalValue := effective
 	effectiveBody, err := json.Marshal(externalValue)
 	if err != nil {
-		p.finishTrainingMutationFailure(subscriptionID, revision, false)
+		p.finishTrainingMutationFailure(key, revision, false)
 		return nil, mlModelInternalProblem("could not encode patched ML Model Training representation")
 	}
 	backendEffective := *effective
 	backendEffective.NotificationURI = trainingRouteCallbackURI(p, route)
 	backendEffectiveBody, err := json.Marshal(&backendEffective)
 	if err != nil {
-		p.finishTrainingMutationFailure(subscriptionID, revision, false)
+		p.finishTrainingMutationFailure(key, revision, false)
 		return nil, mlModelInternalProblem("could not encode routed ML Model Training representation")
 	}
 	if response.StatusCode == http.StatusOK {
 		responseValue, parseErr := wire.ParseNwdafMLModelTrainSubsc(response.Body)
 		if parseErr != nil {
-			p.finishTrainingMutationFailure(subscriptionID, revision, false)
+			p.finishTrainingMutationFailure(key, revision, false)
 			return nil, mlModelBadGatewayProblem(
 				"training destination returned an invalid representation",
 			)
 		}
 		if validationErr := validateTrainingMutationResponse(responseValue, effective, route); validationErr != nil {
-			p.finishTrainingMutationFailure(subscriptionID, revision, false)
+			p.finishTrainingMutationFailure(key, revision, false)
 			return nil, mlModelBadGatewayProblem(validationErr.Error())
 		}
 		responseValue.NotificationURI = effective.NotificationURI
 		externalValue = responseValue
 		effectiveBody, err = json.Marshal(responseValue)
 		if err != nil {
-			p.finishTrainingMutationFailure(subscriptionID, revision, false)
+			p.finishTrainingMutationFailure(key, revision, false)
 			return nil, mlModelInternalProblem(
 				"could not encode ML Model Training representation",
 			)
@@ -615,7 +644,7 @@ func (p *Processor) HandlePatchMLModelTraining(
 		backendEffectiveBody = append(json.RawMessage(nil), response.Body...)
 	}
 	p.mlModelMu.Lock()
-	currentRoute, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(subscriptionID)
+	currentRoute, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(key)
 	if !found || !mlModelRouteOperationCurrent(
 		currentRoute.PeerRoute,
 		nwdaf_context.MLModelRouteReplacing,
@@ -650,29 +679,39 @@ func (p *Processor) HandlePatchMLModelTraining(
 
 func (p *Processor) HandleDeleteMLModelTrainingFromBackend(
 	ctx context.Context,
+	targetNFInstanceID string,
 	subscriptionID string,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
-	return p.HandleDeleteMLModelTraining(ctx, subscriptionID)
+	return p.handleDeleteMLModelTraining(ctx, p.trainingResourceKey(targetNFInstanceID, subscriptionID))
 }
 
 func (p *Processor) HandleDeleteMLModelTraining(
 	ctx context.Context,
 	subscriptionID string,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
+	return p.handleDeleteMLModelTraining(ctx, p.trainingResourceKey("", subscriptionID))
+}
+
+func (p *Processor) handleDeleteMLModelTraining(
+	ctx context.Context,
+	key nwdaf_context.MLModelTrainingResourceKey,
+) (*backend.StandardResponse, *models.ProblemDetails) {
+	subscriptionID := key.SubscriptionID
 	p.mlModelMu.Lock()
 	nwdafContext := p.nwdaf.Context()
 	if nwdafContext == nil {
 		p.mlModelMu.Unlock()
 		return nil, mlModelInternalProblem("NWDAF context is unavailable")
 	}
-	if nwdafContext.ConsumeMLModelDeletionRecord(
-		nwdaf_context.MLModelResourceTrainingSubscription,
-		subscriptionID,
-	) {
+	if key.Direction == nwdaf_context.MLModelRouteDirectionInbound &&
+		nwdafContext.ConsumeMLModelDeletionRecord(
+			nwdaf_context.MLModelResourceTrainingSubscription,
+			subscriptionID,
+		) {
 		p.mlModelMu.Unlock()
 		return noContentMLModelResponse(), nil
 	}
-	route, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(subscriptionID)
+	route, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(key)
 	if !found {
 		p.mlModelMu.Unlock()
 		return nil, mlModelResourceNotFoundProblem("ML Model Training subscription", subscriptionID)
@@ -726,7 +765,7 @@ func (p *Processor) HandleDeleteMLModelTraining(
 	} else {
 		response, operationErr = p.mtlfMLModelBackend.DeleteMLModelTrainingSubscription(
 			ctx,
-			route.PeerRoute.BackendResourceID,
+			route.SubscriptionID,
 		)
 	}
 	missingDestination := peerMissing(operationErr)
@@ -737,7 +776,7 @@ func (p *Processor) HandleDeleteMLModelTraining(
 	}
 
 	p.mlModelMu.Lock()
-	current, exists := nwdafContext.GetMLModelTrainingSubscriptionRoute(subscriptionID)
+	current, exists := nwdafContext.GetMLModelTrainingSubscriptionRoute(key)
 	if !exists || !mlModelRouteOperationCurrent(
 		current.PeerRoute,
 		nwdaf_context.MLModelRouteDeleting,
@@ -747,6 +786,7 @@ func (p *Processor) HandleDeleteMLModelTraining(
 			nwdaf_context.MLModelResourceTrainingSubscription,
 			subscriptionID,
 		)
+		resetDeleted = resetDeleted && key.Direction == nwdaf_context.MLModelRouteDirectionInbound
 		p.mlModelMu.Unlock()
 		if !exists && resetDeleted {
 			return noContentMLModelResponse(), nil
@@ -754,7 +794,7 @@ func (p *Processor) HandleDeleteMLModelTraining(
 		return nil, mlModelUnavailableProblem()
 	}
 	if terminal {
-		nwdafContext.DeleteMLModelTrainingSubscriptionRoute(subscriptionID)
+		nwdafContext.DeleteMLModelTrainingSubscriptionRoute(key)
 	} else {
 		current.PeerRoute.LifecycleState = previousLifecycle
 		nwdafContext.UpdateMLModelTrainingSubscriptionRoute(current)
@@ -794,7 +834,7 @@ func (p *Processor) HandleMLModelTrainingNotification(
 	var route nwdaf_context.MLModelTrainingSubscriptionRoute
 	var found bool
 	if strings.TrimSpace(localRouteID) != "" {
-		route, found = nwdafContext.GetMLModelTrainingSubscriptionRoute(localRouteID)
+		route, found = nwdafContext.FindMLModelTrainingSubscriptionRouteByCallback(localRouteID)
 	} else {
 		route, found = nwdafContext.FindMLModelTrainingSubscriptionRouteByCorrelation(
 			notification.NotificationCorrelationID,
@@ -897,7 +937,7 @@ func (p *Processor) finishFailedInboundTrainingTermination(
 	if nwdafContext == nil {
 		return
 	}
-	current, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(route.SubscriptionID)
+	current, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(route.ResourceKey())
 	if !found || !mlModelRouteOperationCurrent(
 		current.PeerRoute,
 		nwdaf_context.MLModelRouteTerminating,
@@ -905,7 +945,7 @@ func (p *Processor) finishFailedInboundTrainingTermination(
 	) {
 		return
 	}
-	nwdafContext.DeleteMLModelTrainingSubscriptionRoute(route.SubscriptionID)
+	nwdafContext.DeleteMLModelTrainingSubscriptionRoute(route.ResourceKey())
 	nwdafContext.TombstoneMLModelResource(
 		nwdaf_context.MLModelDeletionRecord{
 			ResourceID:        route.SubscriptionID,
@@ -915,10 +955,8 @@ func (p *Processor) finishFailedInboundTrainingTermination(
 		nwdaf_context.MLModelResourceTrainingSubscription,
 	)
 	logger.ProcLog.Infof(
-		"Retired terminating inbound ML Model Training route after callback delivery failure "+
-			"subscription_id=%s backend_resource_id=%s",
+		"Retired terminating inbound ML Model Training route after callback delivery failure subscription_id=%s",
 		route.SubscriptionID,
-		route.PeerRoute.BackendResourceID,
 	)
 }
 
@@ -939,6 +977,43 @@ func trainingRoute(
 		ExpectedRoundIndicator:     expectedTrainingRound(value),
 		OfferedSupportedFeatures:   value.SupportedFeatures,
 	}
+}
+
+func (p *Processor) trainingResourceKey(
+	targetNFInstanceID, subscriptionID string,
+) nwdaf_context.MLModelTrainingResourceKey {
+	if targetNFInstanceID != "" {
+		return nwdaf_context.MLModelTrainingResourceKey{
+			Direction:         nwdaf_context.MLModelRouteDirectionOutbound,
+			OwnerNFInstanceID: targetNFInstanceID, SubscriptionID: subscriptionID,
+		}
+	}
+	localNFInstanceID := ""
+	if p.nwdaf != nil && p.nwdaf.Context() != nil {
+		localNFInstanceID = p.nwdaf.Context().NfId
+	}
+	return nwdaf_context.MLModelTrainingResourceKey{
+		Direction:         nwdaf_context.MLModelRouteDirectionInbound,
+		OwnerNFInstanceID: localNFInstanceID, SubscriptionID: subscriptionID,
+	}
+}
+
+func trainingResourceIDFromPeerLocation(location string) (string, error) {
+	parsed, err := url.Parse(location)
+	if err != nil {
+		return "", errors.New("peer training Location is invalid")
+	}
+	const marker = "/nnwdaf-mlmodeltraining/v1/subscriptions/"
+	escaped := parsed.EscapedPath()
+	index := strings.LastIndex(escaped, marker)
+	if index < 0 || index+len(marker) >= len(escaped) || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("peer training Location is not a subscription resource")
+	}
+	id, err := url.PathUnescape(escaped[index+len(marker):])
+	if err != nil || id == "" || id == "." || id == ".." || strings.ContainsAny(id, "/\\") {
+		return "", errors.New("peer training Location has an invalid subscription ID")
+	}
+	return id, nil
 }
 
 func updateTrainingRouteRepresentation(
@@ -1100,7 +1175,7 @@ func trainingRouteCallbackURI(
 	route nwdaf_context.MLModelTrainingSubscriptionRoute,
 ) string {
 	if route.PeerRoute.SelectedTarget != nil {
-		return p.publicMLModelCallbackURI("ml-model-training", route.SubscriptionID)
+		return p.publicMLModelCallbackURI("ml-model-training", route.CallbackRouteID)
 	}
 	return p.mtlfCallbackURI(mlModelTrainingCallbackPath)
 }
@@ -1125,25 +1200,38 @@ func mlModelTrainingValidationProblem(err error) *models.ProblemDetails {
 	return malformedMLModelProblem(err)
 }
 
-func (p *Processor) removeCreatingTrainingRoute(routeID string, revision uint64) {
+func (p *Processor) removeCreatingTrainingRoute(key nwdaf_context.MLModelTrainingResourceKey, revision uint64) {
 	p.mlModelMu.Lock()
 	defer p.mlModelMu.Unlock()
 	nwdafContext := p.nwdaf.Context()
 	if nwdafContext == nil {
 		return
 	}
-	route, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(routeID)
+	route, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(key)
 	if found && mlModelRouteOperationCurrent(
 		route.PeerRoute,
 		nwdaf_context.MLModelRouteCreating,
 		revision,
 	) {
-		nwdafContext.DeleteMLModelTrainingSubscriptionRoute(routeID)
+		nwdafContext.DeleteMLModelTrainingSubscriptionRoute(key)
+	}
+}
+
+func (p *Processor) removeCreatingPendingTrainingRoute(callbackRouteID string, revision uint64) {
+	p.mlModelMu.Lock()
+	defer p.mlModelMu.Unlock()
+	nwdafContext := p.nwdaf.Context()
+	if nwdafContext == nil {
+		return
+	}
+	route, found := nwdafContext.GetPendingMLModelTrainingRoute(callbackRouteID)
+	if found && mlModelRouteOperationCurrent(route.PeerRoute, nwdaf_context.MLModelRouteCreating, revision) {
+		nwdafContext.DeletePendingMLModelTrainingRoute(callbackRouteID)
 	}
 }
 
 func (p *Processor) finishTrainingMutationFailure(
-	subscriptionID string,
+	key nwdaf_context.MLModelTrainingResourceKey,
 	revision uint64,
 	deleteRoute bool,
 ) {
@@ -1153,7 +1241,7 @@ func (p *Processor) finishTrainingMutationFailure(
 	if nwdafContext == nil {
 		return
 	}
-	route, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(subscriptionID)
+	route, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(key)
 	if !found || !mlModelRouteOperationCurrent(
 		route.PeerRoute,
 		nwdaf_context.MLModelRouteReplacing,
@@ -1162,7 +1250,7 @@ func (p *Processor) finishTrainingMutationFailure(
 		return
 	}
 	if deleteRoute {
-		nwdafContext.DeleteMLModelTrainingSubscriptionRoute(subscriptionID)
+		nwdafContext.DeleteMLModelTrainingSubscriptionRoute(key)
 		return
 	}
 	restoreActiveMLModelRoute(&route.PeerRoute)
@@ -1178,13 +1266,13 @@ func (p *Processor) finishFailedPeerTrainingCreate(
 	nwdafContext := p.nwdaf.Context()
 	location, locationErr := resolvedPeerLocation(response)
 	if locationErr != nil {
-		p.removeCreatingTrainingRoute(routeID, revision)
+		p.removeCreatingPendingTrainingRoute(routeID, revision)
 		return
 	}
 	cleanupResponse, cleanupErr := p.mlModelPeerConsumer.DeletePeerMLModelTraining(ctx, location)
 	p.mlModelMu.Lock()
 	defer p.mlModelMu.Unlock()
-	route, found := nwdafContext.GetMLModelTrainingSubscriptionRoute(routeID)
+	route, found := nwdafContext.GetPendingMLModelTrainingRoute(routeID)
 	if !found || !mlModelRouteOperationCurrent(
 		route.PeerRoute,
 		nwdaf_context.MLModelRouteCreating,
@@ -1193,7 +1281,7 @@ func (p *Processor) finishFailedPeerTrainingCreate(
 		return
 	}
 	if cleanupResponseAccepted(cleanupResponse, cleanupErr) {
-		nwdafContext.DeleteMLModelTrainingSubscriptionRoute(routeID)
+		nwdafContext.DeletePendingMLModelTrainingRoute(routeID)
 		return
 	}
 	route.PeerRoute.PeerLocation = location

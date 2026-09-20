@@ -153,6 +153,9 @@ func TestMTLFBackendMLModelTrainingClientPreservesCandidateContract(t *testing.T
 		received[key] = body
 		switch key {
 		case http.MethodPost + " " + mlModelTrainingSubscriptionsPath:
+			if got := request.Header.Get(mlModelTrainingSubscriptionIDHeader); got != resourceID {
+				t.Errorf("create subscription ID header = %q, want %q", got, resourceID)
+			}
 			response.Header().Set("Content-Type", "application/json")
 			response.Header().Set(
 				"Location", serverURL(request)+mlModelTrainingSubscriptionsPath+"/"+resourceID,
@@ -164,6 +167,9 @@ func TestMTLFBackendMLModelTrainingClientPreservesCandidateContract(t *testing.T
 		case http.MethodPut + " " + mlModelTrainingSubscriptionsPath + "/" + resourceID,
 			http.MethodPatch + " " + mlModelTrainingSubscriptionsPath + "/" + resourceID,
 			http.MethodPost + " " + mlModelTrainingNotificationsPath:
+			if got := request.Header.Get(mlModelTrainingSubscriptionIDHeader); got != "" {
+				t.Errorf("non-create request leaked subscription ID header %q", got)
+			}
 			response.WriteHeader(http.StatusNoContent)
 		default:
 			t.Errorf("unexpected request %s", key)
@@ -176,7 +182,7 @@ func TestMTLFBackendMLModelTrainingClientPreservesCandidateContract(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = client.CreateMLModelTrainingSubscription(context.Background(), subscription); err != nil {
+	if _, err = client.CreateMLModelTrainingSubscription(context.Background(), subscription, resourceID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = client.ReplaceMLModelTrainingSubscription(

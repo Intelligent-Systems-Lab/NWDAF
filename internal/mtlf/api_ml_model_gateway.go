@@ -47,15 +47,18 @@ type mtlfMLModelTrainingGateway interface {
 	HandleReplaceMLModelTrainingFromBackend(
 		context.Context,
 		string,
+		string,
 		[]byte,
 	) (*backend.StandardResponse, *models.ProblemDetails)
 	HandlePatchMLModelTrainingFromBackend(
 		context.Context,
 		string,
+		string,
 		[]byte,
 	) (*backend.StandardResponse, *models.ProblemDetails)
 	HandleDeleteMLModelTrainingFromBackend(
 		context.Context,
+		string,
 		string,
 	) (*backend.StandardResponse, *models.ProblemDetails)
 	HandleMLModelTrainingNotification(
@@ -76,6 +79,21 @@ func (s *Server) mtlfMLModelRoutes() []Route {
 			Name: "CreateMLModelTrainingFromBackend", Method: http.MethodPost,
 			Pattern: "/internal/v1/ml-model-training/subscriptions",
 			APIFunc: s.HandleCreateMLModelTrainingFromBackend,
+		},
+		{
+			Name: "ReplacePeerMLModelTrainingFromBackend", Method: http.MethodPut,
+			Pattern: "/internal/v1/ml-model-training/targets/:targetNfInstanceId/subscriptions/:subscriptionId",
+			APIFunc: s.HandleReplaceMLModelTrainingFromBackend,
+		},
+		{
+			Name: "PatchPeerMLModelTrainingFromBackend", Method: http.MethodPatch,
+			Pattern: "/internal/v1/ml-model-training/targets/:targetNfInstanceId/subscriptions/:subscriptionId",
+			APIFunc: s.HandlePatchMLModelTrainingFromBackend,
+		},
+		{
+			Name: "DeletePeerMLModelTrainingFromBackend", Method: http.MethodDelete,
+			Pattern: "/internal/v1/ml-model-training/targets/:targetNfInstanceId/subscriptions/:subscriptionId",
+			APIFunc: s.HandleDeleteMLModelTrainingFromBackend,
 		},
 		{
 			Name: "ReplaceMLModelTrainingFromBackend", Method: http.MethodPut,
@@ -160,7 +178,7 @@ func (s *Server) HandleReplaceMLModelTrainingFromBackend(c *gin.Context) {
 		return
 	}
 	response, problem := gateway.HandleReplaceMLModelTrainingFromBackend(
-		c.Request.Context(), c.Param("subscriptionId"), body,
+		c.Request.Context(), c.Param("targetNfInstanceId"), c.Param("subscriptionId"), body,
 	)
 	writeMLModelGatewayResponse(c, response, problem)
 }
@@ -181,7 +199,7 @@ func (s *Server) HandlePatchMLModelTrainingFromBackend(c *gin.Context) {
 		return
 	}
 	response, problem := gateway.HandlePatchMLModelTrainingFromBackend(
-		c.Request.Context(), c.Param("subscriptionId"), body,
+		c.Request.Context(), c.Param("targetNfInstanceId"), c.Param("subscriptionId"), body,
 	)
 	writeMLModelGatewayResponse(c, response, problem)
 }
@@ -193,7 +211,7 @@ func (s *Server) HandleDeleteMLModelTrainingFromBackend(c *gin.Context) {
 		return
 	}
 	response, problem := gateway.HandleDeleteMLModelTrainingFromBackend(
-		c.Request.Context(), c.Param("subscriptionId"),
+		c.Request.Context(), c.Param("targetNfInstanceId"), c.Param("subscriptionId"),
 	)
 	writeMLModelGatewayResponse(c, response, problem)
 }

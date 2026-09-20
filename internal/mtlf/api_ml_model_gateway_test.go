@@ -15,10 +15,11 @@ import (
 )
 
 type mlModelGatewayStub struct {
-	body           []byte
-	subscriptionID string
-	response       *backend.StandardResponse
-	problem        *models.ProblemDetails
+	body               []byte
+	subscriptionID     string
+	targetNFInstanceID string
+	response           *backend.StandardResponse
+	problem            *models.ProblemDetails
 }
 
 func (s *mlModelGatewayStub) HandleMLModelProvisionNotification(
@@ -71,9 +72,11 @@ func (s *mlModelGatewayStub) HandleCreateMLModelTrainingFromBackend(
 
 func (s *mlModelGatewayStub) HandleReplaceMLModelTrainingFromBackend(
 	_ context.Context,
+	targetNFInstanceID string,
 	subscriptionID string,
 	body []byte,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
+	s.targetNFInstanceID = targetNFInstanceID
 	s.subscriptionID = subscriptionID
 	s.body = append([]byte(nil), body...)
 	return s.response, s.problem
@@ -81,9 +84,11 @@ func (s *mlModelGatewayStub) HandleReplaceMLModelTrainingFromBackend(
 
 func (s *mlModelGatewayStub) HandlePatchMLModelTrainingFromBackend(
 	_ context.Context,
+	targetNFInstanceID string,
 	subscriptionID string,
 	body []byte,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
+	s.targetNFInstanceID = targetNFInstanceID
 	s.subscriptionID = subscriptionID
 	s.body = append([]byte(nil), body...)
 	return s.response, s.problem
@@ -91,8 +96,10 @@ func (s *mlModelGatewayStub) HandlePatchMLModelTrainingFromBackend(
 
 func (s *mlModelGatewayStub) HandleDeleteMLModelTrainingFromBackend(
 	_ context.Context,
+	targetNFInstanceID string,
 	subscriptionID string,
 ) (*backend.StandardResponse, *models.ProblemDetails) {
+	s.targetNFInstanceID = targetNFInstanceID
 	s.subscriptionID = subscriptionID
 	return s.response, s.problem
 }
@@ -319,6 +326,53 @@ func TestMLModelTrainingGatewayPreservesCandidateBodyAndErrors(t *testing.T) {
 	if len(problem.InvalidParams) != 1 ||
 		problem.InvalidParams[0].Param != "x-flTopologyReport.children[0].statusCause" {
 		t.Fatalf("notify problem = %+v", problem)
+	}
+}
+
+func TestMLModelTrainingGatewayForwardsTargetScopedResource(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const targetID = "10000000-0000-4000-8000-000000000101"
+	const resourceID = "peer-resource"
+	const fullBody = `{
+		"mLEventSubscs":[{"mLEvent":"UE_COMMUNICATION","mLEventFilter":{},"modelInterInfo":"bundle-v1"}],
+		"notifUri":"http://backend.example/callback",
+		"notifCorreId":"candidate-client-a",
+		"mlCorreId":"hierarchical-fl-001"
+	}`
+	stub := &mlModelGatewayStub{response: &backend.StandardResponse{StatusCode: http.StatusNoContent}}
+	server := &Server{processor: stub}
+	for _, method := range []string{http.MethodPut, http.MethodPatch, http.MethodDelete} {
+		recorder := httptest.NewRecorder()
+		ginContext, _ := gin.CreateTestContext(recorder)
+		ginContext.Params = gin.Params{
+			{Key: "targetNfInstanceId", Value: targetID},
+			{Key: "subscriptionId", Value: resourceID},
+		}
+		body := fullBody
+		if method == http.MethodPatch {
+			body = `{"notifUri":"http://backend.example/callback"}`
+		}
+		ginContext.Request = httptest.NewRequestWithContext(
+			t.Context(), method,
+			"/internal/v1/ml-model-training/targets/"+targetID+"/subscriptions/"+resourceID,
+			strings.NewReader(body),
+		)
+		ginContext.Request.Header.Set("Content-Type", "application/json")
+		switch method {
+		case http.MethodPut:
+			server.HandleReplaceMLModelTrainingFromBackend(ginContext)
+		case http.MethodPatch:
+			ginContext.Request.Header.Set("Content-Type", "application/merge-patch+json")
+			server.HandlePatchMLModelTrainingFromBackend(ginContext)
+		case http.MethodDelete:
+			server.HandleDeleteMLModelTrainingFromBackend(ginContext)
+		}
+		ginContext.Writer.WriteHeaderNow()
+		if recorder.Code != http.StatusNoContent || stub.targetNFInstanceID != targetID ||
+			stub.subscriptionID != resourceID {
+			t.Fatalf("method=%s status=%d target=%q resource=%q", method, recorder.Code,
+				stub.targetNFInstanceID, stub.subscriptionID)
+		}
 	}
 }
 

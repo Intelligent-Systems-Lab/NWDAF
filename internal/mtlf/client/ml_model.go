@@ -11,11 +11,12 @@ import (
 )
 
 const (
-	mlModelProvisionSubscriptionsPath = "/internal/v1/ml-model-provision/subscriptions"
-	mlModelMonitorRegistrationsPath   = "/internal/v1/ml-model-monitor/registrations"
-	mlModelMonitorNotificationsPath   = "/internal/v1/ml-model-monitor/notifications"
-	mlModelTrainingSubscriptionsPath  = "/internal/v1/ml-model-training/subscriptions"
-	mlModelTrainingNotificationsPath  = "/internal/v1/ml-model-training/notifications"
+	mlModelProvisionSubscriptionsPath   = "/internal/v1/ml-model-provision/subscriptions"
+	mlModelMonitorRegistrationsPath     = "/internal/v1/ml-model-monitor/registrations"
+	mlModelMonitorNotificationsPath     = "/internal/v1/ml-model-monitor/notifications"
+	mlModelTrainingSubscriptionsPath    = "/internal/v1/ml-model-training/subscriptions"
+	mlModelTrainingNotificationsPath    = "/internal/v1/ml-model-training/notifications"
+	mlModelTrainingSubscriptionIDHeader = "X-NWDAF-Subscription-Id"
 )
 
 func (c *BackendClient) CreateMLModelProvisionSubscription(
@@ -40,11 +41,13 @@ func (c *BackendClient) CreateMLModelProvisionSubscription(
 func (c *BackendClient) CreateMLModelTrainingSubscription(
 	ctx context.Context,
 	body []byte,
+	subscriptionID string,
 ) (*backend.StandardResponse, error) {
 	return c.doMLModelRequest(
 		ctx, http.MethodPost, c.endpoint+mlModelTrainingSubscriptionsPath, body,
 		"create ML Model Training subscription",
 		backend.StandardOperationContract{
+			RequestHeaders: http.Header{mlModelTrainingSubscriptionIDHeader: []string{subscriptionID}},
 			SuccessValidators: map[int]func([]byte) error{
 				http.StatusCreated: validateTrainingSubscription,
 			},

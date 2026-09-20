@@ -40,6 +40,7 @@ type StandardOperationContract struct {
 	ErrorStatuses      map[int]struct{}
 	FollowRedirects    bool
 	RequestContentType string
+	RequestHeaders     http.Header
 }
 
 func ErrorStatuses(statuses ...int) map[int]struct{} {
@@ -223,6 +224,11 @@ func ExecuteStandardRequest(
 			contentType = "application/json"
 		}
 		request.Header.Set("Content-Type", contentType)
+	}
+	for name, values := range contract.RequestHeaders {
+		for _, value := range values {
+			request.Header.Add(name, value)
+		}
 	}
 	transport := *client
 	permanentRedirectURI := ""

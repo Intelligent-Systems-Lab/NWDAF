@@ -106,7 +106,14 @@ func (p *Processor) ResetMLModelBackendGeneration(
 			if cleanup.run != nil {
 				cleanups = append(cleanups, cleanup)
 			}
-			ctx.DeleteMLModelTrainingSubscriptionRoute(route.SubscriptionID)
+			if route.SubscriptionID == "" {
+				ctx.DeletePendingMLModelTrainingRoute(route.CallbackRouteID)
+			} else {
+				ctx.DeleteMLModelTrainingSubscriptionRoute(route.ResourceKey())
+			}
+			if route.PeerRoute.Direction != nwdaf_context.MLModelRouteDirectionInbound {
+				continue
+			}
 			ctx.TombstoneMLModelResource(nwdaf_context.MLModelDeletionRecord{
 				ResourceID:        route.SubscriptionID,
 				ProcessGeneration: generation,

@@ -55,7 +55,8 @@ func TestResetMTLFGenerationClearsProviderAndConsumerRelationships(t *testing.T)
 		t.Fatal("could not add local monitor subscription route")
 	}
 	if !ctx.AddMLModelTrainingSubscriptionRoute(nwdaf_context.MLModelTrainingSubscriptionRoute{
-		SubscriptionID: "training-local",
+		SubscriptionID:    "training-local",
+		OwnerNFInstanceID: ctx.NfId,
 		PeerRoute: nwdaf_context.MLModelPeerRoute{
 			Direction:         nwdaf_context.MLModelRouteDirectionInbound,
 			BackendResourceID: "training-backend",
@@ -66,7 +67,8 @@ func TestResetMTLFGenerationClearsProviderAndConsumerRelationships(t *testing.T)
 		t.Fatal("could not add local training route")
 	}
 	if !ctx.AddMLModelTrainingSubscriptionRoute(nwdaf_context.MLModelTrainingSubscriptionRoute{
-		SubscriptionID: "training-peer",
+		SubscriptionID:    "training-peer",
+		OwnerNFInstanceID: "peer-nwdaf",
 		PeerRoute: nwdaf_context.MLModelPeerRoute{
 			Direction:         nwdaf_context.MLModelRouteDirectionOutbound,
 			SelectedTarget:    &backend.SelectedTarget{NFInstanceID: "peer-nwdaf"},
@@ -89,10 +91,16 @@ func TestResetMTLFGenerationClearsProviderAndConsumerRelationships(t *testing.T)
 	if _, found := ctx.GetMLModelMonitorSubscriptionRoute("monitor-local"); found {
 		t.Fatal("MTLF consumer monitor route remains active")
 	}
-	if _, found := ctx.GetMLModelTrainingSubscriptionRoute("training-local"); found {
+	if _, found := ctx.GetMLModelTrainingSubscriptionRoute(nwdaf_context.MLModelTrainingResourceKey{
+		Direction: nwdaf_context.MLModelRouteDirectionInbound, OwnerNFInstanceID: ctx.NfId,
+		SubscriptionID: "training-local",
+	}); found {
 		t.Fatal("MTLF training route remains active")
 	}
-	if _, found := ctx.GetMLModelTrainingSubscriptionRoute("training-peer"); found {
+	if _, found := ctx.GetMLModelTrainingSubscriptionRoute(nwdaf_context.MLModelTrainingResourceKey{
+		Direction: nwdaf_context.MLModelRouteDirectionOutbound, OwnerNFInstanceID: "peer-nwdaf",
+		SubscriptionID: "training-peer",
+	}); found {
 		t.Fatal("MTLF peer training route remains active")
 	}
 	if len(peerConsumer.deletedTraining) != 1 ||
