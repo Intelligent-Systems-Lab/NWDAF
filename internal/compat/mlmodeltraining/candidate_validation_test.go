@@ -24,7 +24,7 @@ const validCandidateSubscription = `{
 		"dataAvReq":{"inpEvents":[{"upfEvent":"USER_DATA_USAGE_TRENDS"}]},
 		"timeAvReq":"PT10M"
 	}],
-	"x-flTopology":{
+	"flTopology":{
 		"nfInstanceId":"10000000-0000-4000-8000-000000000001",
 		"children":[{
 			"nfInstanceId":"10000000-0000-4000-8000-000000000101",
@@ -55,7 +55,7 @@ func TestCandidateSubscriptionRoundTrip(t *testing.T) {
 	body := strings.Replace(
 		validCandidateSubscription,
 		`"mLPreFlag":true,`,
-		`"mLPreFlag":true,"x-retainedResultReq":false,`,
+		`"mLPreFlag":true,"retainedResultReq":false,`,
 		1,
 	)
 	body = strings.Replace(
@@ -76,8 +76,8 @@ func TestCandidateSubscriptionRoundTrip(t *testing.T) {
 		t,
 		[]byte(body),
 		encoded,
-		"x-flTopology",
-		"x-retainedResultReq",
+		"flTopology",
+		"retainedResultReq",
 	)
 }
 
@@ -85,8 +85,8 @@ func TestCandidatePatchRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	body := []byte(`{
-		"x-retainedResultReq":true,
-		"x-flTopology":{
+		"retainedResultReq":true,
+		"flTopology":{
 			"nfInstanceId":"10000000-0000-4000-8000-000000000001",
 			"enabled":true,
 			"priority":100,
@@ -126,8 +126,8 @@ func TestCandidatePatchRoundTrip(t *testing.T) {
 		t,
 		body,
 		encoded,
-		"x-flTopology",
-		"x-retainedResultReq",
+		"flTopology",
+		"retainedResultReq",
 	)
 }
 
@@ -137,8 +137,8 @@ func TestCandidateNotificationRoundTrip(t *testing.T) {
 	body := []byte(`{
 		"notifCorreId":"root-branch-a",
 		"mlCorreId":"hierarchical-fl-001",
-		"x-retainedResultStatus":"NOT_FOUND",
-		"x-flTopologyReport":{
+		"retainedResultStatus":"NOT_FOUND",
+		"flTopologyReport":{
 			"nfInstanceId":"10000000-0000-4000-8000-000000000001",
 			"policy":{
 				"allowAdditionalCandidates":true,
@@ -188,8 +188,8 @@ func TestCandidateNotificationRoundTrip(t *testing.T) {
 		t,
 		body,
 		encoded,
-		"x-flTopologyReport",
-		"x-retainedResultStatus",
+		"flTopologyReport",
+		"retainedResultStatus",
 	)
 }
 
@@ -220,7 +220,7 @@ func TestCandidateNestedObjectsAreClosed(t *testing.T) {
 		1,
 	)
 	_, err := ParseNwdafMLModelTrainSubsc([]byte(body))
-	assertCandidateInvalidPath(t, err, "x-flTopology.strategy.methodParameters.unknown")
+	assertCandidateInvalidPath(t, err, "flTopology.strategy.methodParameters.unknown")
 }
 
 func TestCandidateTypeErrorsKeepAliasPaths(t *testing.T) {
@@ -236,19 +236,19 @@ func TestCandidateTypeErrorsKeepAliasPaths(t *testing.T) {
 			name: "node boolean",
 			old:  `"priority":100`,
 			new:  `"priority":100,"enabled":"yes"`,
-			path: "x-flTopology.children[0].enabled",
+			path: "flTopology.children[0].enabled",
 		},
 		{
 			name: "policy number",
 			old:  `"fractionTrain":1`,
 			new:  `"fractionTrain":"all"`,
-			path: "x-flTopology.policy.fractionTrain",
+			path: "flTopology.policy.fractionTrain",
 		},
 		{
 			name: "method parameter",
 			old:  `"proximalMu":0.01`,
 			new:  `"proximalMu":"small"`,
-			path: "x-flTopology.strategy.methodParameters.proximalMu",
+			path: "flTopology.strategy.methodParameters.proximalMu",
 		},
 	}
 
@@ -276,7 +276,7 @@ func TestCandidateTopologyValidation(t *testing.T) {
 			old:  `"priority":100`,
 			new: `"priority":100,"children":[{` +
 				`"nfInstanceId":"10000000-0000-4000-8000-000000000001"}]`,
-			invalidPath: "x-flTopology.children[0].children[0].nfInstanceId",
+			invalidPath: "flTopology.children[0].children[0].nfInstanceId",
 		},
 		{
 			name: "duplicate sibling identity",
@@ -284,25 +284,25 @@ func TestCandidateTopologyValidation(t *testing.T) {
 			new: `"priority":100},{` +
 				`"nfInstanceId":"10000000-0000-4000-8000-000000000101",` +
 				`"priority":90`,
-			invalidPath: "x-flTopology.children[1].nfInstanceId",
+			invalidPath: "flTopology.children[1].nfInstanceId",
 		},
 		{
 			name:        "priority is required",
 			old:         `"priority":100`,
 			new:         `"enabled":true`,
-			invalidPath: "x-flTopology.children[0].priority",
+			invalidPath: "flTopology.children[0].priority",
 		},
 		{
 			name:        "minimum availability",
 			old:         `"minTrainNodes":1`,
 			new:         `"minTrainNodes":2`,
-			invalidPath: "x-flTopology.policy.minAvailableNodes",
+			invalidPath: "flTopology.policy.minAvailableNodes",
 		},
 		{
 			name:        "unknown strategy method",
 			old:         `"method":"fedProx"`,
 			new:         `"method":"fedAvg"`,
-			invalidPath: "x-flTopology.strategy.method",
+			invalidPath: "flTopology.strategy.method",
 		},
 	}
 
@@ -332,7 +332,7 @@ func TestCandidateReceiverIdentityUsesUUIDSemantics(t *testing.T) {
 		1,
 	)
 	_, err := ParseNwdafMLModelTrainSubsc([]byte(duplicateBody))
-	assertCandidateInvalidPath(t, err, "x-flTopology.children[0].nfInstanceId")
+	assertCandidateInvalidPath(t, err, "flTopology.children[0].nfInstanceId")
 
 	body := strings.Replace(
 		validCandidateSubscription,
@@ -366,7 +366,7 @@ func TestCandidateTopologySafetyBounds(t *testing.T) {
 			t.Parallel()
 			body := candidateBodyWithTopology(t, test.topology)
 			_, err := ParseNwdafMLModelTrainSubsc(body)
-			assertCandidateInvalidPathPrefix(t, err, "x-flTopology")
+			assertCandidateInvalidPathPrefix(t, err, "flTopology")
 		})
 	}
 }
@@ -377,7 +377,7 @@ func TestCandidateReportStatusAndForwardCompatibleEnums(t *testing.T) {
 	base := `{
 		"notifCorreId":"root-branch-a",
 		"mlCorreId":"hierarchical-fl-001",
-		"x-flTopologyReport":{
+		"flTopologyReport":{
 			"nfInstanceId":"10000000-0000-4000-8000-000000000001",
 			"children":[{
 				"nfInstanceId":"10000000-0000-4000-8000-000000000101",
@@ -388,12 +388,12 @@ func TestCandidateReportStatusAndForwardCompatibleEnums(t *testing.T) {
 	}`
 
 	_, err := ParseNwdafMLModelTrainNotif([]byte(fmt.Sprintf(base, "FAILED", "")))
-	assertCandidateInvalidPath(t, err, "x-flTopologyReport.children[0].statusCause")
+	assertCandidateInvalidPath(t, err, "flTopologyReport.children[0].statusCause")
 
 	_, err = ParseNwdafMLModelTrainNotif([]byte(fmt.Sprintf(
 		base, "ACTIVE", `,"statusCause":"OTHER"`,
 	)))
-	assertCandidateInvalidPath(t, err, "x-flTopologyReport.children[0].statusCause")
+	assertCandidateInvalidPath(t, err, "flTopologyReport.children[0].statusCause")
 
 	if _, parseErr := ParseNwdafMLModelTrainNotif([]byte(fmt.Sprintf(
 		base, "VENDOR_PENDING", `,"statusCause":"VENDOR_REASON"`,
@@ -415,7 +415,7 @@ func TestCandidateNotificationAndRetainedResultRules(t *testing.T) {
 	topologyOnly := `{
 		"notifCorreId":"root-branch-a",
 		"mlCorreId":"hierarchical-fl-001",
-		"x-flTopologyReport":{
+		"flTopologyReport":{
 			"nfInstanceId":"10000000-0000-4000-8000-000000000001",
 			"children":[{
 				"nfInstanceId":"10000000-0000-4000-8000-000000000101",
@@ -431,7 +431,7 @@ func TestCandidateNotificationAndRetainedResultRules(t *testing.T) {
 	found := `{
 		"notifCorreId":"root-branch-a",
 		"mlCorreId":"hierarchical-fl-001",
-		"x-retainedResultStatus":"FOUND",
+		"retainedResultStatus":"FOUND",
 		"roundInd":5,
 		"mLModelInfos":[{
 			"event":"UE_COMMUNICATION",
@@ -457,7 +457,7 @@ func TestCandidateNotificationAndRetainedResultRules(t *testing.T) {
 	failed := `{
 		"notifCorreId":"root-branch-a",
 		"mlCorreId":"hierarchical-fl-001",
-		"x-retainedResultStatus":"FAILED"
+		"retainedResultStatus":"FAILED"
 	}`
 	if _, parseErr := ParseNwdafMLModelTrainNotif([]byte(failed)); parseErr != nil {
 		t.Fatalf("FAILED notification error = %v", parseErr)
@@ -474,7 +474,7 @@ func TestCandidateTopologyReportRecursiveValidation(t *testing.T) {
 	duplicate := `{
 		"notifCorreId":"root-branch-a",
 		"mlCorreId":"hierarchical-fl-001",
-		"x-flTopologyReport":{
+		"flTopologyReport":{
 			"nfInstanceId":"10000000-0000-4000-8000-000000000001",
 			"children":[{
 				"nfInstanceId":"10000000-0000-4000-8000-000000000001",
@@ -484,7 +484,7 @@ func TestCandidateTopologyReportRecursiveValidation(t *testing.T) {
 		}
 	}`
 	_, err := ParseNwdafMLModelTrainNotif([]byte(duplicate))
-	assertCandidateInvalidPath(t, err, "x-flTopologyReport.children[0].nfInstanceId")
+	assertCandidateInvalidPath(t, err, "flTopologyReport.children[0].nfInstanceId")
 
 	tests := []struct {
 		name   string
@@ -497,15 +497,15 @@ func TestCandidateTopologyReportRecursiveValidation(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			body, marshalErr := json.Marshal(map[string]any{
-				"notifCorreId":       "root-branch-a",
-				"mlCorreId":          "hierarchical-fl-001",
-				"x-flTopologyReport": test.report,
+				"notifCorreId":     "root-branch-a",
+				"mlCorreId":        "hierarchical-fl-001",
+				"flTopologyReport": test.report,
 			})
 			if marshalErr != nil {
 				t.Fatal(marshalErr)
 			}
 			_, parseErr := ParseNwdafMLModelTrainNotif(body)
-			assertCandidateInvalidPathPrefix(t, parseErr, "x-flTopologyReport")
+			assertCandidateInvalidPathPrefix(t, parseErr, "flTopologyReport")
 		})
 	}
 }
@@ -516,7 +516,7 @@ func TestCandidateOperationFieldsCanBeRemovedFromPersistentState(t *testing.T) {
 	body := strings.Replace(
 		validCandidateSubscription,
 		`"mLPreFlag":true,`,
-		`"mLPreFlag":true,"x-retainedResultReq":true,`,
+		`"mLPreFlag":true,"retainedResultReq":true,`,
 		1,
 	)
 	body = strings.Replace(
@@ -555,7 +555,7 @@ func TestCandidateCorrelationRequirementsUseOperationSemantics(t *testing.T) {
 	assertCandidateInvalidPath(t, ValidateFLSubscription(value, nil), "mlCorreId")
 
 	patch, err := ParseNwdafMLModelTrainSubscPatch([]byte(`{
-		"x-flTopology":{"policy":{"minTrainNodes":1}}
+		"flTopology":{"policy":{"minTrainNodes":1}}
 	}`))
 	if err != nil {
 		t.Fatal(err)
@@ -564,8 +564,8 @@ func TestCandidateCorrelationRequirementsUseOperationSemantics(t *testing.T) {
 
 	falseOnly := strings.Replace(
 		withoutCorrelation,
-		`"x-flTopology":{`,
-		`"x-retainedResultReq":false,"unused":{`,
+		`"flTopology":{`,
+		`"retainedResultReq":false,"unused":{`,
 		1,
 	)
 	falseValue, err := ParseNwdafMLModelTrainSubsc([]byte(falseOnly))
@@ -590,7 +590,7 @@ func TestCandidateTopologyPatchUsesJSONMergePatchSemantics(t *testing.T) {
 		t.Fatal(err)
 	}
 	patch, err := ParseNwdafMLModelTrainSubscPatch([]byte(`{
-		"x-flTopology": {
+		"flTopology": {
 			"policy": {"minTrainNodes": 1}
 		}
 	}`))
@@ -619,7 +619,7 @@ func TestCandidatePatchCanRemoveOptionalNestedObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	patch, err := ParseNwdafMLModelTrainSubscPatch([]byte(`{
-		"x-flTopology": {"strategy": null}
+		"flTopology": {"strategy": null}
 	}`))
 	if err != nil {
 		t.Fatalf("ParseNwdafMLModelTrainSubscPatch() error = %v", err)
@@ -641,7 +641,7 @@ func TestCandidatePatchReplacesChildrenArrayAndCanRemoveTopology(t *testing.T) {
 		t.Fatal(err)
 	}
 	patch, err := ParseNwdafMLModelTrainSubscPatch([]byte(`{
-		"x-flTopology":{
+		"flTopology":{
 			"children":[{
 				"nfInstanceId":"10000000-0000-4000-8000-000000000202",
 				"priority":80
@@ -660,7 +660,7 @@ func TestCandidatePatchReplacesChildrenArrayAndCanRemoveTopology(t *testing.T) {
 		t.Fatalf("children were not replaced: %#v", effective.FLTopology.Children)
 	}
 
-	remove, err := ParseNwdafMLModelTrainSubscPatch([]byte(`{"x-flTopology":null}`))
+	remove, err := ParseNwdafMLModelTrainSubscPatch([]byte(`{"flTopology":null}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -683,7 +683,7 @@ func TestCandidateCreateRejectsNullScalar(t *testing.T) {
 		1,
 	)
 	_, err := ParseNwdafMLModelTrainSubsc([]byte(body))
-	assertCandidateInvalidPath(t, err, "x-flTopology.children[0].enabled")
+	assertCandidateInvalidPath(t, err, "flTopology.children[0].enabled")
 }
 
 func TestCandidateImmediateReportUsesCandidateValidation(t *testing.T) {
@@ -691,17 +691,17 @@ func TestCandidateImmediateReportUsesCandidateValidation(t *testing.T) {
 
 	body := strings.Replace(
 		validCandidateSubscription,
-		`"x-flTopology":{`,
+		`"flTopology":{`,
 		`"immReport":{
 			"notifCorreId":"immediate-report",
 			"mlCorreId":"hierarchical-fl-001",
-			"x-flTopologyReport":{"nfInstanceId":"not-a-uuid"}
+			"flTopologyReport":{"nfInstanceId":"not-a-uuid"}
 		},
-		"x-flTopology":{`,
+		"flTopology":{`,
 		1,
 	)
 	_, err := ParseNwdafMLModelTrainSubsc([]byte(body))
-	assertCandidateInvalidPath(t, err, "immReport.x-flTopologyReport.nfInstanceId")
+	assertCandidateInvalidPath(t, err, "immReport.flTopologyReport.nfInstanceId")
 }
 
 func assertCandidateInvalidPath(t *testing.T, err error, path string) {
@@ -738,7 +738,7 @@ func candidateBodyWithTopology(t *testing.T, topology FlTopologyNode) []byte {
 	if err := json.Unmarshal([]byte(validCandidateSubscription), &body); err != nil {
 		t.Fatal(err)
 	}
-	body["x-flTopology"] = topology
+	body["flTopology"] = topology
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)

@@ -74,7 +74,7 @@ func TestMLModelTrainingHandlerPreservesCandidateBody(t *testing.T) {
 	(&Server{processor: stub}).HandleCreateMLModelTraining(ginContext)
 
 	if recorder.Code != http.StatusCreated || recorder.Header().Get("Location") == "" ||
-		string(stub.body) != body || !strings.Contains(recorder.Body.String(), "x-flTopology") {
+		string(stub.body) != body || !strings.Contains(recorder.Body.String(), "flTopology") {
 		t.Fatalf(
 			"status=%d Location=%q forwarded=%s body=%s",
 			recorder.Code, recorder.Header().Get("Location"), stub.body, recorder.Body.String(),
@@ -100,22 +100,22 @@ func TestMLModelTrainingHandlersPreserveCandidateInvalidPaths(t *testing.T) {
 	}{
 		{
 			name: "create", method: http.MethodPost, mediaType: "application/json",
-			body: invalidFull, invalidPath: "x-flTopology.unknown",
+			body: invalidFull, invalidPath: "flTopology.unknown",
 			handle: func(server *Server, context *gin.Context) {
 				server.HandleCreateMLModelTraining(context)
 			},
 		},
 		{
 			name: "replace", method: http.MethodPut, mediaType: "application/json",
-			body: invalidFull, invalidPath: "x-flTopology.unknown",
+			body: invalidFull, invalidPath: "flTopology.unknown",
 			handle: func(server *Server, context *gin.Context) {
 				server.HandleReplaceMLModelTraining(context)
 			},
 		},
 		{
 			name: "patch", method: http.MethodPatch, mediaType: "application/merge-patch+json",
-			body:        `{"x-flTopology":{"policy":{"unknown":true}}}`,
-			invalidPath: "x-flTopology.policy.unknown",
+			body:        `{"flTopology":{"policy":{"unknown":true}}}`,
+			invalidPath: "flTopology.policy.unknown",
 			handle: func(server *Server, context *gin.Context) {
 				server.HandlePatchMLModelTraining(context)
 			},
@@ -185,7 +185,7 @@ func apiCandidateTrainingBody() string {
 			"dataAvReq":{"inpEvents":[{"upfEvent":"USER_DATA_USAGE_TRENDS"}]},
 			"timeAvReq":"PT5M"
 		}],
-		"x-flTopology":{
+		"flTopology":{
 			"nfInstanceId":"10000000-0000-4000-8000-000000000001"
 		}
 	}`

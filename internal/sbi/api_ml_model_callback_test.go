@@ -47,7 +47,7 @@ func TestMLModelTrainingCallbackPreservesCandidatePathAndValidBody(t *testing.T)
 	invalid := `{
 		"notifCorreId":"candidate-client-a",
 		"mlCorreId":"hierarchical-fl-001",
-		"x-flTopologyReport":{
+		"flTopologyReport":{
 			"nfInstanceId":"10000000-0000-4000-8000-000000000001",
 			"children":[{
 				"nfInstanceId":"10000000-0000-4000-8000-000000000101",
@@ -73,14 +73,14 @@ func TestMLModelTrainingCallbackPreservesCandidatePathAndValidBody(t *testing.T)
 		t.Fatal(err)
 	}
 	if len(problem.InvalidParams) != 1 ||
-		problem.InvalidParams[0].Param != "x-flTopologyReport.children[0].statusCause" {
+		problem.InvalidParams[0].Param != "flTopologyReport.children[0].statusCause" {
 		t.Fatalf("problem = %+v", problem)
 	}
 
 	valid := `{
 		"notifCorreId":"candidate-client-a",
 		"mlCorreId":"hierarchical-fl-001",
-		"x-flTopologyReport":{
+		"flTopologyReport":{
 			"nfInstanceId":"10000000-0000-4000-8000-000000000001"
 		}
 	}`

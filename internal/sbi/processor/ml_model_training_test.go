@@ -277,7 +277,7 @@ func candidateTrainingBody(receiverID string) []byte {
 			"dataAvReq":{"inpEvents":[{"upfEvent":"USER_DATA_USAGE_TRENDS"}]},
 			"timeAvReq":"PT5M"
 		}],
-		"x-flTopology":{
+		"flTopology":{
 			"nfInstanceId":%q,
 			"children":[{
 				"nfInstanceId":"10000000-0000-4000-8000-000000000101"
@@ -514,8 +514,8 @@ func TestMLModelTrainingCandidateCreatePreservesContractAndFeatureState(t *testi
 	if problem != nil || response == nil || response.StatusCode != http.StatusCreated {
 		t.Fatalf("response=%+v problem=%+v", response, problem)
 	}
-	if !strings.Contains(string(response.Body), `"x-flTopology"`) ||
-		!strings.Contains(string(mtlfBackend.trainingBody), `"x-flTopology"`) {
+	if !strings.Contains(string(response.Body), `"flTopology"`) ||
+		!strings.Contains(string(mtlfBackend.trainingBody), `"flTopology"`) {
 		t.Fatalf("candidate contract was dropped: response=%s backend=%s", response.Body, mtlfBackend.trainingBody)
 	}
 	routes := ctx.GetAllMLModelTrainingSubscriptionRoutes()
@@ -537,7 +537,7 @@ func TestMLModelTrainingCandidateCreateForwardsButDoesNotPersistOperation(t *tes
 	requestBody := bytes.Replace(
 		candidateTrainingBody(ctx.NfId),
 		[]byte(`"mLPreFlag":true,`),
-		[]byte(`"mLPreFlag":true,"x-retainedResultReq":true,`),
+		[]byte(`"mLPreFlag":true,"retainedResultReq":true,`),
 		1,
 	)
 	acceptedBody, err := replaceTrainingNotificationURI(
@@ -558,14 +558,14 @@ func TestMLModelTrainingCandidateCreateForwardsButDoesNotPersistOperation(t *tes
 	if problem != nil || response == nil || response.StatusCode != http.StatusCreated {
 		t.Fatalf("response=%+v problem=%+v", response, problem)
 	}
-	if !bytes.Contains(mtlfBackend.trainingBody, []byte(`"x-retainedResultReq":true`)) {
+	if !bytes.Contains(mtlfBackend.trainingBody, []byte(`"retainedResultReq":true`)) {
 		t.Fatalf("operation was not forwarded to the destination: %s", mtlfBackend.trainingBody)
 	}
 	routes := ctx.GetAllMLModelTrainingSubscriptionRoutes()
 	if len(routes) != 1 ||
-		bytes.Contains(response.Body, []byte("x-retainedResultReq")) ||
-		bytes.Contains(routes[0].AcceptedRepresentation, []byte("x-retainedResultReq")) ||
-		bytes.Contains(routes[0].BackendRepresentation, []byte("x-retainedResultReq")) {
+		bytes.Contains(response.Body, []byte("retainedResultReq")) ||
+		bytes.Contains(routes[0].AcceptedRepresentation, []byte("retainedResultReq")) ||
+		bytes.Contains(routes[0].BackendRepresentation, []byte("retainedResultReq")) {
 		t.Fatalf("operation was persisted: response=%s routes=%+v", response.Body, routes)
 	}
 }
@@ -640,7 +640,7 @@ func TestMLModelTrainingCandidateReceiverMismatchIsBadRequest(t *testing.T) {
 	response, problem := processor.HandleCreateMLModelTraining(context.Background(), body)
 	if response != nil || problem == nil || problem.Status != http.StatusBadRequest ||
 		problem.Cause != "INVALID_MSG_FORMAT" || len(problem.InvalidParams) != 1 ||
-		problem.InvalidParams[0].Param != "x-flTopology.nfInstanceId" {
+		problem.InvalidParams[0].Param != "flTopology.nfInstanceId" {
 		t.Fatalf("response=%+v problem=%+v", response, problem)
 	}
 	if len(mtlfBackend.trainingBody) != 0 {
@@ -664,7 +664,7 @@ func TestMLModelTrainingCandidateParseErrorKeepsStructuredPath(t *testing.T) {
 	response, problem := processor.HandleCreateMLModelTraining(context.Background(), body)
 	if response != nil || problem == nil || problem.Status != http.StatusBadRequest ||
 		problem.Cause != "INVALID_MSG_FORMAT" || len(problem.InvalidParams) != 1 ||
-		problem.InvalidParams[0].Param != "x-flTopology.unknown" {
+		problem.InvalidParams[0].Param != "flTopology.unknown" {
 		t.Fatalf("response=%+v problem=%+v", response, problem)
 	}
 }
@@ -721,7 +721,7 @@ func TestMLModelTrainingUnnegotiatedCandidatePatchIsRejected(t *testing.T) {
 		t.Fatalf("route=%+v", routes)
 	}
 	mtlfBackend.trainingBody = nil
-	patch := []byte(fmt.Sprintf(`{"x-flTopology":{"nfInstanceId":%q}}`, ctx.NfId))
+	patch := []byte(fmt.Sprintf(`{"flTopology":{"nfInstanceId":%q}}`, ctx.NfId))
 	patchResponse, patchProblem := processor.HandlePatchMLModelTraining(
 		context.Background(), routes[0].SubscriptionID, patch,
 	)
@@ -747,7 +747,7 @@ func TestMLModelTrainingUnnegotiatedCandidatePatchIsRejected(t *testing.T) {
 	notify := []byte(fmt.Sprintf(`{
 		"notifCorreId":"candidate-client-a",
 		"mlCorreId":"hierarchical-fl-001",
-		"x-flTopologyReport":{"nfInstanceId":%q}
+		"flTopologyReport":{"nfInstanceId":%q}
 	}`, ctx.NfId))
 	notifyResponse, notifyProblem := processor.HandleMLModelTrainingNotification(
 		context.Background(), "", notify,
@@ -773,8 +773,8 @@ func TestMLModelTrainingCandidatePatchMergesAndDoesNotPersistOperations(t *testi
 	}
 
 	patch := []byte(`{
-		"x-retainedResultReq":true,
-		"x-flTopology":{"policy":{"minTrainNodes":1}}
+		"retainedResultReq":true,
+		"flTopology":{"policy":{"minTrainNodes":1}}
 	}`)
 	response, problem := processor.HandlePatchMLModelTraining(
 		context.Background(), routes[0].SubscriptionID, patch,
@@ -782,7 +782,7 @@ func TestMLModelTrainingCandidatePatchMergesAndDoesNotPersistOperations(t *testi
 	if problem != nil || response == nil || response.StatusCode != http.StatusNoContent {
 		t.Fatalf("patch response=%+v problem=%+v", response, problem)
 	}
-	if !bytes.Contains(mtlfBackend.trainingBody, []byte(`"x-retainedResultReq":true`)) {
+	if !bytes.Contains(mtlfBackend.trainingBody, []byte(`"retainedResultReq":true`)) {
 		t.Fatalf("operation was not visible to destination: %s", mtlfBackend.trainingBody)
 	}
 	updated, found := ctx.GetMLModelTrainingSubscriptionRoute(routes[0].ResourceKey())
@@ -812,7 +812,7 @@ func TestMLModelTrainingCandidatePatchAcceptsAuthoritative200Representation(t *t
 	if err := json.Unmarshal(routes[0].BackendRepresentation, &accepted); err != nil {
 		t.Fatal(err)
 	}
-	topology := accepted["x-flTopology"].(map[string]any)
+	topology := accepted["flTopology"].(map[string]any)
 	topology["policy"] = map[string]any{"minTrainNodes": float64(2)}
 	responseBody, err := json.Marshal(accepted)
 	if err != nil {
@@ -826,7 +826,7 @@ func TestMLModelTrainingCandidatePatchAcceptsAuthoritative200Representation(t *t
 
 	response, problem := processor.HandlePatchMLModelTraining(
 		context.Background(), routes[0].SubscriptionID,
-		[]byte(`{"x-flTopology":{"policy":{"minTrainNodes":1}}}`),
+		[]byte(`{"flTopology":{"policy":{"minTrainNodes":1}}}`),
 	)
 	if problem != nil || response == nil || response.StatusCode != http.StatusOK ||
 		!bytes.Contains(response.Body, []byte(`"minTrainNodes":2`)) {
@@ -877,7 +877,7 @@ func TestMLModelTrainingCandidateMutationResponseUsesEffectiveRound(t *testing.T
 		"notifCorreId": "candidate-client-a",
 		"mlCorreId":    "hierarchical-fl-001",
 		"roundInd":     float64(2),
-		"x-flTopologyReport": map[string]any{
+		"flTopologyReport": map[string]any{
 			"nfInstanceId": ctx.NfId,
 		},
 	}
@@ -891,7 +891,7 @@ func TestMLModelTrainingCandidateMutationResponseUsesEffectiveRound(t *testing.T
 
 	response, problem := processor.HandlePatchMLModelTraining(
 		context.Background(), routes[0].SubscriptionID,
-		[]byte(`{"roundInd":2,"x-flTopology":{"policy":{"minTrainNodes":1}}}`),
+		[]byte(`{"roundInd":2,"flTopology":{"policy":{"minTrainNodes":1}}}`),
 	)
 	if problem != nil || response == nil || response.StatusCode != http.StatusOK {
 		t.Fatalf("response=%+v problem=%+v", response, problem)
@@ -916,7 +916,7 @@ func TestMLModelTrainingCandidatePutIsFullReplacement(t *testing.T) {
 	if err := json.Unmarshal(body, &replacement); err != nil {
 		t.Fatal(err)
 	}
-	delete(replacement, "x-flTopology")
+	delete(replacement, "flTopology")
 	replacementBody, err := json.Marshal(replacement)
 	if err != nil {
 		t.Fatal(err)
@@ -929,8 +929,8 @@ func TestMLModelTrainingCandidatePutIsFullReplacement(t *testing.T) {
 		t.Fatalf("replace response=%+v problem=%+v", response, problem)
 	}
 	updated, found := ctx.GetMLModelTrainingSubscriptionRoute(routes[0].ResourceKey())
-	if !found || bytes.Contains(updated.AcceptedRepresentation, []byte("x-flTopology")) ||
-		bytes.Contains(updated.BackendRepresentation, []byte("x-flTopology")) ||
+	if !found || bytes.Contains(updated.AcceptedRepresentation, []byte("flTopology")) ||
+		bytes.Contains(updated.BackendRepresentation, []byte("flTopology")) ||
 		updated.NegotiatedSupportedFeatures != "4" {
 		t.Fatalf("updated route=%+v found=%v", updated, found)
 	}
@@ -952,7 +952,7 @@ func TestMLModelTrainingCandidatePutForwardsButDoesNotPersistOperation(t *testin
 	replacement := bytes.Replace(
 		body,
 		[]byte(`"mLPreFlag":true,`),
-		[]byte(`"mLPreFlag":true,"x-retainedResultReq":true,`),
+		[]byte(`"mLPreFlag":true,"retainedResultReq":true,`),
 		1,
 	)
 
@@ -962,13 +962,13 @@ func TestMLModelTrainingCandidatePutForwardsButDoesNotPersistOperation(t *testin
 	if problem != nil || response == nil || response.StatusCode != http.StatusNoContent {
 		t.Fatalf("replace response=%+v problem=%+v", response, problem)
 	}
-	if !bytes.Contains(mtlfBackend.trainingBody, []byte(`"x-retainedResultReq":true`)) {
+	if !bytes.Contains(mtlfBackend.trainingBody, []byte(`"retainedResultReq":true`)) {
 		t.Fatalf("operation was not forwarded to the destination: %s", mtlfBackend.trainingBody)
 	}
 	updated, found := ctx.GetMLModelTrainingSubscriptionRoute(routes[0].ResourceKey())
 	if !found ||
-		bytes.Contains(updated.AcceptedRepresentation, []byte("x-retainedResultReq")) ||
-		bytes.Contains(updated.BackendRepresentation, []byte("x-retainedResultReq")) {
+		bytes.Contains(updated.AcceptedRepresentation, []byte("retainedResultReq")) ||
+		bytes.Contains(updated.BackendRepresentation, []byte("retainedResultReq")) {
 		t.Fatalf("operation was persisted: route=%+v found=%v", updated, found)
 	}
 }
@@ -1014,8 +1014,8 @@ func TestMLModelTrainingCandidatePutAcceptsAuthoritative200Representation(t *tes
 			}
 			replacement := bytes.Replace(
 				body,
-				[]byte(`"x-flTopology":{`),
-				[]byte(`"x-flTopology":{"policy":{"minTrainNodes":1},`),
+				[]byte(`"flTopology":{`),
+				[]byte(`"flTopology":{"policy":{"minTrainNodes":1},`),
 				1,
 			)
 			destinationBody, err := replaceTrainingNotificationURI(
@@ -1077,7 +1077,7 @@ func TestMLModelTrainingInvalidCandidateMutationResponseRollsBack(t *testing.T) 
 	invalidResponse = bytes.Replace(
 		invalidResponse,
 		[]byte(`"mLPreFlag":true,`),
-		[]byte(`"mLPreFlag":true,"x-retainedResultReq":false,`),
+		[]byte(`"mLPreFlag":true,"retainedResultReq":false,`),
 		1,
 	)
 	mtlfBackend.trainingResponse = &backend.StandardResponse{
@@ -1088,7 +1088,7 @@ func TestMLModelTrainingInvalidCandidateMutationResponseRollsBack(t *testing.T) 
 
 	response, problem := processor.HandlePatchMLModelTraining(
 		context.Background(), before.SubscriptionID,
-		[]byte(`{"x-flTopology":{"policy":{"minTrainNodes":1}}}`),
+		[]byte(`{"flTopology":{"policy":{"minTrainNodes":1}}}`),
 	)
 	if response != nil || problem == nil || problem.Status != http.StatusBadGateway {
 		t.Fatalf("response=%+v problem=%+v", response, problem)
@@ -1120,7 +1120,7 @@ func TestMLModelTrainingCandidateDestinationFailureRollsBack(t *testing.T) {
 
 	response, problem := processor.HandlePatchMLModelTraining(
 		context.Background(), before.SubscriptionID,
-		[]byte(`{"x-flTopology":{"policy":{"minTrainNodes":1}}}`),
+		[]byte(`{"flTopology":{"policy":{"minTrainNodes":1}}}`),
 	)
 	if response != nil || problem == nil || problem.Status != http.StatusServiceUnavailable {
 		t.Fatalf("response=%+v problem=%+v", response, problem)
@@ -1166,7 +1166,7 @@ func TestMLModelTrainingStaleCandidatePatchCannotOverwriteNewerRoute(t *testing.
 	go func() {
 		response, problem := processor.HandlePatchMLModelTraining(
 			t.Context(), before.SubscriptionID,
-			[]byte(`{"x-flTopology":{"policy":{"minTrainNodes":1}}}`),
+			[]byte(`{"flTopology":{"policy":{"minTrainNodes":1}}}`),
 		)
 		result <- struct {
 			response *backend.StandardResponse
@@ -1235,7 +1235,7 @@ func TestMLModelTrainingGenerationResetClearsCandidateState(t *testing.T) {
 	}
 	response, problem := processor.HandlePatchMLModelTraining(
 		context.Background(), routes[0].SubscriptionID,
-		[]byte(`{"x-flTopology":{"policy":{"minTrainNodes":1}}}`),
+		[]byte(`{"flTopology":{"policy":{"minTrainNodes":1}}}`),
 	)
 	if response != nil || problem == nil || problem.Status != http.StatusNotFound {
 		t.Fatalf("late patch response=%+v problem=%+v", response, problem)
@@ -1281,7 +1281,7 @@ func TestMLModelTrainingCreateRejectsWriteOnlyInstructionInSuccess(t *testing.T)
 	responseBody := bytes.Replace(
 		candidateTrainingBody(ctx.NfId),
 		[]byte(`"mLPreFlag":true,`),
-		[]byte(`"mLPreFlag":true,"x-retainedResultReq":false,`),
+		[]byte(`"mLPreFlag":true,"retainedResultReq":false,`),
 		1,
 	)
 	mtlfBackend.trainingCreateResponse = &backend.StandardResponse{
@@ -1320,7 +1320,7 @@ func TestMLModelTrainingCreateRejectsImmediateReportFromWrongParticipant(t *test
 	response["immReport"] = map[string]any{
 		"notifCorreId": "candidate-client-a",
 		"mlCorreId":    "hierarchical-fl-001",
-		"x-flTopologyReport": map[string]any{
+		"flTopologyReport": map[string]any{
 			"nfInstanceId": "10000000-0000-4000-8000-000000000099",
 		},
 	}
@@ -1369,7 +1369,7 @@ func TestRemoteCandidateTrainingCreateAndNotifyUseBoundParticipant(t *testing.T)
 	if problem != nil || response == nil || response.StatusCode != http.StatusCreated {
 		t.Fatalf("create response=%+v problem=%+v", response, problem)
 	}
-	if !bytes.Contains(peer.trainingBody, []byte(`"x-flTopology"`)) ||
+	if !bytes.Contains(peer.trainingBody, []byte(`"flTopology"`)) ||
 		!bytes.Contains(peer.trainingBody, []byte("/nnwdaf-callback/v1/ml-model-training/")) {
 		t.Fatalf("peer body = %s", peer.trainingBody)
 	}
@@ -1378,7 +1378,7 @@ func TestRemoteCandidateTrainingCreateAndNotifyUseBoundParticipant(t *testing.T)
 		!routes[0].HierarchicalFLFeatureNegotiated {
 		t.Fatalf("route = %+v", routes)
 	}
-	patch := []byte(`{"x-flTopology":{"policy":{"minTrainNodes":1}}}`)
+	patch := []byte(`{"flTopology":{"policy":{"minTrainNodes":1}}}`)
 	patchResponse, patchProblem := processor.HandlePatchMLModelTrainingFromBackend(
 		context.Background(), target.NFInstanceID, routes[0].SubscriptionID, patch,
 	)
@@ -1393,7 +1393,7 @@ func TestRemoteCandidateTrainingCreateAndNotifyUseBoundParticipant(t *testing.T)
 	validNotify := []byte(fmt.Sprintf(`{
 		"notifCorreId":"candidate-client-a",
 		"mlCorreId":"hierarchical-fl-001",
-		"x-flTopologyReport":{"nfInstanceId":%q}
+		"flTopologyReport":{"nfInstanceId":%q}
 	}`, target.NFInstanceID))
 	notifyResponse, notifyProblem := processor.HandleMLModelTrainingNotification(
 		context.Background(), routes[0].CallbackRouteID, validNotify,
@@ -1432,7 +1432,7 @@ func TestRemoteTrainingCallbackWaitsForResourceBinding(t *testing.T) {
 	notification := []byte(fmt.Sprintf(`{
 		"notifCorreId":"candidate-client-a",
 		"mlCorreId":"hierarchical-fl-001",
-		"x-flTopologyReport":{"nfInstanceId":%q}
+		"flTopologyReport":{"nfInstanceId":%q}
 	}`, target.NFInstanceID))
 	callbackID := ""
 	peer := &mlModelPeerConsumerStub{}
@@ -1507,7 +1507,7 @@ func TestRemoteTrainingScopesSamePeerResourceIDByNF(t *testing.T) {
 		if !found || route.CallbackRouteID == "" {
 			t.Fatalf("route target=%s: %+v found=%t", target.NFInstanceID, route, found)
 		}
-		patch := []byte(`{"x-flTopology":{"policy":{"minTrainNodes":1}}}`)
+		patch := []byte(`{"flTopology":{"policy":{"minTrainNodes":1}}}`)
 		response, problem := processor.HandlePatchMLModelTrainingFromBackend(
 			t.Context(), target.NFInstanceID, resourceID, patch,
 		)
@@ -1522,7 +1522,7 @@ func TestRemoteTrainingScopesSamePeerResourceIDByNF(t *testing.T) {
 		}
 		notification := []byte(fmt.Sprintf(`{
 			"notifCorreId":%q,"mlCorreId":"hierarchical-fl-001",
-			"x-flTopologyReport":{"nfInstanceId":%q}
+			"flTopologyReport":{"nfInstanceId":%q}
 		}`, correlation, target.NFInstanceID))
 		response, problem = processor.HandleMLModelTrainingNotification(
 			t.Context(), route.CallbackRouteID, notification,
@@ -1554,7 +1554,7 @@ func TestRetainedResultFoundDoesNotUseNormalRoundEquality(t *testing.T) {
 	value, err := wire.ParseNwdafMLModelTrainNotif([]byte(`{
 		"notifCorreId":"candidate-client-a",
 		"mlCorreId":"hierarchical-fl-001",
-		"x-retainedResultStatus":"FOUND",
+		"retainedResultStatus":"FOUND",
 		"roundInd":5,
 		"mLModelInfos":[{
 			"event":"UE_COMMUNICATION",
@@ -1576,7 +1576,7 @@ func TestRetainedResultFoundDoesNotUseNormalRoundEquality(t *testing.T) {
 	notFound, err := wire.ParseNwdafMLModelTrainNotif([]byte(`{
 		"notifCorreId":"candidate-client-a",
 		"mlCorreId":"hierarchical-fl-001",
-		"x-retainedResultStatus":"NOT_FOUND"
+		"retainedResultStatus":"NOT_FOUND"
 	}`))
 	if err != nil {
 		t.Fatal(err)

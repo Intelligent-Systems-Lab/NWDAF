@@ -97,7 +97,7 @@ func TestCreatePeerMLModelTrainingPreservesCandidateContract(t *testing.T) {
 			"dataAvReq":{"inpEvents":[{"upfEvent":"USER_DATA_USAGE_TRENDS"}]},
 			"timeAvReq":"PT5M"
 		}],
-		"x-flTopology":{
+		"flTopology":{
 			"nfInstanceId":"10000000-0000-4000-8000-000000000001"
 		}
 	}`)
@@ -172,14 +172,14 @@ func TestPeerMLModelTrainingMutationsPreserveCandidateContract(t *testing.T) {
 		"notifCorreId":"candidate-client-a",
 		"suppFeats":"4",
 		"mlCorreId":"hierarchical-fl-001",
-		"x-flTopology":{
+		"flTopology":{
 			"nfInstanceId":"10000000-0000-4000-8000-000000000001"
 		},
-		"x-retainedResultReq":true
+		"retainedResultReq":true
 	}`)
 	patch := []byte(`{
-		"x-flTopology":{"policy":{"minTrainNodes":1}},
-		"x-retainedResultReq":true
+		"flTopology":{"policy":{"minTrainNodes":1}},
+		"retainedResultReq":true
 	}`)
 	received := make(map[string][]byte)
 	server := httptest.NewServer(http.HandlerFunc(func(

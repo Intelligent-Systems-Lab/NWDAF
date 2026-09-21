@@ -30,8 +30,8 @@ type NwdafMLModelTrainSubsc struct {
 	RoundIndicator            *int64                            `json:"roundInd,omitempty"`
 	TargetReportingUE         *models.TargetUeInformation       `json:"tgtRepUe,omitempty"`
 	SkipFLIndicator           *bool                             `json:"skipFlInd,omitempty"`
-	FLTopology                *FlTopologyNode                   `json:"x-flTopology,omitempty"`
-	RetainedResultRequest     *bool                             `json:"x-retainedResultReq,omitempty"`
+	FLTopology                *FlTopologyNode                   `json:"flTopology,omitempty"`
+	RetainedResultRequest     *bool                             `json:"retainedResultReq,omitempty"`
 }
 
 type NwdafMLModelTrainSubscPatch struct {
@@ -45,8 +45,8 @@ type NwdafMLModelTrainSubscPatch struct {
 	RoundIndicator               *int64                        `json:"roundInd,omitempty"`
 	TargetReportingUE            *models.TargetUeInformation   `json:"tgtRepUe,omitempty"`
 	SkipFLIndicator              *bool                         `json:"skipFlInd,omitempty"`
-	FLTopology                   *FlTopologyNode               `json:"x-flTopology,omitempty"`
-	RetainedResultRequest        *bool                         `json:"x-retainedResultReq,omitempty"`
+	FLTopology                   *FlTopologyNode               `json:"flTopology,omitempty"`
+	RetainedResultRequest        *bool                         `json:"retainedResultReq,omitempty"`
 	flTopologyPresent            bool
 	retainedResultRequestPresent bool
 	rawBody                      json.RawMessage
@@ -60,8 +60,8 @@ type NwdafMLModelTrainNotif struct {
 	RoundIndicator            *int64                        `json:"roundInd,omitempty"`
 	StatusReport              *StatusReportInfo             `json:"statusReport,omitempty"`
 	TerminationRequest        TermTrainCause                `json:"termTrainReq,omitempty"`
-	FLTopologyReport          *FlTopologyReport             `json:"x-flTopologyReport,omitempty"`
-	RetainedResultStatus      string                        `json:"x-retainedResultStatus,omitempty"`
+	FLTopologyReport          *FlTopologyReport             `json:"flTopologyReport,omitempty"`
+	RetainedResultStatus      string                        `json:"retainedResultStatus,omitempty"`
 }
 
 type MLModelTrainInfo struct {

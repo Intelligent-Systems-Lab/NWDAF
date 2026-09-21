@@ -37,19 +37,19 @@ func validateCandidateRawSubscription(body []byte, patch bool) error {
 	if parseErr != nil {
 		return parseErr
 	}
-	if raw, present := object["x-flTopology"]; present {
+	if raw, present := object["flTopology"]; present {
 		if !patch || !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			count := 0
 			if validationErr := validateRawTopologyNode(
-				raw, "x-flTopology", 1, &count, patch,
+				raw, "flTopology", 1, &count, patch,
 			); validationErr != nil {
 				return validationErr
 			}
 		}
 	}
-	if raw, present := object["x-retainedResultReq"]; present {
+	if raw, present := object["retainedResultReq"]; present {
 		if !patch || !isJSONNull(raw) {
-			if validationErr := validateRawBoolean(raw, "x-retainedResultReq"); validationErr != nil {
+			if validationErr := validateRawBoolean(raw, "retainedResultReq"); validationErr != nil {
 				return validationErr
 			}
 		}
@@ -80,17 +80,17 @@ func validateCandidateRawNotificationObject(
 	object map[string]json.RawMessage,
 	prefix string,
 ) error {
-	if raw, present := object["x-flTopologyReport"]; present {
+	if raw, present := object["flTopologyReport"]; present {
 		count := 0
 		if err := validateRawTopologyReport(
-			raw, joinPath(prefix, "x-flTopologyReport"), 1, &count,
+			raw, joinPath(prefix, "flTopologyReport"), 1, &count,
 		); err != nil {
 			return err
 		}
 	}
-	if raw, present := object["x-retainedResultStatus"]; present {
+	if raw, present := object["retainedResultStatus"]; present {
 		if err := validateRawNonEmptyString(
-			raw, joinPath(prefix, "x-retainedResultStatus"),
+			raw, joinPath(prefix, "retainedResultStatus"),
 		); err != nil {
 			return err
 		}
@@ -555,26 +555,26 @@ func validateRetainedResultAt(value *NwdafMLModelTrainNotif, prefix string) erro
 		if value.RoundIndicator == nil {
 			return candidateInvalid(
 				joinPath(prefix, "roundInd"),
-				"is required when x-retainedResultStatus is FOUND",
+				"is required when retainedResultStatus is FOUND",
 			)
 		}
 		if len(value.MLModelInfos) == 0 {
 			return candidateInvalid(
 				joinPath(prefix, "mLModelInfos"),
-				"is required when x-retainedResultStatus is FOUND",
+				"is required when retainedResultStatus is FOUND",
 			)
 		}
 	case "NOT_FOUND", "FAILED":
 		if value.RoundIndicator != nil {
 			return candidateInvalid(
 				joinPath(prefix, "roundInd"),
-				"is not allowed when x-retainedResultStatus is not FOUND",
+				"is not allowed when retainedResultStatus is not FOUND",
 			)
 		}
 		if len(value.MLModelInfos) > 0 {
 			return candidateInvalid(
 				joinPath(prefix, "mLModelInfos"),
-				"is not allowed when x-retainedResultStatus is not FOUND",
+				"is not allowed when retainedResultStatus is not FOUND",
 			)
 		}
 	}
@@ -590,7 +590,7 @@ func ValidateCandidateSubscriptionReceiver(
 	}
 	if !sameNFInstanceID(value.FLTopology.NFInstanceID, expectedNFInstanceID) {
 		return candidateInvalid(
-			"x-flTopology.nfInstanceId", "must identify the request receiver",
+			"flTopology.nfInstanceId", "must identify the request receiver",
 		)
 	}
 	return nil
@@ -605,7 +605,7 @@ func ValidateCandidateNotificationParticipant(
 	}
 	if !sameNFInstanceID(value.FLTopologyReport.NFInstanceID, expectedNFInstanceID) {
 		return candidateInvalid(
-			"x-flTopologyReport.nfInstanceId", "must identify the bound direct participant",
+			"flTopologyReport.nfInstanceId", "must identify the bound direct participant",
 		)
 	}
 	return nil

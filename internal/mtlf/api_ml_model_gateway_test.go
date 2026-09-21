@@ -258,7 +258,7 @@ func TestMLModelTrainingGatewayPreservesCandidateBodyAndErrors(t *testing.T) {
 			"dataAvReq":{"inpEvents":[{"upfEvent":"USER_DATA_USAGE_TRENDS"}]},
 			"timeAvReq":"PT5M"
 		}],
-		"x-flTopology":{
+		"flTopology":{
 			"nfInstanceId":"10000000-0000-4000-8000-000000000001"
 		}
 	}`
@@ -274,11 +274,11 @@ func TestMLModelTrainingGatewayPreservesCandidateBodyAndErrors(t *testing.T) {
 	(&Server{processor: stub}).HandleCreateMLModelTrainingFromBackend(ginContext)
 	ginContext.Writer.WriteHeaderNow()
 	if recorder.Code != http.StatusCreated || string(stub.body) != valid ||
-		!strings.Contains(recorder.Body.String(), "x-flTopology") {
+		!strings.Contains(recorder.Body.String(), "flTopology") {
 		t.Fatalf("status=%d forwarded=%s body=%s", recorder.Code, stub.body, recorder.Body.String())
 	}
 
-	invalid := `{"x-flTopology":{"policy":{"unknown":true}}}`
+	invalid := `{"flTopology":{"policy":{"unknown":true}}}`
 	stub.body = nil
 	recorder, ginContext = newMLModelTrainingGatewayContext(
 		t, http.MethodPatch, "application/merge-patch+json", invalid,
@@ -294,14 +294,14 @@ func TestMLModelTrainingGatewayPreservesCandidateBodyAndErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(problem.InvalidParams) != 1 ||
-		problem.InvalidParams[0].Param != "x-flTopology.policy.unknown" {
+		problem.InvalidParams[0].Param != "flTopology.policy.unknown" {
 		t.Fatalf("problem = %+v", problem)
 	}
 
 	invalidNotify := `{
 		"notifCorreId":"candidate-client-a",
 		"mlCorreId":"hierarchical-fl-001",
-		"x-flTopologyReport":{
+		"flTopologyReport":{
 			"nfInstanceId":"10000000-0000-4000-8000-000000000001",
 			"children":[{
 				"nfInstanceId":"10000000-0000-4000-8000-000000000101",
@@ -324,7 +324,7 @@ func TestMLModelTrainingGatewayPreservesCandidateBodyAndErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(problem.InvalidParams) != 1 ||
-		problem.InvalidParams[0].Param != "x-flTopologyReport.children[0].statusCause" {
+		problem.InvalidParams[0].Param != "flTopologyReport.children[0].statusCause" {
 		t.Fatalf("notify problem = %+v", problem)
 	}
 }

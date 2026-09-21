@@ -24,13 +24,13 @@ func ParseNwdafMLModelTrainSubsc(body []byte) (*NwdafMLModelTrainSubsc, error) {
 	if err := validateSubscriptionShape(&value); err != nil {
 		return nil, err
 	}
-	if err := validateTopology(value.FLTopology, "x-flTopology"); err != nil {
+	if err := validateTopology(value.FLTopology, "flTopology"); err != nil {
 		return nil, err
 	}
 	if value.ImmediateReport != nil {
 		if err := validateTopologyReport(
 			value.ImmediateReport.FLTopologyReport,
-			"immReport.x-flTopologyReport",
+			"immReport.flTopologyReport",
 		); err != nil {
 			return nil, err
 		}
@@ -53,8 +53,8 @@ func ParseNwdafMLModelTrainSubscPatch(body []byte) (*NwdafMLModelTrainSubscPatch
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, err
 	}
-	_, value.flTopologyPresent = raw["x-flTopology"]
-	_, value.retainedResultRequestPresent = raw["x-retainedResultReq"]
+	_, value.flTopologyPresent = raw["flTopology"]
+	_, value.retainedResultRequestPresent = raw["retainedResultReq"]
 	value.rawBody = append(json.RawMessage(nil), body...)
 	if value.NotificationURI != nil {
 		if err := validateHTTPURI(*value.NotificationURI); err != nil {
@@ -90,7 +90,7 @@ func ParseNwdafMLModelTrainNotif(body []byte) (*NwdafMLModelTrainNotif, error) {
 	if err := validateNotificationShape(&value); err != nil {
 		return nil, err
 	}
-	if err := validateTopologyReport(value.FLTopologyReport, "x-flTopologyReport"); err != nil {
+	if err := validateTopologyReport(value.FLTopologyReport, "flTopologyReport"); err != nil {
 		return nil, err
 	}
 	if err := validateRetainedResultAt(&value, ""); err != nil {

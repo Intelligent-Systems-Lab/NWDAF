@@ -133,15 +133,15 @@ func TestMTLFBackendMLModelTrainingClientPreservesCandidateContract(t *testing.T
 			"dataAvReq":{"inpEvents":[{"upfEvent":"USER_DATA_USAGE_TRENDS"}]},
 			"timeAvReq":"PT5M"
 		}],
-		"x-flTopology":{
+		"flTopology":{
 			"nfInstanceId":"10000000-0000-4000-8000-000000000001"
 		}
 	}`)
-	patch := []byte(`{"x-retainedResultReq":true}`)
+	patch := []byte(`{"retainedResultReq":true}`)
 	notification := []byte(`{
 		"notifCorreId":"candidate-client-a",
 		"mlCorreId":"hierarchical-fl-001",
-		"x-retainedResultStatus":"NOT_FOUND"
+		"retainedResultStatus":"NOT_FOUND"
 	}`)
 	received := make(map[string][]byte)
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
